@@ -13,7 +13,7 @@
 - **U7:** queued as its own item (planner + reviewer).
 - **U8:** move the broker lane's evening slot to 21:15 UTC (owner, Railway dashboard).
 
-Build started 2026-11-01. **C1 + C2 SHIPPED** `e389d76`. **C3 SHIPPED 2026-11-01** (`scripts/account_snapshot_backfill.py` + `plan_legacy_repairs`; Opus FIX-FIRST (2 blocking: stale gross read as clean; wrong removal on a pre-EOD log) → SHIP): reconciles each legacy row's stored gross to the cent against the journal book × that day's closes, refuses rows whose cash wasn't read post-close or whose difference is trades the EOD book already held, auto-applies only reconciled `missing_ticker` repairs. Owner applied the backfill and regenerated the 11-01 debrief + monthly report 2026-11-01 (verified live). **C4 BUILT 2026-11-02** (`compute_eod` reads the max trade id before holdings, records `book_positions` from exact shares x close and builds `gross_book` as the same sum; the cron flips the heartbeat on an unreadable id, a missing book or dropped provenance columns; Opus SHIP, 0 blocking). NEXT: C5-C8.
+Build started 2026-11-01. **C1 + C2 SHIPPED** `e389d76`. **C3 SHIPPED 2026-11-01** (`scripts/account_snapshot_backfill.py` + `plan_legacy_repairs`; Opus FIX-FIRST (2 blocking: stale gross read as clean; wrong removal on a pre-EOD log) → SHIP): reconciles each legacy row's stored gross to the cent against the journal book × that day's closes, refuses rows whose cash wasn't read post-close or whose difference is trades the EOD book already held, auto-applies only reconciled `missing_ticker` repairs. Owner applied the backfill and regenerated the 11-01 debrief + monthly report 2026-11-01 (verified live). **C4 BUILT 2026-11-02** (`compute_eod` reads the max trade id before holdings, records `book_positions` from exact shares x close and builds `gross_book` as the same sum; the cron flips the heartbeat on an unreadable id, a missing book or dropped provenance columns; Opus SHIP, 0 blocking). **C5 BUILT 2026-11-02** (`stock_analyzer/account_snapshot_autorepair.py`: the EOD lane, after the `daily_snapshot` write and regardless of a price outage, and the Sunday debrief, before `load_engine_inputs`, repair stale rows dated within `ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS` (35) before today, never today's; a problem flips the heartbeat, never blocks; Opus SHIP, 0 blocking). The 10-28 row was repaired 2026-11-02 after the owner corrected its journal dates (`docs/sql/journal-fix-2026-10-28-fills.sql`). NEXT: C6-C8.
 
 ## Defect
 
@@ -78,7 +78,7 @@ Owner SQL, 2026-11-01:
    - `plan_repairs`: repairs only when the book plus the late trades equals the replayed book.
    - It refuses on a split, an oversell or a missing close, and never carries a close forward.
 3. **C3 — Backfill script** `scripts/account_snapshot_backfill.py` (dry run by default, `--apply`; reviewer).
-   - It finds affected legacy rows since 2026-09-10 from evidence: the replayed book × that day's closes against `gross_book`, the `daily_snapshots` share mismatch, and a cash cross-check.
+   - It finds affected legacy rows since 2026-09-10 from evidence: the replayed book × that day's closes against `gross_book`, the `daily_snapshots` share mismatch, and the cash read's timing (post-close or not; there is no cash-amount cross-check).
    - It lists the weekly debriefs whose endpoints hit an affected date.
    - **Then regenerate by Sat 11-07**, in this order: repair the rows → the debrief → the monthly report. Generate Now does it without an email; `ALERT_FORCE=1` cron runs send one.
    - **Why 11-07:** `resolve_period("last_week")` keeps week_ending = 11-01 through then.
@@ -169,7 +169,7 @@ Order: C1 → C2 → C3 dry run → owner approves → apply → regenerate (by 
   - Trades must come from `db.load_trades_or_none` (normalised `traded_at`).
   - Injected closes must be unadjusted, or the stored `daily_snapshots.close_price`.
 - **Residual, imported trades:** they anchor at 16:00 ET, so an after-hours fill confirmed later always counts as at or before `cash_as_of` and is added to day d, although that day's cash read didn't include it. The 18:00 ET protection covers only hand-logged trades with a real time.
-- **Residual, logged after EOD:** a fill logged without a backdate after EOD falls past the cutoff and is never flagged. U8 (broker lane at 21:15 UTC) and a cash cross-check in C3/C5 narrow both.
+- **Residual, logged after EOD:** a fill logged without a backdate after EOD falls past the cutoff and is never flagged. U8 (broker lane at 21:15 UTC) narrows both. There is no cash-amount cross-check in C3 or C5 (a real one needs a tolerance constant: planner + owner).
 - **Residual, logged between the broker run and EOD:** such a trade is refused only when its ticker also has a late trade. Comparing the whole book to the replay would false-flag the common case of a regular-hours fill logged after the close (owner-visible residual; pinned by a test).
 
 ## Do not change
@@ -188,4 +188,10 @@ Order: C1 → C2 → C3 dry run → owner approves → apply → regenerate (by 
 - **Two late trades on one ticker, the first already in the book:** `plan_repairs` counts the first twice and refuses. Rare, fails closed (C6 excludes the row).
 - **C5/C6:** a forced same-day EOD re-run after a repair rewrites book and gross consistently and keeps `original_gross_book` and `repaired_at` (nothing reads them outside the repair code today). C6 must not label a row "repaired" from `repaired_at` alone.
 - **A forced re-run hours after the close** bakes an after-hours fill hand-logged after `cash_as_of` into the book with id <= max (undetectable). The partial-outage text (cron_runner.py ~787-790) tells the owner to re-run "the same evening": the earlier, the safer.
+
+## Residuals and follow-ups from the C5 review (2026-11-02, Opus SHIP)
+
+- **After-hours fill imported late, now written automatically.** An imported fill anchors at 16:00 ET, so it counts as at or before `cash_as_of` even when it filled after the cash read. Before C5 such a row could at most be flagged; C5 now adds the fill to gross, overstating net equity by the fill's value (log line only, with old -> new gross). Rare: needs an after-hours fill that reaches the journal through an import after that day's EOD. Closing it needs a cash-amount cross-check with a tolerance constant (planner + owner). Owner question: are extended-hours / 24-hour-market trades ever placed?
+- **Split between the row date and the repair, not yet journaled.** A late buy of a NEW ticker is priced from Yahoo's split-adjusted close times pre-split shares and written; the raised max id means the row is never revisited. Rare.
+- **Refusal alarm (do at C6).** A refused C4/C5-era row flips the EOD heartbeat (failure email, healthchecks fail ping, Home degraded line) every trading day until fixed or older than the lookback, and the backfill script only handles legacy rows, so the only remedy is hand SQL. Keep it until C6 ships (until then the daily alarm is the only guard against a refused row feeding Reports and the debrief). At C6: keep flipping on errors, failed writes and transient refusals (a missing close retries nightly); for a structural refusal (split, oversell, unexplained book, no book) flip and email only the first night a (date, reason) appears (the `_notify_broker_failure` alert_state dedup pattern), then show it persistently (System Trust or C6's excluded-row line).
 

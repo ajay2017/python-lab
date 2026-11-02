@@ -78,7 +78,9 @@ from stock_analyzer.account import compute_account_snapshot
 from stock_analyzer.constants import (
     ALERT_EMAIL_HOUR_ET, ALERT_EOD_HOUR_ET, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS,
     CRON_INTRADAY_START_HOUR_ET, MARGIN_MAINTENANCE_RATE, ACCOUNT_CASH_STALE_DAYS,
+    ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS,
 )
+from stock_analyzer import account_snapshot_autorepair as _acct_autorepair
 from stock_analyzer.risk_metric_history import build_portfolio_risk_snapshot
 from stock_analyzer.rec_events_capture import build_rec_event_rows
 from stock_analyzer.data import is_trading_day
@@ -805,6 +807,21 @@ def _run_eod(now_et, force: bool) -> int:
     else:
         _log(f"daily_snapshot NOT written ({len(rows)} rows; DB offline / table missing).")
         failures.append("daily_snapshot")
+
+    # 1a. N1 automatic repair of PAST account_daily_snapshots rows (a trade
+    # reached the journal after the row was written). Runs from stored /
+    # historical closes, so it is independent of today's book or price outage;
+    # never touches today's row; a problem flips the heartbeat but never blocks
+    # the day's writes below (docs/plans/account-snapshot-repair.md C5).
+    try:
+        _repair_res = _acct_autorepair.run_auto_repair(
+            db, now_et.date(), now_et,
+            lookback_days=ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS)
+        _log(_acct_autorepair.summary_line(_repair_res))
+        failures.extend(_acct_autorepair.failure_lines(_repair_res))
+    except Exception as e:  # noqa: BLE001
+        _log(f"account_snapshot_repair FAILED — {str(e)[:120]} — continuing.")
+        failures.append(f"account_snapshot_repair: {str(e)[:120]}")
 
     if _book_outage:
         _log(f"account_daily_snapshot / portfolio_risk_snapshot / rec_events SKIPPED — "
@@ -2683,6 +2700,19 @@ def _run_debrief(now_et, force: bool) -> int:
     from stock_analyzer import thesis_review_status as _thesis_review_status
     from stock_analyzer.constants import LEVERAGE_REFERENCE_TARGET
 
+    # N1 pre-step: repair stale PAST account_daily_snapshots rows (a Friday fill
+    # confirmed on Saturday) before the engine reads them. Never stops the
+    # debrief: a problem only flips the heartbeat at the final return.
+    try:
+        _repair_res = _acct_autorepair.run_auto_repair(
+            db, now_et.date(), now_et,
+            lookback_days=ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS)
+        _log(_acct_autorepair.summary_line(_repair_res))
+        _repair_failures = _acct_autorepair.failure_lines(_repair_res)
+    except Exception as e:  # noqa: BLE001
+        _log(f"account_snapshot_repair FAILED — {str(e)[:120]} — continuing.")
+        _repair_failures = [f"account_snapshot_repair: {str(e)[:120]}"]
+
     # The last completed Mon-Sun week; a `force` retry on a different calendar day
     # must land on the SAME week_ending as the original run (resolve_period's
     # last_week ends on the most recent Sunday on or before today -- the same
@@ -2700,6 +2730,8 @@ def _run_debrief(now_et, force: bool) -> int:
             return _handle_db_unavailable("debrief", now_et, _detail)
         _LAST_LANE_FAILURE_DETAIL = f"debrief_inputs_offline: {', '.join(_offline)}"
         _log(f"debrief: engine inputs unreadable ({', '.join(_offline)}) — no debrief written.")
+        if _repair_failures:     # N1 C5: keep the repair problem visible too
+            _LAST_LANE_FAILURE_DETAIL += "; " + "; ".join(_repair_failures)
         _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
         return 1
 
@@ -2715,6 +2747,8 @@ def _run_debrief(now_et, force: bool) -> int:
             return _handle_db_unavailable("debrief", now_et, _detail)
         _LAST_LANE_FAILURE_DETAIL = "debrief_inputs_offline: thesis_reviews"
         _log("debrief: thesis reviews unreadable — no debrief written.")
+        if _repair_failures:     # N1 C5: keep the repair problem visible too
+            _LAST_LANE_FAILURE_DETAIL += "; " + "; ".join(_repair_failures)
         _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
         return 1
     held = None
@@ -2733,6 +2767,8 @@ def _run_debrief(now_et, force: bool) -> int:
     if broken_theses is None:
         _LAST_LANE_FAILURE_DETAIL = "debrief_inputs_offline: thesis_reviews"
         _log("debrief: thesis reviews unusable (missing columns) — no debrief written.")
+        if _repair_failures:     # N1 C5: keep the repair problem visible too
+            _LAST_LANE_FAILURE_DETAIL += "; " + "; ".join(_repair_failures)
         _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
         return 1
 
@@ -2803,6 +2839,8 @@ def _run_debrief(now_et, force: bool) -> int:
                                      + ("(LLM call failed)" if package.get("narratable")
                                         else "(engine result not narratable)"))
         _log(f"debrief: {_LAST_LANE_FAILURE_DETAIL}")
+        if _repair_failures:     # N1 C5: keep the repair problem visible too
+            _LAST_LANE_FAILURE_DETAIL += "; " + "; ".join(_repair_failures)
         _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
         return 1
 
@@ -2853,6 +2891,13 @@ def _run_debrief(now_et, force: bool) -> int:
         # metrics_version column missing) would otherwise leave a green heartbeat.
         _LAST_LANE_FAILURE_DETAIL = ("weekly_debriefs: save failed "
                                      "(metrics_version column missing? apply the DDL)")
+        if _repair_failures:     # N1 C5: keep the repair problem visible too
+            _LAST_LANE_FAILURE_DETAIL += "; " + "; ".join(_repair_failures)
+        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        return 1
+    if _repair_failures:
+        _LAST_LANE_FAILURE_DETAIL = ("debrief saved; "
+                                     + "; ".join(_repair_failures))
         _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
         return 1
     return 0

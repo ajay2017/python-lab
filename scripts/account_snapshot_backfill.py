@@ -48,14 +48,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from stock_analyzer import account_snapshot_repair as repair  # noqa: E402
-from stock_analyzer import data as data_mod  # noqa: E402
+from stock_analyzer import data as data_mod  # noqa: E402,F401  (tests patch data_mod.fetch_unadjusted_history)
 from stock_analyzer import db  # noqa: E402
 from stock_analyzer.account import _parse_date  # noqa: E402
+from stock_analyzer.account_snapshot_autorepair import (  # noqa: E402,F401
+    _CLOSE_FETCH_PERIOD as FETCH_PERIOD, fetch_missing_closes, snapshot_shares_and_closes,
+)
 from stock_analyzer.market_time import now_et  # noqa: E402
 from stock_analyzer.performance_review import last_trading_day_on_or_before  # noqa: E402
 
 DEFAULT_SINCE = "2026-09-10"
-FETCH_PERIOD = "6mo"      # Yahoo history window for a close missing from daily_snapshots
 
 
 def _die(msg: str, code: int = 2):
@@ -65,56 +67,6 @@ def _die(msg: str, code: int = 2):
 
 def _records(df) -> list:
     return [] if df is None else df.to_dict("records")
-
-
-def snapshot_shares_and_closes(snap_df) -> tuple:
-    """({(date, TICKER): int shares}, {(TICKER, date): stored close}) from a
-    daily_snapshots frame."""
-    shares: dict = {}
-    closes: dict = {}
-    for r in _records(snap_df):
-        d = _parse_date(r.get("snapshot_date"))
-        tk = str(r.get("ticker") or "").upper().strip()
-        if d is None or not tk:
-            continue
-        try:
-            sh = int(float(r.get("shares")))
-        except (TypeError, ValueError):
-            continue
-        shares[(d, tk)] = sh
-        try:
-            px = float(r.get("close_price"))
-        except (TypeError, ValueError):
-            px = None
-        if px is not None and px == px and px > 0:
-            closes[(tk, d)] = px
-    return shares, closes
-
-
-def fetch_missing_closes(needs, have: dict) -> dict:
-    """Exact-date unadjusted closes from Yahoo for the (TICKER, date) pairs in
-    `needs` not already in `have`. Never raises; a miss is simply absent."""
-    out: dict = {}
-    by_ticker: dict = {}
-    for tk, d in needs:
-        if (tk, d) not in have:
-            by_ticker.setdefault(tk, set()).add(d)
-    for tk, dates in sorted(by_ticker.items()):
-        df = data_mod.fetch_unadjusted_history(tk, FETCH_PERIOD)
-        if df is None:
-            continue
-        try:
-            by_day = {}
-            for ix, v in df["Close"].items():
-                d = ix.date() if hasattr(ix, "date") else _parse_date(ix)
-                by_day[d] = float(v)
-        except Exception:  # noqa: BLE001
-            continue
-        for d in dates:
-            px = by_day.get(d)
-            if px is not None and px == px and px > 0:
-                out[(tk, d)] = px
-    return out
 
 
 def plan(acct_df, trades_df, snap_df, now):

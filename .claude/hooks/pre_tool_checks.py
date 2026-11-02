@@ -1221,6 +1221,7 @@ _GATE_FILES = {
     # Added 2026-11-01 (bug register N1): decides which account_daily_snapshots rows
     # are stale and what a repaired row's gross book and money fields become.
     "stock_analyzer/account_snapshot_repair.py",
+    "stock_analyzer/account_snapshot_autorepair.py",
 }
 
 

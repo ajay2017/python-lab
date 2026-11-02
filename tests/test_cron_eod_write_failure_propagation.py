@@ -70,6 +70,11 @@ def _patch_defaults(monkeypatch, **overrides):
     defaults.update(overrides)
     for name, fn in defaults.items():
         monkeypatch.setattr(cr, name, fn)
+    # N1 C5: the automatic account-row repair is its own tested unit
+    # (test_account_snapshot_autorepair.py); default it to a clean no-op here.
+    monkeypatch.setattr(cr._acct_autorepair, "run_auto_repair",
+                        lambda *_a, **_k: {"ok": True, "since": "x", "checked": 0, "applied": [],
+                                          "failed": [], "refusals": [], "error": None})
     monkeypatch.setattr(cr.db, "load_account_cash", lambda: None)
     monkeypatch.setattr(cr.db, "save_account_daily_snapshot", lambda *_a, **_k: True)
     monkeypatch.setattr(cr.db, "save_portfolio_risk_snapshot", lambda *_a, **_k: True)

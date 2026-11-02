@@ -167,6 +167,16 @@ CONCENTRATION_HIGHBETA_SHARE_WARN = 60.0
 # window), NOT an investment-decision threshold — tune from observation.
 ACCOUNT_CASH_STALE_DAYS = 7
 
+# N1 automatic account-snapshot repair (docs/plans/account-snapshot-repair.md,
+# owner decision U2 2026-11-01): the EOD lane and the Sunday debrief pre-step
+# repair stale account_daily_snapshots rows dated within this many calendar
+# days before today. Every EOD run repairs, so a trade that reaches the journal
+# up to 35 calendar days late is still repaired automatically; rows older than
+# that are left to the owner (the cron monthly report never reads
+# account_daily_snapshots). Bounds only the automatic repair; the stale-row
+# check itself has no lookback.
+ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS = 35
+
 # Intraday-pullback cron gate (cron_runner.py._run_intraday) — the ET hour
 # before which the lane refuses to run ("opening volatility hasn't settled
 # yet"). The lane fires via a fixed-UTC dual-slot schedule (15:30/16:30 UTC,

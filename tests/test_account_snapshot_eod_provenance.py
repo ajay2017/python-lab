@@ -226,6 +226,9 @@ def _cron_run(monkeypatch, payload, save=None):
     monkeypatch.setattr(cr, "_mature_earnings_predictions", lambda *_a, **_k: {
         "candidates": 0, "matured": 0, "withdrawn": 0, "error": None})
     monkeypatch.setattr(cr, "_notify_failure", lambda *_a, **_k: None)
+    monkeypatch.setattr(cr._acct_autorepair, "run_auto_repair",
+                        lambda *_a, **_k: {"ok": True, "since": "x", "checked": 0, "applied": [],
+                                          "failed": [], "refusals": [], "error": None})    # N1 C5: tested in test_account_snapshot_autorepair.py
     monkeypatch.setattr(cr.db, "load_account_cash", lambda: None)
     monkeypatch.setattr(cr.db, "save_account_daily_snapshot", _save)
     monkeypatch.setattr(cr.db, "save_portfolio_risk_snapshot", lambda *_a, **_k: True)

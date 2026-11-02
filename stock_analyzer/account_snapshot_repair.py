@@ -564,6 +564,31 @@ def legacy_close_needs(acct_rows, trades_df, snapshot_shares) -> set:
     return need
 
 
+def close_needs(acct_rows, trades_df) -> set:
+    """{(TICKER, date)} whose close `plan_repairs` may need that the row's own
+    book can't supply: for every non-legacy STALE row with a readable book,
+    each stale ticker the journal still holds (replayed shares > `_FLAT_EPS`)
+    that is absent from the book or has a None close there, plus any book
+    position with a None close. Lets the caller fetch only those closes. Empty
+    when the trades can't be read."""
+    if trades_df is None or not _trades_usable(trades_df):
+        return set()
+    prep = _prep_trades(trades_df)
+    need: set = set()
+    for row in _rows(acct_rows):
+        a = _analyse(row, prep)
+        if a is None or not a["stale_tickers"] or a["no_book"]:
+            continue
+        d, book = a["ctx"]["date"], a["ctx"]["book"]
+        for tk in a["stale_tickers"]:
+            if a["replay"].get(tk, 0.0) > _FLAT_EPS and book.get(tk, {}).get("close") is None:
+                need.add((tk, d))
+        for tk, v in book.items():
+            if v["close"] is None:
+                need.add((tk, d))
+    return need
+
+
 def plan_legacy_repairs(acct_rows, trades_df, snapshot_shares, closes, now):
     """Plan the repair of LEGACY rows (NULL `journal_max_trade_id`) from
     evidence. Pure: the caller does the writes. Returns

@@ -67,6 +67,9 @@ def _capture_engine_inputs(monkeypatch, captured, offline=("trades_df",)):
         for k in offline:
             out[k] = None
         return out
+    monkeypatch.setattr(cr._acct_autorepair, "run_auto_repair",
+                        lambda *_a, **_k: {"ok": True, "since": "x", "checked": 0, "applied": [],
+                                          "failed": [], "refusals": [], "error": None})    # N1 C5: tested in test_account_snapshot_autorepair.py
     monkeypatch.setattr(pi, "load_engine_inputs", _fake)
     monkeypatch.setattr(cr, "_db_unavailable_detail", lambda: None)
     monkeypatch.setattr(cr, "_notify_failure", lambda *a, **k: None)
@@ -149,6 +152,9 @@ def test_run_debrief_no_minimum_snapshot_floor_anymore(monkeypatch):
     """The old 5-snapshot-day floor skipped every holiday week; the lane now
     proceeds whenever the engine inputs are readable (it reaches the recs read)."""
     from stock_analyzer import period_inputs as pi
+    monkeypatch.setattr(cr._acct_autorepair, "run_auto_repair",
+                        lambda *_a, **_k: {"ok": True, "since": "x", "checked": 0, "applied": [],
+                                          "failed": [], "refusals": [], "error": None})    # N1 C5: tested in test_account_snapshot_autorepair.py
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     reached = []
     monkeypatch.setattr(pi, "load_engine_inputs", lambda db, s, e, **kw: {
@@ -168,13 +174,16 @@ def test_run_debrief_no_minimum_snapshot_floor_anymore(monkeypatch):
 
 # ── _run_debrief: a paid result that is not saved / not generated fails the lane ──
 
-def _full_lane(monkeypatch, *, generate, saved, notified):
+def _full_lane(monkeypatch, *, generate, saved, notified, repair=None, calls=None):
     """Run _run_debrief far enough to reach generation/saving with everything mocked.
     `generate` -> what generate_debrief returns; `saved` -> save_weekly_debrief's result."""
     from stock_analyzer import debrief_advisor as da
     from stock_analyzer import period_inputs as pi
     import stock_analyzer.data as sdata
 
+    monkeypatch.setattr(cr._acct_autorepair, "run_auto_repair",
+                        repair or (lambda *_a, **_k: {"ok": True, "since": "x", "checked": 0, "applied": [],
+                                                      "failed": [], "refusals": [], "error": None}))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     for k in ("RESEND_API_KEY", "ALERT_EMAIL_TO", "ALERT_EMAIL_FROM"):
         monkeypatch.delenv(k, raising=False)
@@ -188,10 +197,11 @@ def _full_lane(monkeypatch, *, generate, saved, notified):
     monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none", lambda: pd.DataFrame())
     monkeypatch.setattr(cr.db, "load_holdings_or_none", lambda: pd.DataFrame({"Ticker": []}))
     monkeypatch.setattr(cr.db, "load_weekly_debriefs", lambda limit=1: pd.DataFrame())
-    monkeypatch.setattr(cr.db, "save_weekly_debrief", lambda rec: saved)
+    calls = [] if calls is None else calls
+    monkeypatch.setattr(cr.db, "save_weekly_debrief", lambda rec: calls.append("save") or saved)
     monkeypatch.setattr(da, "build_debrief_package",
                         lambda **k: {"narratable": True, "result_status": "ok", "week_ending": "2026-08-09"})
-    monkeypatch.setattr(da, "generate_debrief", lambda pkg, key: generate)
+    monkeypatch.setattr(da, "generate_debrief", lambda pkg, key: calls.append("generate") or generate)
     monkeypatch.setattr(cr, "_notify_failure", lambda mode, detail: notified.append((mode, detail)))
     monkeypatch.setattr(cr, "_LAST_LANE_FAILURE_DETAIL", None)
     return cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
