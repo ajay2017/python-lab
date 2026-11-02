@@ -2,7 +2,7 @@
 Account-snapshot staleness detection and repair (bug register N1) — PURE.
 
 `account_daily_snapshots.net_equity = gross_book + cash_balance`. The cash
-comes from the broker lane (`cash_as_of`, ~21:00 UTC) and already includes
+comes from the broker lane (`cash_as_of`, ~21:15 UTC since 2026-11-01) and already includes
 every fill, while `gross_book` is the JOURNAL book at EOD. A trade that reaches
 the journal after the row was written (a Friday buy confirmed on Saturday)
 leaves the row describing two different books. Design:

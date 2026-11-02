@@ -198,7 +198,7 @@ scheduled lanes may create one). Then set each check to Schedule **Cron**, time 
 | `drishta-scan` | `45 13,14 * * *` | 1 hour |
 | `drishta-intraday` | `30 15,16 * * 1-5` | 1 hour |
 | `drishta-eod` | `30 21 * * 1-5` | 1 hour |
-| `drishta-broker` | `0 16,21 * * *` | 1 hour |
+| `drishta-broker` | `15 16,21 * * *` | 1 hour |
 | `drishta-thesis` | `0 23 * * 0` | 2 hours |
 | `drishta-maintenance` | `0 12 * * 6` (confirm in the Railway dashboard) | 2 hours |
 

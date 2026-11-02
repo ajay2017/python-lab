@@ -4576,7 +4576,7 @@ reports failure by returning non-zero (rather than raising) still records
 | `intraday` | `cron-intraday` | `30 15,16 * * 1-5` | trading day + ET hour ≥ `CRON_INTRADAY_START_HOUR_ET` | Intraday pullback entry check |
 | `eod` | `cron-eod` | `30 21 * * 1-5` | trading day + ET hour ≥ `ALERT_EOD_HOUR_ET` | EOD snapshot, pullback alert, vol-prediction write + maturation |
 | `thesis` | `cron-thesis` | `0 23 * * 0` | Sunday | F-1 thesis review → F-3 weekly debrief → F-4 monthly report (first Sunday) |
-| `broker` | `cron-broker` | *not recorded here* | **none** — see below | SnapTrade balance sync, transaction import, broker position snapshot (F-252) |
+| `broker` | `cron-broker` | `15 16,21 * * *` (since 2026-11-01; was `0 16,21 * * *`) | **none** — see below | SnapTrade balance sync, transaction import, broker position snapshot (F-252) |
 | `maintenance` | `cron-maintenance` ⚠️ | *not recorded here* | Saturday | Idempotent data backfills (see below) |
 
 ⚠️ **`broker` has NO in-code guard at all** — no trading-day check, no ET-hour
@@ -4588,7 +4588,7 @@ the code — read the dashboard. **Resolved 2026-08-24:** the live cron expressi
 `0 16,21 * * *` (16:00/21:00 UTC = 12:00/17:00 ET in EDT, 11:00/16:00 ET in EST),
 confirmed by two real captures (2026-08-23 17:02 ET, 2026-08-24 12:02 ET). The
 old `fire_hours_et=(14, 19)` was never dashboard-verified and matched neither
-slot; it is now `(12, 18)` (`system_health.py:205`). The 18 rather than a literal
+slot; it is now `(12, 18)` (the broker `_Lane` in `system_health.py`). **Moved 2026-11-01 (owner, U8 of `docs/plans/account-snapshot-repair.md`) to `15 16,21 * * *`** (16:15/21:15 UTC = 12:15/17:15 ET in EDT, 11:15/16:15 ET in EST): at `0 21` the EST evening cash read landed at ~16:02 ET, just past `_valid_snapshot_row`'s 16:00 ET rule, with fills from the last minutes possibly not yet at SnapTrade; it still runs before the EOD lane at 21:30 UTC, and `(12, 18)` still sits past both slots. The 18 rather than a literal
 17 is deliberate — this file's lane-table design principle puts the deadline PAST
 each lane's fire+write time, and 18 keeps that margin while still exceeding the
 EST-equivalent max of 16. The earlier mismatch never produced a wrong health

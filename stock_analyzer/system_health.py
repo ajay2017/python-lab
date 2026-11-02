@@ -269,6 +269,10 @@ _LANES: tuple[_Lane, ...] = (
     # (write lands ~17:02), leaving zero margin the way eod=(19,) has margin
     # past its own fire time. 18 restores that margin while still safely
     # exceeding the EST-equivalent max of 16 (Opus review finding, 2026-08-24).
+    # 2026-11-01 (owner, U8 of docs/plans/account-snapshot-repair.md): the
+    # schedule moved to "15 16,21 * * *" (12:15/17:15 ET EDT, 11:15/16:15 ET
+    # EST) so the EST evening cash read lands 15 minutes after the 16:00 ET close;
+    # (12, 18) still sits past both slots, so no change here.
     _Lane("broker",      "SnapTrade broker sync",       "daily", fire_hours_et=(12, 18)),
 )
 

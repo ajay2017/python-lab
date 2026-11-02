@@ -17,7 +17,7 @@ Build started 2026-11-01 with C1 + C2.
 
 ## Defect
 
-`account_daily_snapshots.net_equity = gross_book + cash_balance` (`stock_analyzer/account.py` ~100-115). `cash_balance` comes from the broker lane's balance sync (`cash_as_of` ~21:00 UTC), which already includes every fill. `gross_book` is the journal book at EOD. A trade that reaches the journal after the row is written leaves the row describing two different books.
+`account_daily_snapshots.net_equity = gross_book + cash_balance` (`stock_analyzer/account.py` ~100-115). `cash_balance` comes from the broker lane's balance sync (`cash_as_of` ~21:00 UTC; ~21:15 UTC after U8), which already includes every fill. `gross_book` is the journal book at EOD. A trade that reaches the journal after the row is written leaves the row describing two different books.
 
 Owner SQL, 2026-11-01:
 
