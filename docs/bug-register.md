@@ -39,7 +39,7 @@
 
 | ID | Bug | Status |
 |---|---|---|
-| #32 | 🩺 System Trust grades daily lanes on a flat 30 h, so the weekday-only intraday lane reads 🟡 late every weekend and Home adds "pipeline check degraded". Home Day Shock says "moved ≥5% today" on a Saturday. | **Fixed 2026-11-01** (#32 commit; Opus SHIP); screenshot pending |
+| #32 | 🩺 System Trust grades daily lanes on a flat 30 h, so the weekday-only intraday lane reads 🟡 late every weekend and Home adds "pipeline check degraded". Home Day Shock says "moved ≥5% today" on a Saturday. | **Fixed** `59ce1cf` 2026-11-01 (Opus SHIP); **verified live** Sun 11-01 (no degraded line, Day Shock "in the last session (Fri Oct 30)", Today's P&L "$0 / 0.00%") |
 | Macro | After a release, a memoized Brief macro card can still say "Hold through the print". | Open |
 | #30 | Yahoo `yf.download` returned empty for the indices on 2026-10-31. The page is guarded (`7bbbe11`); the cause is parked until it recurs (pull the web log BEFORE pushing). | Parked |
 
