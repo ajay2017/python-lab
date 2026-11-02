@@ -1959,3 +1959,76 @@ def test_trim_boundaries_unchanged():
     assert _trim_act(df) is None
     df, _ = _trim_book(20.0, pnl=REBALANCE_TRIM_PNL_PCT)
     assert _trim_act(df) is None
+
+
+# ── alerts() — U8: rating-change flag is one shared watch-only warning ───────
+
+def _rev_alerts(alert_list):
+    return [a for a in alert_list if a["category"] == "revisions" and "🎯" not in a["msg"]]
+
+
+def _rev_held(net, ups, dns, extra=None):
+    d = {"revisions": {"net": net, "upgrades_90d": ups, "downgrades_90d": dns}}
+    d.update(extra or {})
+    return {"AAA": d}
+
+
+def test_alerts_rating_flag_net_minus2_is_warning_with_shared_wording():
+    from stock_analyzer import revision_flag
+    held = _rev_held(-2, 0, 2)
+    result = alerts(_one_holding_port_df("AAA"), held)
+    hits = _rev_alerts(result)
+    assert len(hits) == 1 and hits[0]["level"] == "warning"
+    assert revision_flag.flag_line(revision_flag.read(held["AAA"])) in hits[0]["msg"]
+    assert "rating changes, not earnings-estimate cuts" in hits[0]["msg"]
+    assert "conviction fading" not in hits[0]["msg"]
+    assert not any(a["level"] == "danger" for a in result)
+
+
+def test_alerts_rating_flag_net_minus3_never_danger():
+    result = alerts(_one_holding_port_df("AAA"), _rev_held(-3, 0, 3))
+    hits = _rev_alerts(result)
+    assert len(hits) == 1 and hits[0]["level"] == "warning"
+    assert sum(1 for a in result if a["level"] == "danger") == 0
+
+
+def test_alerts_rating_flag_net_minus1_no_alert():
+    assert _rev_alerts(alerts(_one_holding_port_df("AAA"), _rev_held(-1, 1, 2))) == []
+
+
+def test_alerts_rating_flag_unknown_or_missing_never_fires():
+    port = _one_holding_port_df("AAA")
+    assert _rev_alerts(alerts(port, {"AAA": {}})) == []
+    assert _rev_alerts(alerts(port, {"AAA": {"revisions": {}}})) == []
+    assert _rev_alerts(alerts(port, {"AAA": {"revisions": {"net": None}}})) == []
+    snap = {"AAA": {"revisions": {"net": -5, "basis": "consensus_snapshot"}}}
+    assert _rev_alerts(alerts(port, snap)) == []
+
+
+def test_alerts_rating_flag_skips_warning_pt_cut_only():
+    pt = {"AAA": {"level": "warning", "pct_change": -0.09,
+                  "compare_target": 100.0, "newest_target": 91.0}}
+    result = alerts(_one_holding_port_df("AAA"), _rev_held(-2, 0, 2), pt_cut_signals=pt)
+    assert _pt_alerts(result) == []
+    assert len(_rev_alerts(result)) == 1
+    # without the flag the PT cut still fires
+    assert len(_pt_alerts(alerts(_one_holding_port_df("AAA"), {"AAA": {}}, pt_cut_signals=pt))) == 1
+
+
+def test_alerts_danger_pt_cut_shows_under_rating_flag():
+    pt = {"AAA": {"level": "danger", "pct_change": -0.2,
+                  "compare_target": 100.0, "newest_target": 80.0}}
+    result = alerts(_one_holding_port_df("AAA"), _rev_held(-3, 0, 3), pt_cut_signals=pt)
+    pts = _pt_alerts(result)
+    assert len(pts) == 1 and pts[0]["level"] == "danger"
+    assert "no rating change" not in pts[0]["msg"]
+    flags = _rev_alerts(result)
+    assert len(flags) == 1 and flags[0]["level"] == "warning"
+    # alone, the danger cut keeps its "no rating change" wording
+    solo = _pt_alerts(alerts(_one_holding_port_df("AAA"), {"AAA": {}}, pt_cut_signals=pt))
+    assert "no rating change" in solo[0]["msg"]
+
+
+def test_alerts_rating_flag_adds_no_danger_count():
+    result = alerts(_one_holding_port_df("AAA"), _rev_held(-4, 0, 4))
+    assert sum(1 for a in result if a["level"] == "danger") == 0

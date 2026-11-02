@@ -6,6 +6,7 @@ import numpy as np
 from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS, REDEPLOY_CORR_DIVERSIFIER_MAX, REDEPLOY_CORR_CORRELATED_MIN, CORR_MIN_OBS_TRUSTED
 from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer import asset_type
+from stock_analyzer import revision_flag as _revision_flag
 from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 
@@ -713,7 +714,7 @@ def alerts(
     `pt_cut_signals` (optional): ticker -> analyst_targets.detect_pt_cut() output,
     fires an independent "revisions" alert on a consensus price-target cut even
     without an accompanying rating action (F-169 Phase 2 — closes the gap the
-    rating-based "Analyst revision spike" branch below cannot see).
+    rating-change watch flag below cannot see).
     """
     from datetime import datetime as _datetime
 
@@ -817,46 +818,40 @@ def alerts(
                     # vanish silently.
                     pass
 
-            # Analyst revision spike
-            rev = r.get("revisions", {})
-            dns = rev.get("downgrades_90d", 0)
-            ups = rev.get("upgrades_90d", 0)
-            net = rev.get("net", 0)
+            # Analyst rating-change flag (U8, finding #22): one shared watch-only
+            # rule (revision_flag), never danger. `rating` is the same read the
+            # Brief / Playbook / Signals checklist use, so every surface agrees
+            # on which tickers are flagged; unknown / missing never fires.
+            _rating = _revision_flag.read(r)
             _rating_fired = False
-            if dns >= 3 and net <= -2:
-                result.append({
-                    "level": "danger", "category": "revisions",
-                    "msg": (
-                        f"📉 **{ticker}** has {dns} analyst downgrades vs {ups} upgrades in 90 days "
-                        f"(net {net}) — institutional conviction fading"
-                    ),
-                })
-                _rating_fired = True
-            elif dns >= 2 and net < 0:
+            if _revision_flag.is_flagged(_rating):
                 result.append({
                     "level": "warning", "category": "revisions",
-                    "msg": (
-                        f"⚠️ **{ticker}** has {dns} downgrades vs {ups} upgrades in 90 days "
-                        f"— monitor for further deterioration"
-                    ),
+                    "msg": f"⚑ **{ticker}** — {_revision_flag.flag_line(_rating)}",
                 })
                 _rating_fired = True
 
             # Analyst price-target cut (F-169 Phase 2 — independent of rating
-            # action; see docs/architecture.md §6.23). Skipped when the rating
-            # branch above already fired for this ticker — both are bearish
+            # action; see docs/architecture.md §6.23). A WARNING-level cut is skipped
+            # when the rating flag above already fired for this ticker — both are bearish
             # "revisions" reads on the same name, so surfacing the PT cut too
             # would stack two alerts in one category rather than add a
             # genuinely new one (Opus review, 2026-07-31).
-            pt = {} if _rating_fired else ((pt_cut_signals or {}).get(ticker) or {})
+            # Only a WARNING-level cut is skipped under the rating flag: a danger
+            # cut is a separate, stronger detector and must not be hidden by the
+            # watch-only flag.
+            _pt_raw = pt_cut_signals.get(ticker) if isinstance(pt_cut_signals, dict) else None
+            _pt_raw = _pt_raw if isinstance(_pt_raw, dict) else {}
+            pt = _pt_raw if (not _rating_fired or _pt_raw.get("level") == "danger") else {}
+            _no_rating = "" if _rating_fired else "no rating change, but "
             if pt.get("level") == "danger":
                 result.append({
                     "level": "danger", "category": "revisions",
                     "msg": (
                         f"🎯 **{ticker}** consensus price target cut {pt['pct_change'] * 100:.1f}% "
                         f"over {PT_TARGET_LOOKBACK_DAYS} trading days "
-                        f"(${pt['compare_target']:.2f} → ${pt['newest_target']:.2f}) — no rating change, "
-                        f"but analysts are marking down the outlook"
+                        f"(${pt['compare_target']:.2f} → ${pt['newest_target']:.2f}) — {_no_rating}"
+                        f"analysts are marking down the outlook"
                     ),
                 })
             elif pt.get("level") == "warning":

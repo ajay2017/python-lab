@@ -847,7 +847,7 @@ EARNINGS_OVERWEIGHT_TRIM_TO_PCT       = 10.0
 # values. Since 2026-10-30 (finding #22) the rating-change, beat-history and
 # bearish-reaction rules are Watch flags that size nothing.
 EARNINGS_REDUCE_MIN_WEIGHT_PCT = 5.0    # the weak-composite REDUCE and the beat-history / bearish-reaction Watch flags only fire on a position at least this heavy (% of portfolio)
-EARNINGS_REVISION_WATCH_NET   = -2     # net analyst rating changes (upgrades+initiations - downgrades, 90d) at or below this raise the pre-earnings Watch flag (revision_flag.is_flagged) on the Playbook, Brief and Signals; sizes nothing, shadow-measured (finding #22)
+EARNINGS_REVISION_WATCH_NET   = -2     # net analyst rating changes (upgrades+initiations - downgrades, 90d) at or below this raise the Watch flag (revision_flag.is_flagged) on the Playbook, Brief, Signals checklist and, since 2026-11-01 (U8), 📡 Signals Active Alerts (warning level, never danger); sizes nothing, shadow-measured (finding #22)
 EARNINGS_PARTIAL_TRIM_PCT      = 35.0   # measure-only since 2026-10-30: the counterfactual trim recorded in earnings_revision_shadow.would_trim_shares (no rule sizes a trim from it)
 EARNINGS_WEAK_TRIM_PCT         = 50.0   # % of shares trimmed by the weak-composite (Sell-zone) REDUCE rule
 EARNINGS_STOP_COVER_FRAC       = 0.85   # stop gap < this fraction of the estimated earnings move = "stop at risk"
