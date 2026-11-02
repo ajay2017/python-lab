@@ -206,6 +206,10 @@ class _Lane:
     # expected fire" check inside check_cron_liveness().
     fire_hours_et: tuple[int, ...] = ()
     fire_weekday: int | None = None   # date.weekday(): Mon=0..Sun=6; weekly lanes only
+    # Daily lane whose Railway cron is weekday-only (`* * 1-5`): grade its age
+    # with the Sat/Sun time removed (`_weekday_age`), so a normal weekend gap
+    # doesn't read "later than daily cadence". Daily lanes only.
+    weekdays_only: bool = False
 
 
 # `fire_hours_et` / `fire_weekday` values below are ET-native and ALREADY carry
@@ -225,16 +229,20 @@ class _Lane:
 #   lane key      | fire_hours_et | fire_weekday
 #   premarket     | (10,)         | —
 #   scan          | (12,)         | —
-#   intraday      | (13,)         | —
-#   eod           | (19,)         | —
+#   intraday      | (13,)         | —   (weekdays_only: Railway `1-5`)
+#   eod           | (19,)         | —   (weekdays_only: Railway `1-5`)
 #   thesis        | (20,)         | 6 (Sunday)
 #   maintenance   | (10,)         | 5 (Saturday)
 #   broker        | (12, 18)      | —
 _LANES: tuple[_Lane, ...] = (
     _Lane("premarket",   "Pre-market protective scan", "daily",  fire_hours_et=(10,)),
     _Lane("scan",        "Morning market scan",        "daily",  fire_hours_et=(12,)),
-    _Lane("intraday",    "Intraday pullback check",    "daily",  fire_hours_et=(13,)),
-    _Lane("eod",         "End-of-day snapshot",        "daily",  fire_hours_et=(19,)),
+    # intraday (`30 15,16 * * 1-5`) and eod (`30 21 * * 1-5`) are weekday-only on
+    # Railway (DEVELOPMENT.md cron table); premarket / scan / broker fire daily.
+    # Weekday holidays need nothing extra: the cron still fires Mon-Fri and the
+    # lane exits early with a heartbeat on a non-trading day.
+    _Lane("intraday",    "Intraday pullback check",    "daily",  fire_hours_et=(13,), weekdays_only=True),
+    _Lane("eod",         "End-of-day snapshot",        "daily",  fire_hours_et=(19,), weekdays_only=True),
     _Lane("thesis",      "Weekly thesis & debrief",    "weekly", fire_hours_et=(20,), fire_weekday=6),
     # Saturday housekeeping (cron_runner._run_maintenance): idempotent data
     # backfills. Registered here so a silent death is visible on 🩺 System
@@ -413,6 +421,35 @@ def _age(now: datetime, ts: datetime) -> timedelta:
     return now - ts
 
 
+def _weekday_age(now: datetime, ran: datetime) -> timedelta:
+    """`now - ran` minus the real elapsed time that falls on Saturday or Sunday
+    (ET calendar days), for lanes whose cron is weekday-only. Both inputs must be
+    tz-aware; day boundaries are ET-localized midnights so a DST weekend counts
+    its true 25h/23h. Never negative. Beyond 30 days the weekend share is
+    irrelevant (the lane is dead either way) so the raw age is returned."""
+    from datetime import time as _time
+
+    from stock_analyzer.market_time import ET
+
+    age = now - ran
+    if age <= timedelta(0):
+        return timedelta(0)
+    if age > timedelta(days=30):
+        return age
+    now_et, ran_et = now.astimezone(ET), ran.astimezone(ET)
+    weekend = timedelta(0)
+    d = ran_et.date()
+    while d <= now_et.date():
+        if d.weekday() >= 5:
+            start = ET.localize(datetime.combine(d, _time.min))
+            end = ET.localize(datetime.combine(d + timedelta(days=1), _time.min))
+            lo, hi = max(start, ran_et), min(end, now_et)
+            if hi > lo:
+                weekend += hi - lo
+        d += timedelta(days=1)
+    return max(age - weekend, timedelta(0))
+
+
 # ── ① cron liveness ───────────────────────────────────────────────────────────
 def check_cron_liveness() -> list[dict]:
     """Read cron_heartbeat and grade each lane's recency. A lane with no
@@ -491,12 +528,21 @@ def check_cron_liveness() -> list[dict]:
                 else:
                     severity, detail = "down", f"last fired {_ago(age)} — weekly lane appears dead"
             else:  # daily
-                if age <= timedelta(hours=_DAILY_LANE_OK_HOURS):
-                    severity, detail = "ok", f"fired {_ago(age)}"
-                elif age <= timedelta(days=_DAILY_LANE_WARN_DAYS):
-                    severity, detail = "warn", f"last fired {_ago(age)} — later than daily cadence"
+                graded = age
+                note = ""
+                if lane.weekdays_only:
+                    try:
+                        graded = _weekday_age(now, ran)
+                    except Exception:
+                        graded = age
+                    if graded != age:
+                        note = " (weekend not counted)"
+                if graded <= timedelta(hours=_DAILY_LANE_OK_HOURS):
+                    severity, detail = "ok", f"fired {_ago(age)}{note}"
+                elif graded <= timedelta(days=_DAILY_LANE_WARN_DAYS):
+                    severity, detail = "warn", f"last fired {_ago(age)}{note} — later than daily cadence"
                 else:
-                    severity, detail = "down", f"last fired {_ago(age)} — daily lane appears dead"
+                    severity, detail = "down", f"last fired {_ago(age)}{note} — daily lane appears dead"
 
             # Tightening (2026-08-21): the age-window grading above trusts the
             # last-known-good row's AGE, but during a total DB outage the

@@ -11,7 +11,9 @@
 | ID | Bug | Where | Status |
 |---|---|---|---|
 | N1 | `account_daily_snapshots.net_equity = gross_book + cash_balance` mixes the broker's cash (balance sync, already includes every fill) with the journal holdings at EOD (a trade imported or logged a day late is missing). The owner's SQL on 2026-11-01 showed 10-30 net equity $2,510.33 (lev 6.08) against 10-23's $7,665.52, which is exactly the −67.25% in the Sunday 11-01 weekly debrief (saved and emailed). 10-28 has the same shape. Also feeds the monthly report, 📄 Reports, 💰 Capital Trend and the leverage history. | `stock_analyzer/account.py`, EOD cron, broker lane | Planner designing (2026-11-01); then repair the rows and regenerate the debrief and monthly report |
-| N2 | Home Today's P&L counted a late-logged buy's full value as a gain (+22.48% on Sun 11-01; CSCO / MRVL / MU bought Fri 10-30, logged Sat). | `daily_pnl.py`, app.py | Fixed `51dd19f` 2026-11-01; screenshot pending |
+| N2 | Home Today's P&L counted a late-logged buy's full value as a gain (+22.48% on Sun 11-01; CSCO / MRVL / MU bought Fri 10-30, logged Sat; then DASH / OKTA adds). | `daily_pnl.py`, app.py | **Fixed** `51dd19f` → `e41d87c` → `8771f4b` 2026-11-01; **verified live** ($0 on Sunday) |
+| N3 | A SELL dated between the snapshot date and today (for example, logged with its log-time date) is not repaired by `fill_late_logged_baseline`; its orphan / qty_drift warning still shows (understated). | `daily_pnl.py` | Open (Opus review 2026-11-01); N1 C7 fixes the snapshot rows themselves |
+| U7 | A SELL not yet in the journal makes the net-capital sizing cap and the daily new-buy budget LOOSER than they should be (journal book + broker cash, `margin.resolve_net_capital`); a late BUY makes them tighter (fail-safe). | sizing cap, F-306 budget | Open; planner + reviewer (N1 sibling sweep) |
 | U8 | 📡 Signals Analyst Revisions alerts are red DANGER ("institutional conviction fading") at bare literals (`portfolio.py`, `get_alerts`), counted in the nav badge and Home's 🔴 count, contradicting #22's watch-only rating-change flag. | `portfolio.get_alerts` (gate file) | Open → implementer + reviewer |
 | #25 | 🔔 Playbook on a report day (0d) still reads pre-report for before-open reporters. | Catalyst Watch playbook (gate path) | Open, owner wording call |
 | #21 | Grow Today shows two different "today's new buys" figures on one card (99.6% vs 84.3% of net capital). | F-306 budget | Open, inputs not yet traced |
@@ -37,7 +39,7 @@
 
 | ID | Bug | Status |
 |---|---|---|
-| #32 | 🩺 System Trust grades daily lanes on a flat 30 h, so the weekday-only intraday lane reads 🟡 late every weekend and Home adds "pipeline check degraded". Home Day Shock says "moved ≥5% today" on a Saturday. | Open (`system_health.py`, gate file) |
+| #32 | 🩺 System Trust grades daily lanes on a flat 30 h, so the weekday-only intraday lane reads 🟡 late every weekend and Home adds "pipeline check degraded". Home Day Shock says "moved ≥5% today" on a Saturday. | **Fixed 2026-11-01** (#32 commit; Opus SHIP); screenshot pending |
 | Macro | After a release, a memoized Brief macro card can still say "Hold through the print". | Open |
 | #30 | Yahoo `yf.download` returned empty for the indices on 2026-10-31. The page is guarded (`7bbbe11`); the cause is parked until it recurs (pull the web log BEFORE pushing). | Parked |
 
@@ -45,6 +47,8 @@
 
 | ID | Bug |
 |---|---|
+| Movers | 🧾 Summary's "Today / Last session's movers" (`summary_view.movers_window`) and Home's Day Shock (`session_label.price_move_session`) disagree 20:00–midnight ET on a trading day; route Summary through `session_label`. Grow Today's "🔥 +X% today" / "Breakout X% today" (app.py ~9971 / ~10917) have the same weekend wording. |
+| Zero | A flat Today's P&L now shows "0.00%" with `delta_color="off"`, but Streamlit still draws a grey up-arrow; use `delta_arrow="off"` if the pinned Streamlit supports it (screenshot check). |
 | #31 | Home ⚠️ Alerts "(~$523), MRVL (~" renders as strikethrough (Streamlit pairs the two `~`). |
 | AIset | ⚙️ App Settings pending-switch line ("Pending: claude-haiku-5-5 applies from …") omits the effort. |
 | Text | "1 shares"; "-0 downgrades" on Signals; "$+80" / "$-198" sign placement; "Grow Today (1 setups)"; Catalyst company names cut at ~28 chars; AAPL Analysis resistance levels listed below price; the Sentiment tile subtitle says "VADER" though LLM rescoring is live; Earn Growth (e.g. ABBV 290%) has no context; a Rebalancer news headline with two `$` can render as LaTeX. |

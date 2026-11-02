@@ -180,11 +180,14 @@ def test_cron_liveness_fresh_ok_and_failed_down(monkeypatch):
 def test_cron_liveness_stale_daily_is_warn_then_down(monkeypatch):
     now = market_time.now_et()
     monkeypatch.setattr(db, "load_cron_heartbeats", lambda: [
-        {"lane": "eod",  "last_run_at": (now - timedelta(days=2)).isoformat(),  "status": "ok"},
+        # premarket fires every day; eod / intraday are weekdays_only (#32) and
+        # skip the weekend, so a wall-clock "2 days ago" eod row reads ok on a
+        # Sunday or Monday. Use an every-day lane so this test isn't weekday-bound.
+        {"lane": "premarket", "last_run_at": (now - timedelta(days=2)).isoformat(),  "status": "ok"},
         {"lane": "scan", "last_run_at": (now - timedelta(days=9)).isoformat(),  "status": "ok"},
     ])
     lanes = {x["key"]: x for x in sh.check_cron_liveness()}
-    assert lanes["eod"]["severity"] == "warn"   # 2d: late but not dead
+    assert lanes["premarket"]["severity"] == "warn"   # 2d: late but not dead
     assert lanes["scan"]["severity"] == "down"  # 9d: dead
 
 
@@ -743,3 +746,85 @@ def test_overflow_write_outcome_is_graded_independently_of_the_buy_log():
     assert out["_rec_log_save_result"]["severity"] == "ok"           # control
     assert out["_overflow_rec_save_result"]["severity"] == "down"
     assert out["_overflow_rec_save_result"]["label"] == "Also-cleared (overflow) log"
+
+
+# ── weekday-only lanes (intraday / eod) are not "late" over a weekend ─────────
+def _et_dt(y, m, d, h=12, mi=0):
+    import datetime as dt
+    return market_time.ET.localize(dt.datetime(y, m, d, h, mi))
+
+
+def _grade(monkeypatch, lane, ran, now):
+    from stock_analyzer import data as sdata
+    monkeypatch.setattr(sdata, "is_trading_day", lambda d: d.weekday() < 5)
+    monkeypatch.setattr(market_time, "now_et", lambda: now)
+    monkeypatch.setattr(market_time, "today_et", lambda: now.date())
+    monkeypatch.setattr(db, "load_cron_heartbeats", lambda: [
+        {"lane": lane, "last_run_at": ran.isoformat(), "status": "ok"},
+    ])
+    return {x["key"]: x for x in sh.check_cron_liveness()}[lane]
+
+
+@pytest.mark.parametrize("lane", ["eod", "intraday"])
+@pytest.mark.parametrize("now_args", [(2026, 8, 22, 12), (2026, 8, 23, 20), (2026, 8, 24, 9)])
+def test_weekday_lane_ok_across_weekend(monkeypatch, lane, now_args):
+    ran = _et_dt(2026, 8, 21, 17, 30)   # Friday
+    r = _grade(monkeypatch, lane, ran, _et_dt(*now_args))
+    assert r["severity"] == "ok"
+
+
+def test_weekday_lane_weekend_note_in_detail(monkeypatch):
+    r = _grade(monkeypatch, "eod", _et_dt(2026, 8, 21, 17, 30), _et_dt(2026, 8, 23, 20))
+    assert "weekend not counted" in r["detail"]
+
+
+@pytest.mark.parametrize("lane", ["eod", "intraday"])
+def test_weekday_lane_missed_monday_run_warns(monkeypatch, lane):
+    r = _grade(monkeypatch, lane, _et_dt(2026, 8, 21, 17, 30), _et_dt(2026, 8, 24, 20))
+    assert r["severity"] == "warn"
+
+
+@pytest.mark.parametrize("lane", ["eod", "intraday"])
+def test_weekday_lane_friday_failure_warns_over_weekend(monkeypatch, lane):
+    # Last good run Thu 17:30; the Friday run failed without recording. The
+    # weekday age on Sunday is only ~26.5h ("ok" on age alone), so the
+    # fire_hours_et tightening (expected Friday) is what must turn it amber.
+    r = _grade(monkeypatch, lane, _et_dt(2026, 8, 20, 17, 30), _et_dt(2026, 8, 23, 20))
+    assert r["severity"] == "warn"
+
+
+def test_non_weekday_lane_unchanged_on_weekend(monkeypatch):
+    # premarket fires daily: Fri 10:00 -> Sun 20:00 is 58h, genuinely late.
+    r = _grade(monkeypatch, "premarket", _et_dt(2026, 8, 21, 10), _et_dt(2026, 8, 23, 20))
+    assert r["severity"] == "warn"
+    assert "weekend not counted" not in r["detail"]
+
+
+def test_weekday_lane_dst_weekend_ok(monkeypatch):
+    import datetime as dt
+    import pytz
+    ran = pytz.utc.localize(dt.datetime(2026, 10, 30, 21, 30))   # Fri 17:30 EDT
+    now = _et_dt(2026, 11, 1, 19)                                 # Sun evening EST
+    assert _grade(monkeypatch, "eod", ran, now)["severity"] == "ok"
+
+
+def test_weekday_lane_dead_a_week_reads_down(monkeypatch):
+    r = _grade(monkeypatch, "eod", _et_dt(2026, 8, 14, 17, 30), _et_dt(2026, 8, 21, 20))
+    assert r["severity"] == "down"
+
+
+def test_weekday_age_unit_cases():
+    from datetime import timedelta
+    f = sh._weekday_age
+    # Weekday-only interval: untouched.
+    assert f(_et_dt(2026, 8, 20, 12), _et_dt(2026, 8, 19, 12)) == timedelta(hours=24)
+    # Fri 17:30 -> Mon 09:00: 63.5h minus a full weekend (48h).
+    assert f(_et_dt(2026, 8, 24, 9), _et_dt(2026, 8, 21, 17, 30)) == timedelta(hours=15.5)
+    # Ran on a Saturday noon, checked Sunday noon: all weekend -> 0.
+    assert f(_et_dt(2026, 8, 23, 12), _et_dt(2026, 8, 22, 12)) == timedelta(0)
+    # Ran Saturday noon, checked Monday 06:00: 18h Mon..., = 6h.
+    assert f(_et_dt(2026, 8, 24, 6), _et_dt(2026, 8, 22, 12)) == timedelta(hours=6)
+    # DST weekend (25h Sunday): Fri 17:30 EDT -> Mon 09:00 EST = 64.5h - 49h.
+    assert f(_et_dt(2026, 11, 2, 9), _et_dt(2026, 10, 30, 17, 30)) == timedelta(hours=15.5)
+    # Never negative.
+    assert f(_et_dt(2026, 8, 20, 12), _et_dt(2026, 8, 21, 12)) == timedelta(0)

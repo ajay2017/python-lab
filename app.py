@@ -102,6 +102,8 @@ from stock_analyzer.daily_pnl import (close_on_date, compute_positions_day_pnl,
 # it and app.py runs top-to-bottom — see feedback_module_def_order.
 from stock_analyzer.market_time import et_anchor_iso as _et_anchor_iso
 from stock_analyzer.market_time import now_et as _now_et
+from stock_analyzer.pnl_display import signed_display as _signed_display
+from stock_analyzer.session_label import move_when_phrase as _move_when_phrase
 from stock_analyzer import broker_sync
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer.valuation_target import pt_label as _pt_label
@@ -5346,7 +5348,7 @@ if page == "🏠 Home":
             st.warning(
                 f"⚠️ **Day Shock — {len(_day_shock_cache)} position"
                 f"{'s' if len(_day_shock_cache) != 1 else ''} moved "
-                f"≥{DAY_SHOCK_PCT:.0f}% today**  \n"
+                f"≥{DAY_SHOCK_PCT:.0f}% {_move_when_phrase(_now_et())}**  \n"
                 "Awareness only — not a recommendation change. Deterioration tier "
                 "(WATCH/TRIM/EXIT) is unaffected unless the 50-day trend is also broken."
             )
@@ -7814,17 +7816,20 @@ if page == "🏠 Home":
         _dp_val = _dpnl["day_pnl"]
         _dp_pct = _dpnl["day_pnl_pct"]
         _dp_scope = "" if _dpnl_is_current else f" · from {date.fromisoformat(_dpnl_baseline_date).strftime('%b %d')}"
+        # A remainder that rounds to $0 AND 0.00% reads "$-0" / "-0.00%" with a red
+        # arrow; show a neutral zero instead (pnl_display.signed_display).
+        _dp_flat = _signed_display(_dp_val, 0)[1] and _signed_display(_dp_pct, 2)[1]
         _c3.metric(
             "Today's P&L",
-            _m(f"${_dp_val:+,.0f}"),
-            f"{_dp_pct:+.2f}%{_dp_scope}",
+            _m("$0" if _dp_flat else f"${_dp_val:+,.0f}"),
+            ("0.00%" if _dp_flat else f"{_dp_pct:+.2f}%") + _dp_scope,
             # delta_color="normal" ALWAYS — it already colors green/red from the
             # delta string's own sign. The old "normal if X>=0 else inverse"
             # ternary looked deliberate but was backwards for a signed delta:
             # inverse flips a NEGATIVE delta to GREEN, so it rendered green in
             # BOTH branches (a real loss showed a green down-arrow). Caught via
             # a user screenshot, 2026-08-31 — see feedback_streamlit_renderer_mismatch.
-            delta_color="normal",
+            delta_color="off" if _dp_flat else "normal",
             help=(
                 f"TRUE day P&L for your tracked positions, measured from the "
                 f"{_dpnl_baseline_date} close — held names + today's realized trades "
@@ -7834,11 +7839,12 @@ if page == "🏠 Home":
             ),
         )
     elif _today_loaded:
+        _tp_flat = _signed_display(_today_pnl, 0)[1] and _signed_display(_today_pnl_pct, 2)[1]
         _c3.metric(
             "Today's P&L",
-            _m(f"${_today_pnl:+,.0f}"),
-            f"{_today_pnl_pct:+.2f}%",
-            delta_color="normal",  # see the Tier-B branch above for why not a ternary
+            _m("$0" if _tp_flat else f"${_today_pnl:+,.0f}"),
+            "0.00%" if _tp_flat else f"{_today_pnl_pct:+.2f}%",
+            delta_color="off" if _tp_flat else "normal",  # see the Tier-B branch above for why not a ternary
             help=(
                 "Held-position mark-to-market vs yesterday's close, updated every 60s. "
                 "Scope: currently-held positions only — excludes realized P&L from today's "
@@ -14129,13 +14135,15 @@ elif page == "🧾 Summary":
                 f" {len(_sm_dp_late)} name(s) in the baseline snapshot were corrected "
                 f"from the journal (see 🏠 Home → ⚠️ Alerts)."
                 if isinstance(_sm_dp_late, list) and _sm_dp_late else "")
+            _sm_dp_flat = (_signed_display(_sm_dpnl["day_pnl"], 0)[1]
+                           and _signed_display(_sm_dpnl["day_pnl_pct"], 2)[1])
             st.metric(
-                "Today's P&L", _m(f"${_sm_dpnl['day_pnl']:+,.0f}"),
-                f"{_sm_dpnl['day_pnl_pct']:+.2f}%{_sm_dp_scope}",
+                "Today's P&L", _m("$0" if _sm_dp_flat else f"${_sm_dpnl['day_pnl']:+,.0f}"),
+                ("0.00%" if _sm_dp_flat else f"{_sm_dpnl['day_pnl_pct']:+.2f}%") + _sm_dp_scope,
                 # Always "normal" — Streamlit already colors a signed delta by its
                 # own sign; the old ternary's "inverse" branch flipped a NEGATIVE
                 # delta to GREEN, so a real loss rendered a green down-arrow (2026-08-31).
-                delta_color="normal",
+                delta_color="off" if _sm_dp_flat else "normal",
                 help=(
                     (f"Day P&L for tracked positions, measured from the "
                      f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
@@ -14152,9 +14160,12 @@ elif page == "🧾 Summary":
             if _sm_dp_bad:
                 st.caption(f"⚠️ {_sm_dp_bad} position(s) don't reconcile — see 🏠 Home")
         elif _sm_today_pnl is not None:
+            _sm_tp_flat = (_signed_display(_sm_today_pnl, 0)[1]
+                           and _signed_display(_sm_today_pnl_pct, 2)[1])
             st.metric(
-                "Today's P&L (held)", _m(f"${_sm_today_pnl:+,.0f}"), f"{_sm_today_pnl_pct:+.2f}%",
-                delta_color="normal",  # see the Tier-B branch above for why not a ternary
+                "Today's P&L (held)", _m("$0" if _sm_tp_flat else f"${_sm_today_pnl:+,.0f}"),
+                "0.00%" if _sm_tp_flat else f"{_sm_today_pnl_pct:+.2f}%",
+                delta_color="off" if _sm_tp_flat else "normal",  # see the Tier-B branch above for why not a ternary
                 help="Held-position mark-to-market vs yesterday's close — excludes today's trades. "
                      "Visit 🏠 Home first this session for the fuller Tier-B figure.",
             )
@@ -44033,7 +44044,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
         with st.expander("🗺️ The pages, at a glance", expanded=False):
             st.markdown(
                 """
-- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **The very first thing Home shows is a one-line Act Today pointer** — 🔴 "N Act Today" with an EXIT/TRIM/WATCH breakdown, a calm "✅ Nothing to act on today," or an explicit "NOT checked" if the Brief couldn't be built this run — so you know before scrolling past anything else whether there's something to act on, read from the exact same count the full Act Today section below renders from (never a second, independently-computed number). Just below it, a **muted notices line** summarizes the collapsed "⚠️ Alerts" expander beneath it — naming anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or a quiet note count on an otherwise clean day, so a busy morning doesn't require opening the expander to know something's off. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected. A **second, separate pause** works alongside it: when two names you hold sit at *danger-tier* correlation (≥0.80) — a standing near-duplicate exposure rather than a newly-formed one — Grow Today's add-to-winner is paused on **both** names, and a "🔗 Add Paused — Standing Correlated Pair" block names the partner and the correlation. This one has **no acknowledge step**: unlike the cluster pause above, a Structural Scan does not clear it, and neither does trimming the weaker name (trimming doesn't change how correlated two stocks are). It lasts while the pair stays that correlated and you hold both. It fires whether or not a trim card exists for that pair on 📡 Signals & Advice — the correlation is the trigger, so a data outage that hides the trim card can't quietly switch the pause off. Still pure suppression: no trim is recommended, and the hard caps are untouched. **And if a holding's price history couldn't be loaded at all**, a 🔍 line under Grow Today names it: that holding was left out of both correlation checks entirely, so no pairing involving it could be detected. It is deliberately *not* treated as a reason to pause anything — but it is also never silently counted as "checked and fine," which is what used to happen.
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **The very first thing Home shows is a one-line Act Today pointer** — 🔴 "N Act Today" with an EXIT/TRIM/WATCH breakdown, a calm "✅ Nothing to act on today," or an explicit "NOT checked" if the Brief couldn't be built this run — so you know before scrolling past anything else whether there's something to act on, read from the exact same count the full Act Today section below renders from (never a second, independently-computed number). Just below it, a **muted notices line** summarizes the collapsed "⚠️ Alerts" expander beneath it — naming anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or a quiet note count on an otherwise clean day, so a busy morning doesn't require opening the expander to know something's off. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip (on a weekend, a holiday or before the 9:30 open it says "in the last session" with that session's date, because the live move then is the last completed session's) — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected. A **second, separate pause** works alongside it: when two names you hold sit at *danger-tier* correlation (≥0.80) — a standing near-duplicate exposure rather than a newly-formed one — Grow Today's add-to-winner is paused on **both** names, and a "🔗 Add Paused — Standing Correlated Pair" block names the partner and the correlation. This one has **no acknowledge step**: unlike the cluster pause above, a Structural Scan does not clear it, and neither does trimming the weaker name (trimming doesn't change how correlated two stocks are). It lasts while the pair stays that correlated and you hold both. It fires whether or not a trim card exists for that pair on 📡 Signals & Advice — the correlation is the trigger, so a data outage that hides the trim card can't quietly switch the pause off. Still pure suppression: no trim is recommended, and the hard caps are untouched. **And if a holding's price history couldn't be loaded at all**, a 🔍 line under Grow Today names it: that holding was left out of both correlation checks entirely, so no pairing involving it could be detected. It is deliberately *not* treated as a reason to pause anything — but it is also never silently counted as "checked and fine," which is what used to happen.
 - **🧾 Summary** — the cockpit: one screen that answers "is the book safe, what must I do today, and is anything drifting" without visiting another page. Six zones, in order of urgency. **① Book Safety** (top, colour-coded) — leverage ×, margin cushion, distance to a margin call, and whether your share counts still match the broker. Awareness only; it never changes a recommendation. It shows a grey **"not verified"** rather than green when your cash balance hasn't been loaded — an unmeasured book and a debt-free book are not the same thing, and it won't guess. Broker drift likewise distinguishes **In sync** (checked, matches), **Clean, dated** (matched when last captured, but that snapshot is old), **Trades pending** (differences explained by trades you logged since), and **Not checked** (unknown). When leverage is elevated above your own reference level **and** equity has fallen meaningfully from its recent high, a note states the measured split — how much of the rise came from equity shrinking versus the margin loan itself growing — plus how much smaller the book (or how much more cash) would bring leverage back to your reference. It never tells you to sell or trim anything; it states the two facts together because nothing else in the app does. **② Today** — 5 KPI tiles: Portfolio Value (+ 45-day sparkline), Unrealized P&L, Today's P&L (Home's Tier-B figure when available, else an honestly-labelled held-mark), **Today's Movers** (the 3 biggest moves either way; a name with no quote is reported unpriced, never as a flat 0%), and Avg Score against the buy threshold. The movers tile **renames itself "Last session's movers"** on a weekend, a holiday, or before the open — the change is measured against the previous close, so it only means "today" once today's session has begun. **③ Act Today** — bucketed as **EXIT · TRIM · WATCH** so you can tell an alarm's *nature* at a glance, then **one row per item** (badge · ticker · why · composite score), worst first. Below it a purple banner names any tickers under an active reduce/exit call whose ADD suggestions are being suppressed app-wide. Same source as Home, so it can never under-report. When there's a live EXIT or TRIM item and this engine's own protective track record is measurably running early, a small note appears above the rows stating the measured number (e.g. "historically run early... average N pp... worth confirming before you act, not a reason to ignore the call") — a factual disclosure of a real, tracked pattern, never a reason by itself to override the call. **④ Portfolio Health** — four cards: Risk Posture (falls back to counting the protective calls in today's Brief when the fragility dial can't be computed, and says "not computed" rather than an all-clear if that's missing too), Thesis Integrity (**names** the weakening tickers, not just a count), Diversification, and Active Vetoes. All four say "not checked" rather than "none" when they genuinely don't know. **⑤ Horizon** — three cards: 🎯 Engine Track Record (whether acting on the app's calls has beaten the S&P, offence and defence, alongside what the calls you *skipped* returned so the headline can't read as pure skill), 🔔 Catalyst Watch (which holdings report and when, flagged 🚫 when the name is also under a reduce call), and 📋 Portfolio Thesis (this week's five standing claims, each marked held or shifted). The full ledger with last week's comparison stays in the collapsed expander below. **"Alert level" there is not the same thing as "Risk Posture" above it** — alert level counts danger-level alerts, risk posture reads the market regime, so the two can legitimately differ. **⑥ Top Positions** — your 6 largest by weight: score coloured by the same Buy/Hold/Sell bands the rest of the app uses, a weight bar scaled to your single-name cap, an inline EXIT/TRIM/CAP badge, and ⚡ on a same-day shock. A footer counts how many rose, fell, or had no quote. The full Holdings table is one click away in an expander. Reads what Home already computed this session — visit 🏠 Home first if this page says it needs today's Brief.
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above). A third tab, **📄 Reports** (owner-only), hosts a Tax Report (realized short-term/long-term gains by tax year, wash-sale flags) and a Performance Review (a point-in-time return-vs-SPY / recs-and-gates / trade-behavior / leverage-and-risk-drift snapshot for a picked period), both with CSV/Markdown export (see the section above).
