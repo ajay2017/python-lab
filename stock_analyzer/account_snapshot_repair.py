@@ -70,6 +70,12 @@ _FLAT_EPS = 1e-6
 # to within one cent. Rounding plumbing like _FLAT_EPS, not a policy threshold.
 _GROSS_CENT_TOL = 0.01
 
+# Refusal `kind`s that won't fix themselves (a split, an oversell, a book the
+# late trades don't explain, ...). `no_close` and `journal_unreadable` are
+# transient and retry nightly. Alarm-dedup plumbing (account_snapshot_autorepair),
+# not a policy value.
+STRUCTURAL_REFUSAL_KINDS = frozenset({"no_book", "split", "oversell", "unexplained", "no_rate"})
+
 
 # ── small coercion helpers ───────────────────────────────────────────────────
 
@@ -301,15 +307,16 @@ def _analyse(row: dict, prep: list) -> "dict | None":
             "oversold": oversold, "stale_tickers": stale_tickers, "no_book": no_book}
 
 
-def stale_rows(acct_df, trades_df):
-    """ISO `snapshot_date`s of rows whose stored book no longer matches the
-    journal as of the row's own cutoff, oldest first.
+def stale_details(acct_df, trades_df):
+    """`[{"snapshot_date": ISO str, "tickers": sorted list}]` for every row whose
+    stored book no longer matches the journal as of the row's own cutoff,
+    oldest first; `tickers` are the stale tickers.
 
     A row is stale when, for any ticker touched by a late trade, the replayed
     holdings (trades at or before the row's cutoff) differ from
     `book_positions[t]["shares"]` by more than `BROKER_DRIFT_SHARE_TOL`.
-    Legacy rows are never flagged. Returns None when `trades_df` is None
-    (the journal couldn't be read — "couldn't check", never "clean")."""
+    Legacy rows are never flagged. Returns None when `trades_df` is None or
+    unusable (the journal couldn't be read — "couldn't check", never "clean")."""
     if trades_df is None or not _trades_usable(trades_df):
         return None
     prep = _prep_trades(trades_df)
@@ -317,8 +324,16 @@ def stale_rows(acct_df, trades_df):
     for row in _rows(acct_df):
         a = _analyse(row, prep)
         if a and a["stale_tickers"]:
-            out.append(a["ctx"]["date"].isoformat())
-    return sorted(out)
+            out.append({"snapshot_date": a["ctx"]["date"].isoformat(),
+                        "tickers": sorted(a["stale_tickers"])})
+    return sorted(out, key=lambda d: d["snapshot_date"])
+
+
+def stale_rows(acct_df, trades_df):
+    """ISO `snapshot_date`s of stale rows, oldest first (the dates of
+    `stale_details`; one rule). None when the journal couldn't be read."""
+    det = stale_details(acct_df, trades_df)
+    return None if det is None else [d["snapshot_date"] for d in det]
 
 
 def _norm_closes(closes) -> dict:
@@ -343,7 +358,8 @@ def plan_repairs(acct_rows, trades_df, closes, now):
     datetime stamped on `repaired_at`. Returns `(repairs, refusals)`:
       repairs   one full replacement row per repaired date (every column
                 `save_account_daily_snapshot` upserts), oldest first;
-      refusals  `[{"snapshot_date", "reason"}]` for every stale row left
+      refusals  `[{"snapshot_date", "reason", "kind"}]` (kind: journal_unreadable,
+                no_book, split, oversell, unexplained, no_close, no_rate) for every stale row left
                 alone. An unreadable journal is ONE refusal with a None date.
 
     A stale row is repaired only when, for every touched ticker, the stored
@@ -365,7 +381,7 @@ def plan_repairs(acct_rows, trades_df, closes, now):
     if getattr(now, "tzinfo", None) is None:
         raise ValueError("plan_repairs: `now` must be tz-aware (ET)")
     if trades_df is None or not _trades_usable(trades_df):
-        return [], [{"snapshot_date": None,
+        return [], [{"snapshot_date": None, "kind": "journal_unreadable",
                      "reason": "the journal's trades could not be read, so no row can be checked"}]
     prep = _prep_trades(trades_df)
     px_by = _norm_closes(closes)
@@ -380,19 +396,21 @@ def plan_repairs(acct_rows, trades_df, closes, now):
         d = ctx["date"]
         ds = d.isoformat()
 
-        def refuse(reason, _ds=ds):
-            refusals.append({"snapshot_date": _ds, "reason": reason})
+        def refuse(reason, kind, _ds=ds):
+            refusals.append({"snapshot_date": _ds, "reason": reason, "kind": kind})
 
         if a["no_book"]:
-            refuse("no readable book_positions, so the row can't be repaired")
+            refuse("no readable book_positions, so the row can't be repaired", "no_book")
             continue
 
         # Per touched ticker: signed late shares, and the refusal checks.
         reason = None
+        kind = None
         delta: dict = {}
         for t in a["late"]:
             if t["kind"] == "SPLIT":
                 reason = f"{t['ticker']}: a split is among the late trades"
+                kind = "split"
                 break
             delta[t["ticker"]] = delta.get(t["ticker"], 0.0) + (
                 t["shares"] if t["kind"] == "BUY" else -t["shares"])
@@ -401,11 +419,13 @@ def plan_repairs(acct_rows, trades_df, closes, now):
                 if t["kind"] == "SPLIT" and t["ticker"] in a["touched"] and t["et_date"] > d:
                     reason = (f"{t['ticker']}: a split on {t['et_date'].isoformat()} falls "
                               "after this row, so its stored closes are not comparable")
+                    kind = "split"
                     break
         if reason is None:
             bad = sorted(set(a["touched"]) & a["oversold"])
             if bad:
                 reason = f"{', '.join(bad)}: the journal sells more than it holds (oversell)"
+                kind = "oversell"
         if reason is None:
             for tk in a["stale_tickers"]:
                 stored = ctx["book"].get(tk, {}).get("shares", 0.0)
@@ -413,9 +433,10 @@ def plan_repairs(acct_rows, trades_df, closes, now):
                     reason = (f"{tk}: stored {stored:g} shares plus the late trades "
                               f"({delta.get(tk, 0.0):+g}) do not equal the journal's "
                               f"{a['replay'].get(tk, 0.0):g}")
+                    kind = "unexplained"
                     break
         if reason is not None:
-            refuse(reason)
+            refuse(reason, kind)
             continue
 
         # New book: stale tickers take the journal's shares; everything else
@@ -436,7 +457,7 @@ def plan_repairs(acct_rows, trades_df, closes, now):
                 break
             new_book[tk] = {"shares": sh, "close": close}
         if reason is not None:
-            refuse(reason)
+            refuse(reason, "no_close")
             continue
         # Untouched positions priced from a stored close; a stored position
         # without one can't be valued (never carried forward).
@@ -448,14 +469,14 @@ def plan_repairs(acct_rows, trades_df, closes, now):
                     break
                 v["close"] = close
         if reason is not None:
-            refuse(reason)
+            refuse(reason, "no_close")
             continue
 
         gross = round(sum(v["shares"] * v["close"] for v in new_book.values()), 2)
         cash = _f(row.get("cash_balance"))
         rate = _f(row.get("maintenance_rate"))
         if cash is not None and rate is None:
-            refuse("no stored maintenance rate to re-derive the money fields with")
+            refuse("no stored maintenance rate to re-derive the money fields with", "no_rate")
             continue
         money = (account_money_fields(gross, cash, rate) if cash is not None else
                  {"cash_balance": None, "net_equity": None, "leverage": None,

@@ -27,7 +27,7 @@ from datetime import timedelta
 
 from . import data as data_mod
 from .account import _parse_date
-from .account_snapshot_repair import close_needs, plan_repairs
+from .account_snapshot_repair import STRUCTURAL_REFUSAL_KINDS, close_needs, plan_repairs
 
 # Yahoo history window for a close missing from daily_snapshots. Request-size
 # plumbing, not a policy value. It must cover ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS
@@ -176,18 +176,52 @@ def summary_line(result: dict) -> str:
             + (f" · write failed {', '.join(result['failed'])}" if result.get("failed") else ""))
 
 
-def failure_lines(result: dict) -> list:
+def _refusal_key(x: dict) -> str:
+    return f"{x.get('snapshot_date')}|{x.get('kind')}"
+
+
+def structural_refusal_keys(result: dict) -> list:
+    """Sorted `"{snapshot_date}|{kind}"` for the run's STRUCTURAL refusals
+    (kinds in `STRUCTURAL_REFUSAL_KINDS`: they won't fix themselves). [] when
+    the run was not ok."""
+    if not result.get("ok"):
+        return []
+    return sorted(_refusal_key(x) for x in result.get("refusals", [])
+                  if x.get("kind") in STRUCTURAL_REFUSAL_KINDS)
+
+
+def _is_suppressed(x: dict, suppress_keys) -> bool:
+    return x.get("kind") in STRUCTURAL_REFUSAL_KINDS and _refusal_key(x) in suppress_keys
+
+
+def failure_lines(result: dict, *, suppress_keys=frozenset()) -> list:
     """Heartbeat failure lines: [] when the run was ok with no failed write and
-    no refusal. A refused stale row means a known-wrong history row stays."""
+    no refusal. A refused stale row means a known-wrong history row stays.
+
+    A STRUCTURAL refusal whose key (`structural_refusal_keys`) is in
+    `suppress_keys` was already alarmed on an earlier run, so it is omitted
+    (`standing_lines` logs it instead). Errors, failed writes and transient
+    refusals (`no_close`, `journal_unreadable`) are never suppressed."""
     pre = "account_snapshot_repair:"
     if not result.get("ok"):
         return [f"{pre} {result.get('error')}"]
     out = []
     if result.get("failed"):
         out.append(f"{pre} write failed for {', '.join(result['failed'])}")
-    refusals = result.get("refusals", [])
+    refusals = [x for x in result.get("refusals", []) if not _is_suppressed(x, suppress_keys)]
     for x in refusals[:_MAX_REFUSAL_LINES]:
         out.append(f"{pre} refused {x.get('snapshot_date') or '(all rows)'}: {x.get('reason')}")
     if len(refusals) > _MAX_REFUSAL_LINES:
         out.append(f"{pre} … +{len(refusals) - _MAX_REFUSAL_LINES} more")
     return out
+
+
+def standing_lines(result: dict, suppress_keys) -> list:
+    """Log lines (not heartbeat failures) for the structural refusals that
+    `failure_lines` left out because they were alarmed on an earlier run."""
+    if not result.get("ok"):
+        return []
+    return [f"account_snapshot_repair: refused {x.get('snapshot_date') or '(all rows)'} still "
+            f"standing ({x.get('reason')}) — alarmed when first seen; Reports and the Debrief "
+            "leave that day out"
+            for x in result.get("refusals", []) if _is_suppressed(x, suppress_keys)]

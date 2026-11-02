@@ -109,6 +109,7 @@ _INTRADAY_ROW = 4     # alert_state lane: intraday pullback entry dedup
 _DB_OUTAGE_ROW = 5    # alert_state lane: DB-unreachable notice dedup (self-creates on upsert)
 _BROKER_FAILURE_ROW = 6  # alert_state lane: broker-lane failure-email dedup (self-creates on upsert)
 _WATCHLIST_ENTRIES_ROW = 7  # alert_state lane: Watchlist "Ready to Enter" proactive-email dedup
+_ACCT_REPAIR_REFUSAL_ROW = 9  # alert_state lane: N1 structural repair-refusal dedup (self-creates on upsert)
 
 _EARNINGS_MOVE_RESCHEDULE_LOOKOUT_DAYS = 120  # _mature_earnings_predictions' reschedule-backstop fetch window (F-234 Phase 2) -- wide enough to see the ~90-day-out genuine next print, so it's never mistaken for EARNINGS_MOVE_MIN_NEXT_GAP_DAYS's postponement signal; a fetch-window size, not an investment-policy value, hence local here rather than in constants.py
 
@@ -368,6 +369,45 @@ def _notify_broker_failure(now_et, detail: str) -> None:
 
 
 _NEWS_FAILURE_ROW = 8   # alert_state lane: news-only failure-email dedup, once per ET day across lanes (self-creates on upsert)
+
+
+def _repair_failure_lines(result, now_et) -> list:
+    """Heartbeat failure lines for an N1 auto-repair result, with the daily
+    alarm deduped for STRUCTURAL refusals (split, oversell, unexplained book,
+    no book, no rate: they won't fix themselves). Errors, failed writes and
+    transient refusals (missing close) flip the heartbeat every run; a
+    structural (snapshot_date, kind) flips it only the first run it appears,
+    then is log-only ("still standing"): Reports and the Debrief name the
+    excluded day persistently (account_row_trust). The saved fingerprint is the
+    CURRENT structural set, so a refusal that clears and later recurs alarms
+    again. An unreadable alert_state fails OPEN (alarm), like
+    `_notify_broker_failure`. Never raises."""
+    try:
+        current = set(_acct_autorepair.structural_refusal_keys(result))
+        prior: set = set()
+        try:
+            state = db.load_alert_state(_ACCT_REPAIR_REFUSAL_ROW)
+            # NB: deliberately NOT `... or {}` -- an offline None means "no dedup
+            # available, alarm", not "nothing alarmed before".
+            if state is not None and state.get("last_fingerprint") is not None:
+                prior = set(str(state["last_fingerprint"]).split(";")) - {""}
+        except Exception as exc:  # noqa: BLE001
+            _log(f"account_snapshot_repair: dedup read failed ({str(exc)[:80]}) — alarming")
+        suppress = current & prior
+        for line in _acct_autorepair.standing_lines(result, suppress):
+            _log(line)
+        lines = _acct_autorepair.failure_lines(result, suppress_keys=suppress)
+        if result.get("ok"):
+            try:
+                db.save_alert_state(
+                    emailed_date=now_et.date().isoformat(),
+                    fingerprint=";".join(sorted(current)),
+                    row_id=_ACCT_REPAIR_REFUSAL_ROW)
+            except Exception:  # noqa: BLE001
+                pass   # best-effort: a failed save only means the next run alarms again
+        return lines
+    except Exception as exc:  # noqa: BLE001 -- never blocks the lane
+        return [f"account_snapshot_repair: {str(exc)[:120]}"]
 
 
 def _news_feed_check(*feeds) -> "str | None":
@@ -818,7 +858,7 @@ def _run_eod(now_et, force: bool) -> int:
             db, now_et.date(), now_et,
             lookback_days=ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS)
         _log(_acct_autorepair.summary_line(_repair_res))
-        failures.extend(_acct_autorepair.failure_lines(_repair_res))
+        failures.extend(_repair_failure_lines(_repair_res, now_et))
     except Exception as e:  # noqa: BLE001
         _log(f"account_snapshot_repair FAILED — {str(e)[:120]} — continuing.")
         failures.append(f"account_snapshot_repair: {str(e)[:120]}")
@@ -2708,7 +2748,7 @@ def _run_debrief(now_et, force: bool) -> int:
             db, now_et.date(), now_et,
             lookback_days=ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS)
         _log(_acct_autorepair.summary_line(_repair_res))
-        _repair_failures = _acct_autorepair.failure_lines(_repair_res)
+        _repair_failures = _repair_failure_lines(_repair_res, now_et)
     except Exception as e:  # noqa: BLE001
         _log(f"account_snapshot_repair FAILED — {str(e)[:120]} — continuing.")
         _repair_failures = [f"account_snapshot_repair: {str(e)[:120]}"]

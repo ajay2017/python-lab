@@ -1587,6 +1587,15 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
                 + lev_sentence +
                 "</p>"
             )
+        _excl_line = pkg.get("excluded_account_line")
+        if _excl_line:
+            # N1 C6: an account row was left out (its book didn't match the journal);
+            # say so beside the figures it affects, never silently.
+            perf_block += (
+                "<p style='font-size:0.75em;color:#b45309;background:#fffbeb;"
+                "border:1px solid #fde68a;border-radius:6px;padding:8px 12px;"
+                f"margin:0 0 20px;text-align:center'>⚠️ {_html.escape(str(_excl_line))}</p>"
+            )
         perf_block += money_block
     elif perf is not None:
         # The trades caveat renders BEFORE the KPI tiles (not after) — a reader

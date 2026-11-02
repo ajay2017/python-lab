@@ -271,6 +271,7 @@ from stock_analyzer import tax_report as _tax_report
 from stock_analyzer import performance_review as _perf_review_mod
 from stock_analyzer import period_attribution as _pa_mod
 from stock_analyzer import period_inputs as _pi_mod
+from stock_analyzer import account_row_trust as _art_mod
 from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
 from stock_analyzer.thesis_red_team import (
@@ -41424,6 +41425,9 @@ elif page == "💰 Account":
                 # before it to anchor a return FROM, so using it directly as
                 # period_start would make this preset's own headline always
                 # read "pre_coverage" (found in Opus review, 2026-10-01).
+                # Reads the RAW frame (the trades aren't loaded yet): safe, because
+                # the earliest valid row is a 2026-09 legacy row (NULL provenance),
+                # which `account_row_trust` never masks.
                 _perf_first_measurable = _perf_review_mod.first_measurable_period_start(_perf_acct_snap_full_df)
 
                 # One period drives BOTH the period-report sections (S1/S3) and the
@@ -41513,6 +41517,16 @@ elif page == "💰 Account":
                     _perf_rec_rows = st.session_state[_perf_rec_cache_key]
                     _perf_gate_rows = db.load_gate_suppressions()
                     _perf_acct_snap_df = db.load_account_daily_snapshots(_perf_start, _perf_end)
+                    # N1 C6: rows whose stored book no longer matches the journal get
+                    # None money fields IN MEMORY (copies; the session cache above stays
+                    # raw), so every account reader takes its invalid-row path. The
+                    # excluded list from the full frame feeds the visible caption.
+                    _perf_acct_snap_full_m, _perf_acct_excluded = _art_mod.exclude_stale_rows(
+                        _perf_acct_snap_full_df, _perf_trades_df)
+                    _perf_acct_snap_m, _ = _art_mod.exclude_stale_rows(
+                        _perf_acct_snap_df, _perf_trades_df)
+                    _perf_excl_line = _art_mod.excluded_line(
+                        _perf_acct_excluded, _perf_start, _perf_end)
                     _perf_risk_snap_df = db.load_portfolio_risk_snapshots(_perf_start, _perf_end)
 
                     # Wide (2y), UNSCOPED SPY history — a rec/gate fired near
@@ -41586,8 +41600,8 @@ elif page == "💰 Account":
                         trades=_perf_trades_df,
                         rec_events_rows=_perf_rec_rows,
                         gate_rows=_perf_gate_rows,
-                        account_snapshots_df=_perf_acct_snap_df,
-                        account_return_snapshots_df=_perf_acct_snap_full_df,
+                        account_snapshots_df=_perf_acct_snap_m,
+                        account_return_snapshots_df=_perf_acct_snap_full_m,
                         account_flows_rows=_perf_flows_rows,
                         risk_snapshots_df=_perf_risk_snap_df,
                         spy_prices_by_date=_perf_spy_by_date,
@@ -41626,7 +41640,7 @@ elif page == "💰 Account":
                             _pr_inputs = _pi_mod.load_engine_inputs(
                                 db, _perf_start, _perf_end,
                                 trades_df=_perf_trades_df,
-                                account_snapshots_df=_perf_acct_snap_full_df,
+                                account_snapshots_df=_perf_acct_snap_full_m,
                                 flows=_perf_flows_rows,
                             )
                             _pr_core = _pi_mod.compute_period_core(
@@ -41720,6 +41734,8 @@ elif page == "💰 Account":
                                 f"{_ar['spy_return_pct']:+.2f}%"
                                 if _ar["status"] == "ok" and _ar.get("spy_return_pct") is not None else "—",
                             )
+                            if _perf_excl_line is not None:
+                                st.caption("⚠️ " + _perf_excl_line)
                             # Caveats that used to sit under the old account-return tiles.
                             if _ar["status"] == "ok":
                                 if _ar.get("max_leverage") is not None and _ar["max_leverage"] > 1:
@@ -41926,6 +41942,8 @@ elif page == "💰 Account":
                                     "period, so an account-level return can't be shown for the "
                                     "full period."
                                 )
+                            if _perf_excl_line is not None:
+                                st.caption("⚠️ " + _perf_excl_line)
 
                             # build_review always sets this key to a list (never
                             # None/missing) -- a plain index, not `.get(...) or []`,
@@ -41950,6 +41968,8 @@ elif page == "💰 Account":
                                             )
                                         else:
                                             st.caption(f"**{_arm['month']}** — not enough account history that month")
+                                    if _perf_excl_line is not None:
+                                        st.caption("⚠️ " + _perf_excl_line)
 
                             # ── Return on capital cycled through closed trades ──
                             # 2026-10-01 reframe: this used to show a "vs SPY"
@@ -45121,6 +45141,8 @@ elif page == "🧠 AI Insights":
                             st.warning("Generated but save failed (DB offline) — showing inline:")
                             if _wd_pkg.get("result_reason"):
                                 st.info("Account result unknown — " + str(_wd_pkg["result_reason"]))
+                            if _wd_pkg.get("excluded_account_line"):
+                                st.caption("⚠️ " + _wd_pkg["excluded_account_line"])
                             for _lbl, _col in [
                                 ("What happened", "section_facts"),
                                 ("Decisions you made", "section_decisions"),
@@ -45238,6 +45260,8 @@ elif page == "🧠 AI Insights":
             # The unknown-result reason must survive the rerun, so it lives in the flash.
             if _wdf_pkg.get("result_reason"):
                 st.info("Account result unknown — " + str(_wdf_pkg["result_reason"]))
+            if _wdf_pkg.get("excluded_account_line"):
+                st.caption("⚠️ " + _wdf_pkg["excluded_account_line"])
             with st.expander("Numbers behind this debrief (as generated)", expanded=True):
                 st.caption(
                     f"Account change measured {_wdf_pkg.get('return_d0') or _wdf_pkg.get('d0')} close → "

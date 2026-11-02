@@ -125,7 +125,9 @@ def test_each_loader_is_the_none_on_failure_variant():
     assert isinstance(flows, ast.Name) and flows.id == "_perf_flows_rows"
     assert "db.load_account_flows_for_dedup_check()" in _SRC
     snaps = _kw(li, "account_snapshots_df")
-    assert isinstance(snaps, ast.Name) and snaps.id == "_perf_acct_snap_full_df"
+    # N1 C6: the day-cached raw frame, masked in memory (copies) by exclude_stale_rows
+    assert isinstance(snaps, ast.Name) and snaps.id == "_perf_acct_snap_full_m"
+    # (its tuple-target assignment from exclude_stale_rows is pinned in test_account_row_trust.py)
     # the period report never reads the lenient loaders inside its try
     t = _enclosing_try(li)
     assert not [c for c in ast.walk(t) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)

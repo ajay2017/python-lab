@@ -144,7 +144,7 @@ def _inputs():
 def test_core_none_inputs_are_all_none():
     core = pi.compute_period_core(None, PS, PE, spy_prices_by_date=None, reference_leverage=2.0)
     assert core == {"period_start": PS, "period_end": PE, "recon": None, "leverage": None,
-                    "account_return": None}
+                    "account_return": None, "account_rows_excluded": []}
 
 
 def test_core_matches_direct_engine_calls():

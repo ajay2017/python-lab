@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from stock_analyzer import account_row_trust
 from stock_analyzer import period_attribution as pa
 from stock_analyzer import performance_review as _pr
 
@@ -89,17 +90,28 @@ def spy_closes_by_date(hist) -> "dict | None":
 
 def compute_period_core(inputs, period_start, period_end, *, spy_prices_by_date,
                         reference_leverage) -> dict:
-    """{period_start, period_end, recon, leverage, account_return}.
+    """{period_start, period_end, recon, leverage, account_return,
+    account_rows_excluded}.
 
-    `inputs` None -> recon/leverage/account_return all None (offline).  The
+    `inputs` None -> recon/leverage/account_return all None (offline) and
+    `account_rows_excluded` []. Account rows whose stored book no longer
+    matches the journal (N1) are masked in memory by
+    `account_row_trust.exclude_stale_rows` before all three readers see them
+    (the invalid-row path: return d0 withheld / d1 searched back, reconcile
+    skips the row, leverage skips a None); `account_rows_excluded` lists
+    them `[{snapshot_date, reason}]`, the full list (use
+    `account_row_trust.excluded_line` to scope it to a period).  The
     arguments match what the Reports page has always passed to
     `reconcile_period` / `leverage_section` / `build_review`'s account return,
     so every surface prints the same numbers for the same period."""
     core = {"period_start": period_start, "period_end": period_end,
-            "recon": None, "leverage": None, "account_return": None}
+            "recon": None, "leverage": None, "account_return": None,
+            "account_rows_excluded": []}
     if inputs is None:
         return core
-    acct = inputs.get("account_snapshots_df")
+    acct, excluded = account_row_trust.exclude_stale_rows(
+        inputs.get("account_snapshots_df"), inputs.get("trades_df"))
+    core["account_rows_excluded"] = excluded
     flows = inputs.get("flows")
     core["recon"] = pa.reconcile_period(
         period_start=period_start, period_end=period_end,

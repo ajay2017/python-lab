@@ -270,7 +270,7 @@ def build_debrief_package(
     Assemble the structured data package for the LLM.
 
     core:         `period_inputs.compute_period_core(...)` -- {recon, leverage,
-                  account_return} for the Mon-Sun week ending `week_ending`;
+                  account_return, account_rows_excluded} for the Mon-Sun week ending `week_ending`;
                   the SAME engine and figures as 💰 Account -> Reports -> Last
                   week.  None = the engine inputs could not be read (offline).
     recs_df:      DataFrame of recommendations surfaced during the week.
@@ -285,6 +285,7 @@ def build_debrief_package(
     """
     import pandas as pd
     from stock_analyzer import period_attribution as pa
+    from stock_analyzer import account_row_trust
 
     week_start = week_ending - timedelta(days=6)
     core = core if isinstance(core, dict) else None
@@ -294,6 +295,9 @@ def build_debrief_package(
     ar = ar if isinstance(ar, dict) else None
     lev = (core or {}).get("leverage")
     lev = lev if isinstance(lev, dict) else None
+    excluded = (core or {}).get("account_rows_excluded")
+    if excluded is None:
+        excluded = []
 
     package: dict = {
         "metrics_version":  METRICS_VERSION,
@@ -320,6 +324,8 @@ def build_debrief_package(
         "waterfall_rows":   [],
         "interest_gap_months": [],
         "unmeasured":       [],
+        "excluded_account_line": account_row_trust.excluded_line(
+            excluded, week_start, week_ending),
         "contributors":     [],
         "detractors":       [],
         "closed_positions":       [],

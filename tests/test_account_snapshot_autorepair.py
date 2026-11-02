@@ -389,7 +389,9 @@ def test_both_lanes_call_run_auto_repair(fn):
     node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == fn)
     assert any(isinstance(n, ast.Attribute) and n.attr == "run_auto_repair"
                for n in ast.walk(node))
-    assert any(isinstance(n, ast.Attribute) and n.attr == "failure_lines" for n in ast.walk(node))
+    # C6: the lanes go through the deduping helper, never `failure_lines` directly.
+    assert any(isinstance(n, ast.Name) and n.id == "_repair_failure_lines" for n in ast.walk(node))
+    assert not any(isinstance(n, ast.Attribute) and n.attr == "failure_lines" for n in ast.walk(node))
 
 
 def test_ast_pin_lookback_is_passed_by_constant_name_not_a_literal():
