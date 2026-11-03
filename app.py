@@ -258,6 +258,7 @@ from stock_analyzer import budget_view as _budget_view
 from stock_analyzer import sizing_path as _sizing_path
 from stock_analyzer import stop_breach_text as _stop_breach_text
 from stock_analyzer import score_text as _score_text
+from stock_analyzer import risk_banner as _risk_banner
 from stock_analyzer import macro_release as _macro_release
 from stock_analyzer import trade_caption as _trade_caption
 from stock_analyzer import revision_flag as _revision_flag
@@ -400,6 +401,7 @@ from stock_analyzer.util import finite_or_none as _finite_or_none
 from stock_analyzer.text_fmt import signed_dollars as _sd
 from stock_analyzer.text_fmt import share_word as _share_word
 from stock_analyzer.text_fmt import signed_count as _signed_count
+from stock_analyzer.text_fmt import plural as _plural
 from stock_analyzer.text_fmt import TRADE_HISTORY_GAP_NOTE as _TRADE_GAP_NOTE
 from stock_analyzer.util import pillar_tile as _pillar_tile
 from stock_analyzer.util import ETF_PILLAR_NA_SHORT, ETF_PILLAR_NA_REASON
@@ -4802,7 +4804,7 @@ def _render_holdings_earnings(port_df, held_data):
                         unsafe_allow_html=True,
                     )
                     if _pb.get("score_available", True) and _pb.get("score") is not None:
-                        st.markdown(f"**Score:** {_pb['score']:.0f}/100 · **Signal:** {_pb['signal']}")
+                        st.markdown(f"**Score:** {_score_text.composite_score_text(_pb['score'])}/100 · **Signal:** {_pb['signal']}")
                     else:
                         st.markdown(f"**Score:** composite withheld · **Signal:** {_pb['signal']}")
 
@@ -7534,7 +7536,7 @@ if page == "🏠 Home":
                     ticker=_tk,
                     signal=max(-1.0, min(1.0, (float(_cs) - JUDGMENT_SCORE_MIDPOINT) / JUDGMENT_SCORE_MIDPOINT)),
                     confidence=0.6,
-                    evidence=f"Composite {_cs:.0f}/100 ({_p.get('composite_label', '')})",
+                    evidence=f"Composite {_score_text.composite_score_text(_cs)}/100 ({_p.get('composite_label', '')})",
                     label=_p.get("composite_label", ""),
                 ))
             _mom = _p.get("score")
@@ -9156,7 +9158,7 @@ if page == "🏠 Home":
             # a withheld verdict (fundamentals missing) carries score=None so the
             # chip reads "🚫 Verdict withheld" with no fabricated number (§9 P1).
             _qr_score_sfx = (
-                f" {_qr_res['score']:.0f}/100" if _qr_res.get("score") is not None else ""
+                f" {_score_text.composite_score_text(_qr_res['score'])}/100" if _qr_res.get("score") is not None else ""
             )
             st.markdown(
                 f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap;"
@@ -9963,7 +9965,7 @@ if page == "🏠 Home":
             else:
                 _score_line = f"Momentum {_gp['score']:.0f}/100"
             if _comp_sc is not None:
-                _comp_part = f"Composite {_comp_sc:.0f}/100"
+                _comp_part = f"Composite {_score_text.composite_score_text(_comp_sc)}/100"
                 if _comp_lbl:
                     _comp_part += f" ({_comp_lbl})"
                 _score_line = f"{_score_line} · {_comp_part}".lstrip(" · ")
@@ -10390,7 +10392,7 @@ if page == "🏠 Home":
                 f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
                 f"<span style='color:#f9fafb;font-weight:700'>{_ga['ticker']}</span>"
                 f"<span style='color:#9ca3af;font-size:0.8em'>{_ga['signal']} · "
-                f"Composite {_ga['score']:.0f}/100 · P&L {_ga['pnl_pct']:+.1f}%"
+                f"Composite {_score_text.composite_score_text(_ga['score'])}/100 · P&L {_ga['pnl_pct']:+.1f}%"
                 + (f" 🔥 Sector leading" if _ga.get("is_leader") else "")
                 + f"</span>"
                 + _ga_steady_chip
@@ -10973,7 +10975,7 @@ if page == "🏠 Home":
         # so either box renders without the other.
         def _ns_comp(c):
             _v = c.get("composite_score")
-            return f"composite {_v:.0f}/100" if isinstance(_v, (int, float)) else "composite n/a"
+            return f"composite {_score_text.composite_score_text(_v)}/100" if isinstance(_v, (int, float)) else "composite n/a"
 
         if news_skipped:
             # One fully-escaped st.markdown per line (every interpolation is a
@@ -11570,7 +11572,7 @@ if page == "🏠 Home":
                             )
                             _bits = []
                             if isinstance(_tc.get("score"), (int, float)):
-                                _bits.append(f"composite {_tc['score']:.0f}/100")
+                                _bits.append(f"composite {_score_text.composite_score_text(_tc['score'])}/100")
                             if isinstance(_tc.get("weight"), (int, float)):
                                 _bits.append(f"{_tc['weight']:.1f}% held")
                             if isinstance(_tc.get("pnl_pct"), (int, float)):
@@ -11670,7 +11672,7 @@ if page == "🏠 Home":
                             for _tc in _trim[:DIVERSIFY_DISPLAY_TOP]:
                                 _t = _tc.get("ticker")
                                 st.markdown(
-                                    f"• **{_t}** — composite {_tc['score']:.0f}/100 · "
+                                    f"• **{_t}** — composite {_score_text.composite_score_text(_tc['score'])}/100 · "
                                     f"{_tc['weight']:.1f}% · P&L {_tc['pnl_pct']:+.1f}%"
                                 )
                                 _trim_basis(_t, _tc)
@@ -11840,7 +11842,7 @@ if page == "🏠 Home":
                         elif _hl["state"] == "rr_fails":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
-                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R is "
+                                f"({_score_text.composite_score_text(_hl['score'])} ≥ {COMPOSITE_BUY:.0f}), but its R:R is "
                                 f"{fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN)}:1 — below the "
                                 f"{RR_ENTRY_MIN:.0f}:1 minimum the Watchlist uses for an entry, so it "
                                 "isn't confirmed as an entry at today's price. Check 📈 Analysis. "
@@ -11850,7 +11852,7 @@ if page == "🏠 Home":
                         elif _hl["state"] == "no_upside":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
-                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R isn't positive "
+                                f"({_score_text.composite_score_text(_hl['score'])} ≥ {COMPOSITE_BUY:.0f}), but its R:R isn't positive "
                                 "at today's price (price at or above its base target), so it isn't an "
                                 "entry now. Trimming is still sound; "
                                 "check 📈 Analysis.",
@@ -11859,7 +11861,7 @@ if page == "🏠 Home":
                         elif _hl["state"] == "rr_unknown":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
-                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R couldn't be "
+                                f"({_score_text.composite_score_text(_hl['score'])} ≥ {COMPOSITE_BUY:.0f}), but its R:R couldn't be "
                                 "computed (no usable stop or target, or today's price is at or below its "
                                 "stop), so it isn't confirmed as an entry. "
                                 "Check 📈 Analysis before acting.",
@@ -11882,14 +11884,14 @@ if page == "🏠 Home":
                                 else ("⚠️" if _c["passes"] is False else "—")
                             )
                             _score_txt = (
-                                f"{_c['score']:.0f}/100"
+                                f"{_score_text.composite_score_text(_c['score'])}/100"
                                 if isinstance(_c["score"], (int, float))
                                 else (f"verdict withheld — {', '.join(_c['withheld'])} not measured"
                                       if _c.get("withheld") else "score n/a")
                             )
                             _rr = _c.get("rr")
                             _rr_txt = (
-                                f" · R:R {fmt_ratio_vs(_rr, RR_ENTRY_MIN)}:1"
+                                f" · R:R {fmt_ratio_vs(_rr, RR_ENTRY_MIN, RR_FAVOURABLE_MIN)}:1"
                                 if (isinstance(_rr, (int, float)) and _rr > 0
                                     and not _c.get("withheld")) else ""
                             )
@@ -13122,7 +13124,7 @@ if page == "🏠 Home":
             _ctx_lines.append(
                 f"  {_pr['Ticker']:6s} | Weight {_pr['Weight (%)']:.1f}% | "
                 f"P&L {_pr['P&L (%)']:+.1f}% (${_pr['P&L ($)']:,.0f}) | "
-                f"Signal: {_pr['Signal']} | Score: {_pr['Score']:.0f}/100 | "
+                f"Signal: {_pr['Signal']} | Score: {_score_text.composite_score_text(_pr['Score'])}/100 | "
                 f"Gap to Stop: {_gap_s}"
             )
         _ctx_lines += ["", "## ALERTS (context only — not trade calls; Today's Brief decides)"]
@@ -16419,8 +16421,8 @@ elif page == "📡 Signals & Advice":
                             net_r = rev.get("net", 0)
                             st.markdown(
                                 f"<span style='font-size:0.8em;color:#888'>"
-                                f"↑ {rev.get('upgrades_90d',0)} upgrades · "
-                                f"↓ {rev.get('downgrades_90d',0)} downgrades · "
+                                f"↑ {_plural(rev.get('upgrades_90d',0), 'upgrade')} · "
+                                f"↓ {_plural(rev.get('downgrades_90d',0), 'downgrade')} · "
                                 f"→ {rev.get('maintained_90d',0)} maintained</span>",
                                 unsafe_allow_html=True,
                             )
@@ -16612,7 +16614,7 @@ elif page == "📡 Signals & Advice":
 
                     elif act["type"] == "add":
                         action_text = (
-                            f"Score is **{act['score']:.0f}/100** ({act['signal']}) but weight is only "
+                            f"Score is **{_score_text.composite_score_text(act['score'])}/100** ({act['signal']}) but weight is only "
                             f"{act['weight']:.1f}%.  \n"
                             "Whether to add, and how much, is Grow Today's call. "
                             "📈 Analysis shows Grow Today's add call for this holding when its plan is a Buy and, "
@@ -16747,7 +16749,7 @@ elif page == "📡 Signals & Advice":
                                     sig_clean = wt["signal"].split()[-1] if wt["signal"] else "—"
                                     col.markdown(
                                         f"**{wt['ticker']}**  \n"
-                                        f"Score: {wt['score']:.0f}/100  \n"
+                                        f"Score: {_score_text.composite_score_text(wt['score'])}/100  \n"
                                         f"Signal: {sig_clean}  \n"
                                         f"P&L: {wt['pnl_pct']:+.1f}%  \n"
                                         f"Weight: {wt['weight']:.1f}%"
@@ -16974,15 +16976,15 @@ elif page == "📡 Signals & Advice":
                         elif _hl["state"] == "entry":
                             st.success(
                                 f"✅ **{_hl['ticker']}** clears the Buy gate "
-                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f} · "
-                                f"R:R {fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN)}:1 ≥ {RR_ENTRY_MIN:.0f}:1) — "
+                                f"({_score_text.composite_score_text(_hl['score'])} ≥ {COMPOSITE_BUY:.0f} · "
+                                f"R:R {fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN, RR_FAVOURABLE_MIN)}:1 ≥ {RR_ENTRY_MIN:.0f}:1) — "
                                 f"a genuine entry, not just a sector filler.",
                                 icon="🎯",
                             )
                         elif _hl["state"] == "rr_fails":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
-                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R is "
+                                f"({_score_text.composite_score_text(_hl['score'])} ≥ {COMPOSITE_BUY:.0f}), but its R:R is "
                                 f"{fmt_ratio_vs(_hl['rr'], RR_ENTRY_MIN)}:1 — below the "
                                 f"{RR_ENTRY_MIN:.0f}:1 minimum the Watchlist uses for an entry, so it "
                                 f"isn't confirmed as an entry at today's price. Check 📈 Analysis."
@@ -16992,7 +16994,7 @@ elif page == "📡 Signals & Advice":
                         elif _hl["state"] == "no_upside":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
-                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R isn't positive "
+                                f"({_score_text.composite_score_text(_hl['score'])} ≥ {COMPOSITE_BUY:.0f}), but its R:R isn't positive "
                                 "at today's price (price at or above its base target), so it isn't an "
                                 "entry now. Check 📈 Analysis.",
                                 icon="🚦",
@@ -17000,7 +17002,7 @@ elif page == "📡 Signals & Advice":
                         elif _hl["state"] == "rr_unknown":
                             st.warning(
                                 f"**{_hl['ticker']}** clears the composite Buy gate "
-                                f"({_hl['score']:.0f} ≥ {COMPOSITE_BUY:.0f}), but its R:R couldn't be "
+                                f"({_score_text.composite_score_text(_hl['score'])} ≥ {COMPOSITE_BUY:.0f}), but its R:R couldn't be "
                                 f"computed (no usable stop or target, or today's price is at or below its "
                                 "stop), so it isn't confirmed as an entry. "
                                 f"Check 📈 Analysis before acting.",
@@ -17099,7 +17101,7 @@ elif page == "📡 Signals & Advice":
                                 _gate_icon = "✅" if _c["passes"] else "⚠️"
                                 st.metric(
                                     f"{_gate_icon} {_cand}",
-                                    f"{_c['score']:.0f}/100",
+                                    f"{_score_text.composite_score_text(_c['score'])}/100",
                                     _c["signal"] or "—",
                                     delta_color="normal" if _c["passes"] else "off",
                                 )
@@ -17349,17 +17351,9 @@ elif page == "🔗 Risk Analysis":
 
             # Interpretation banner. Each flag fires at its metric's worst label
             # band edge (see the per-metric labels above) so the ⚠️ banner and the
-            # metric labels can never drift apart: beta at the red/inverse edge (1.4),
-            # vol at "High" (≥30), Sharpe at "Weak" (<0.5), drawdown at "Significant" (<-20).
-            _risk_flags = []
-            if _beta is not None and _beta > 1.4:
-                _risk_flags.append(f"Beta {_beta:.2f} — portfolio moves {_beta:.1f}× the market in both directions")
-            if _vol is not None and _vol >= 30:
-                _risk_flags.append(f"Volatility {_vol:.0f}% annualised — expect ±{_vol/16:.1f}% daily swings on average")
-            if _sh is not None and _sh < 0.5:
-                _risk_flags.append(f"Sharpe {_sh:.2f} — poor risk-adjusted return; the risk taken is not being rewarded")
-            if _mdd is not None and _mdd < -20:
-                _risk_flags.append(f"Drawdown {_mdd:.0f}% — portfolio spent time significantly below its high-water mark")
+            # metric labels can never drift apart (thresholds named in constants.py; the
+            # decision lives in risk_banner.risk_flags).
+            _risk_flags = _risk_banner.risk_flags(_beta, _vol, _sh, _mdd)
 
             if _risk_flags:
                 st.warning("⚠️ **Risk flags:** " + "  ·  ".join(_risk_flags))
@@ -18204,7 +18198,7 @@ elif page == "🔗 Risk Analysis":
                                             _score_line = (
                                                 f"<span style='color:{_sc_clr}'>Momentum {_dp_mom_sc:.0f}/100</span>"
                                                 f"<span style='color:#555;margin:0 6px'>·</span>"
-                                                f"<span style='color:{_comp_sc_clr}'>Composite {_dp_cscore:.0f}/100</span>"
+                                                f"<span style='color:{_comp_sc_clr}'>Composite {_score_text.composite_score_text(_dp_cscore)}/100</span>"
                                                 f"<span style='font-size:0.78em;color:{_sig_clr};margin-left:8px'>{_dp_clabel}</span>"
                                             )
                                         else:
@@ -18480,7 +18474,7 @@ elif page == "🔗 Risk Analysis":
                                             st.metric(
                                                 f"{_bd_gate_icon} {_bd_t}",
                                                 (
-                                                    f"{_bd_c['composite']:.0f}/100"
+                                                    f"{_score_text.composite_score_text(_bd_c['composite'])}/100"
                                                     if _bd_c["composite"] is not None else "—"
                                                 ),
                                                 (
@@ -23542,7 +23536,7 @@ elif page == "🥧 Portfolio Overview":
                                     st.caption(
                                         f"Scanner score: {brow['Scanner Score']:.0f}/100 · "
                                         f"Sector rank: {brow['Sector Rank']} · "
-                                        f"Composite: {brow['Composite Score']:.0f}/100"
+                                        f"Composite: {_score_text.composite_score_text(brow['Composite Score'])}/100"
                                     )
                                 with _bc2:
                                     st.metric("Sector rank", brow["Sector Rank"])
@@ -28039,7 +28033,7 @@ elif page == "📈 Analysis":
                         ups = rev.get("upgrades_90d", 0)
                         dns = rev.get("downgrades_90d", 0)
                         rev_clr = "#00C851" if net > 0 else ("#ff4444" if net < 0 else "#888")
-                        rev_lbl = f"↑{ups} upgrades / ↓{dns} downgrades (90d)"
+                        rev_lbl = f"↑{_plural(ups, 'upgrade')} / ↓{_plural(dns, 'downgrade')} (90d)"
                         _sm_row("Analyst Revisions", rev_lbl, rev_clr, _tip("Analyst Revisions"))
                         if rev.get("latest"):
                             st.markdown("<small style='color:#555'>Recent actions:</small>", unsafe_allow_html=True)
@@ -31426,7 +31420,7 @@ elif page == "📒 Trade Journal":
                     if not _dc_row.empty:
                         _dc_sig  = str(_dc_row.iloc[0].get("Signal", ""))
                         _dc_scr  = _dc_row.iloc[0].get("Score", "")
-                        _dc_signal_default = f"{_dc_sig} · Score {_dc_scr:.0f}/100" if _dc_sig else ""
+                        _dc_signal_default = f"{_dc_sig} · Score {_score_text.composite_score_text(_dc_scr)}/100" if _dc_sig else ""
 
         with st.expander("📋 Decision Context (optional — builds your pattern library)", expanded=False):
             st.caption(
@@ -42795,7 +42789,7 @@ elif page == "🔔 Catalyst Watch":
                     ):
                         _info_parts = [
                             f"Beat rate **{_cand['beat_rate']:.0f}%**",
-                            f"Composite **{_cand['score']:.0f}/100**",
+                            f"Composite **{_score_text.composite_score_text(_cand['score'])}/100**",
                             f"**{_cand['days_until']}d** to earnings",
                         ]
                         if _cand["consensus_growth_pct"] is not None:

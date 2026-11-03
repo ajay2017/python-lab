@@ -619,10 +619,10 @@ def test_beta_rec_trim_arithmetic_characterization():
     rec = find_rec(recs, "beta")
     assert rec is not None
     assert "1.88 → 0.91" in rec["recommendation"]
-    assert "~$7,350" in rec["recommendation"]
-    assert "~$2,376" in rec["recommendation"]
+    assert "≈$7,350" in rec["recommendation"]
+    assert "≈$2,376" in rec["recommendation"]
     assert "0.91" in rec["expected_outcome"]
-    assert "~$4,753" in rec["expected_outcome"]
+    assert "≈$4,753" in rec["expected_outcome"]
     assert rec["root_tickers"][0] == {
         "ticker": "HIGH",
         "value": 4.15,

@@ -56,3 +56,11 @@ def test_macro_playbook_singular_share():
     # this pins the helper used by macro_playbook / notify / app.
     assert f"sell 1 {share_word(1)}" == "sell 1 share"
     assert f"sell 3 {share_word(3)}" == "sell 3 shares"
+
+
+def test_plural_singular_only_for_one():
+    from stock_analyzer.text_fmt import plural
+    assert plural(1, "downgrade") == "1 downgrade"
+    assert plural(0, "downgrade") == "0 downgrades"
+    assert plural(3, "upgrade") == "3 upgrades"
+    assert plural(None, "upgrade") == "— upgrades"

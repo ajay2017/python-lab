@@ -129,3 +129,45 @@ def test_refresh_never_raises(junk):
 def test_refresh_never_raises_on_bad_now():
     c = _card()
     assert refresh_macro_card(c, None) is c
+
+
+# ── release_signature: the Home Brief memo piece ─────────────────────────────
+def _sig_events(d):
+    return [
+        {"event": "GDP", "date": d, "time_et": "08:30", "impact": "HIGH"},
+        {"event": "Minor", "date": d, "time_et": "08:30", "impact": "LOW"},
+        {"event": "Other day", "date": d.replace(day=d.day + 1) if d.day < 28 else d, "time_et": "08:30", "impact": "HIGH"},
+    ]
+
+
+def test_release_signature_changes_when_release_passes():
+    import datetime as dt
+    from stock_analyzer.macro_release import release_signature
+    d = dt.date(2026, 11, 4)
+    ev = _sig_events(d)
+    before = release_signature(ev, d, dt.datetime(2026, 11, 4, 8, 29))
+    after = release_signature(ev, d, dt.datetime(2026, 11, 4, 8, 30))
+    assert before != after
+
+
+def test_release_signature_same_when_time_passes_without_release():
+    import datetime as dt
+    from stock_analyzer.macro_release import release_signature
+    d = dt.date(2026, 11, 4)
+    ev = _sig_events(d)
+    a = release_signature(ev, d, dt.datetime(2026, 11, 4, 6, 0))
+    b = release_signature(ev, d, dt.datetime(2026, 11, 4, 8, 29))
+    assert a == b
+    c = release_signature(ev, d, dt.datetime(2026, 11, 4, 9, 0))
+    e = release_signature(ev, d, dt.datetime(2026, 11, 4, 15, 0))
+    assert c == e
+
+
+def test_release_signature_ignores_low_impact_and_other_days_and_bad_input():
+    import datetime as dt
+    from stock_analyzer.macro_release import release_signature
+    d = dt.date(2026, 11, 4)
+    sig = release_signature(_sig_events(d), d, dt.datetime(2026, 11, 4, 9, 0))
+    assert len(sig) == 1
+    assert release_signature(None, d, dt.datetime(2026, 11, 4, 9, 0)) == frozenset()
+    assert release_signature(["x", 3], d, dt.datetime(2026, 11, 4, 9, 0)) == frozenset()

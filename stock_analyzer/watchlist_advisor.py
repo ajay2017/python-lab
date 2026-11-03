@@ -40,6 +40,7 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer import exit_advisor
 from stock_analyzer.score_text import composite_score_text
+from stock_analyzer.entry_zone_text import zone_phrase, zone_word
 from stock_analyzer import entry_rr
 from stock_analyzer import rr_pullback
 from stock_analyzer.rr_readout import fmt_ratio_vs
@@ -614,7 +615,7 @@ def _build_watchlist_recommendation(
                 conditions_met=[
                     f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
                     f"Signal: {rec_label}",
-                    f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
+                    f"Price {zone_word(price, entry_lo, in_zone)} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
                     f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
                 ],
                 conditions_missing=[
@@ -655,7 +656,7 @@ def _build_watchlist_recommendation(
                 conditions_met=[
                     f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
                     f"Signal: {rec_label}",
-                    f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
+                    f"Price {zone_word(price, entry_lo, in_zone)} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
                     f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
                 ],
                 conditions_missing=[
@@ -747,15 +748,14 @@ def _build_watchlist_recommendation(
             stop, rr, earn_days,
             title=f"{ticker} — Ready to Enter",
             summary=(
-                f"Score {_score_txt(score)}/100 · price is {'in' if in_zone else 'near'} the entry zone"
+                f"Score {_score_txt(score)}/100 · price is {zone_word(price, entry_lo, in_zone)} the entry zone"
                 + (f" · R:R {rr:.1f}:1" if rr else "")
                 + ". All conditions align for opening a position."
             ),
             detail=(
                 f"The setup you were waiting for has arrived. Score {_score_txt(score)}/100 confirms "
                 f"the thesis is intact. "
-                f"Price {'is inside' if in_zone else f'is within {WATCHLIST_NEAR_ZONE_PCT:g}% of'} the entry zone "
-                f"(${entry_lo:.2f}–${entry_hi:.2f}). "
+                f"Price {zone_phrase(price, entry_lo, in_zone, WATCHLIST_NEAR_ZONE_PCT, f' (${entry_lo:.2f}–${entry_hi:.2f})')}. "
                 + (f"Risk/reward is {rr:.1f}:1 — well above the {RR_ENTRY_MIN:.0f}:1 minimum. " if rr else "")
                 # Deliberately does NOT say "use the position sizing below": that
                 # panel is WITHHELD whenever the portfolio value is unknown
@@ -772,7 +772,7 @@ def _build_watchlist_recommendation(
             conditions_met=[
                 f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
                 f"Signal: {rec_label}",
-                f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
+                f"Price {zone_word(price, entry_lo, in_zone)} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
                 f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
                 f"No imminent earnings risk" if not earn_soon else "",
             ],
@@ -1086,7 +1086,7 @@ def _build_watchlist_recommendation(
             "queue of theses at various stages of validation. "
             f"A score below {COMPOSITE_BUY:.0f} means the market hasn't yet confirmed your thesis. "
             "Deploying capital before confirmation is speculation; waiting for confirmation is investing. "
-            "The catalysts to watch for: earnings revision momentum turning positive, "
+            "The catalysts to watch for: analyst rating changes turning positive, "
             "a sector re-rating, or a technical breakout above a well-defined resistance level. "
             "Until one of those arrives, the watchlist is the right home for this name."
         ),
@@ -1235,13 +1235,13 @@ def _entry_held_card(ticker, chk, score, rec_label, price, entry_lo, entry_hi,
         stop, rr, earn_days,
         title=f"{ticker} — Ready on Its Own Numbers, Held Today",
         summary=(
-            f"Score {_score_txt(score)}/100 · price is {'in' if in_zone else 'near'} the entry zone"
+            f"Score {_score_txt(score)}/100 · price is {zone_word(price, entry_lo, in_zone)} the entry zone"
             + (f" · R:R {rr:.1f}:1" if rr else "")
             + f". Held today: {reason}."
         ),
         detail=(
             f"The stock-level setup is a go (score {_score_txt(score)}/100, {rec_label}, price "
-            f"{'inside' if in_zone else f'within {WATCHLIST_NEAR_ZONE_PCT:g}% of'} the entry zone{zone_txt}). "
+            f"{zone_phrase(price, entry_lo, in_zone, WATCHLIST_NEAR_ZONE_PCT, zone_txt)}). "
             f"A shared new-entry check holds it today: {reason}. "
             f"It clears when: {binding['clears_when']}."
         ),

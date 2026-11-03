@@ -351,9 +351,9 @@ def build_risk_advisor_recommendations(
                 },
                 "recommendation": (
                     (
-                        f"Sell 50% of **{trim_ticker}** (~${_trim_dollar:,.0f}): "
+                        f"Sell 50% of **{trim_ticker}** (≈${_trim_dollar:,.0f}): "
                         f"portfolio beta drops **{beta:.2f} → {_new_beta:.2f}** "
-                        f"(saving ~${_saved_10:,.0f} in a 10% correction). "
+                        f"(saving ≈${_saved_10:,.0f} in a 10% correction). "
                     ) if trim_ticker else (
                         "Your highest-beta contributors were all bought today — "
                         "giving them a day to settle before suggesting a trim; "
@@ -363,7 +363,7 @@ def build_risk_advisor_recommendations(
                 ) + (
                     (
                         f"Trimming further into **{trim_ticker}** — selling "
-                        f"~${_full_trim_dollar:,.0f} (~{_full_trim_pct:.0f}% of the "
+                        f"≈${_full_trim_dollar:,.0f} (≈{_full_trim_pct:.0f}% of the "
                         f"position) in total — would reach the full {target:.1f} "
                         "target on its own. "
                         if (trim_ticker and _full_trim_dollar is not None
@@ -383,12 +383,12 @@ def build_risk_advisor_recommendations(
                     (
                         f"Trimming 50% of **{trim_ticker}** reduces portfolio beta "
                         f"from {beta:.2f} to **{_new_beta:.2f}** — "
-                        f"saving ~${_saved_10:,.0f} in a 10% correction and ~${_saved_20:,.0f} "
+                        f"saving ≈${_saved_10:,.0f} in a 10% correction and ≈${_saved_20:,.0f} "
                         f"in a 20% bear market. "
                     ) if trim_ticker else ""
                 ) + (
                     f"Full reduction to target {target:.1f} eliminates "
-                    f"~${loss_10:,.0f} / ~${loss_20:,.0f} of extra loss in 10% / 20% corrections."
+                    f"≈${loss_10:,.0f} / ≈${loss_20:,.0f} of extra loss in 10% / 20% corrections."
                 ),
                 "institutional_lens": (
                     f"Institutional risk teams impose a hard Beta ceiling of {PORTFOLIO_BETA_CEILING:.1f} for managed equity accounts, "
@@ -550,8 +550,8 @@ def build_risk_advisor_recommendations(
             ),
             "expected_outcome": (
                 f"A 10% defensive allocation typically reduces portfolio volatility from "
-                f"{ann_vol:.0f}% to ~{ann_vol - 3:.0f}%. Daily average swing drops "
-                f"from ${daily_1sd:,.0f} to ~${daily_1sd * 0.85:,.0f} — "
+                f"{ann_vol:.0f}% to ≈{ann_vol - 3:.0f}%. Daily average swing drops "
+                f"from ${daily_1sd:,.0f} to ≈${daily_1sd * 0.85:,.0f} — "
                 "meaningful improvement in day-to-day portfolio stability."
             ),
             "institutional_lens": (
@@ -676,7 +676,7 @@ def build_risk_advisor_recommendations(
                 ),
                 "expected_outcome": (
                     f"A 5% cash buffer reduces CVaR proportionally from ${cvar_dollar:,.0f} "
-                    f"to ~${cvar_dollar * 0.93:,.0f}. Adding a 5% uncorrelated sector position "
+                    f"to ≈${cvar_dollar * 0.93:,.0f}. Adding a 5% uncorrelated sector position "
                     "typically narrows the CVaR/VaR ratio by 0.2–0.3× by smoothing the tails."
                 ),
                 "institutional_lens": (
@@ -857,7 +857,7 @@ def build_risk_advisor_recommendations(
                 "trim_target_denom":  _gd,
                 "recommendation": (
                     f"Trim {top_sec} exposure by approximately "
-                    f"**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** to bring the sector under "
+                    f"**{excess_pp:.0f}pp (≈${excess_dollar:,.0f})** to bring the sector under "
                     f"the {SECTOR_ELEVATED:.0f}% warn level. Redeploy into under-represented sectors: "
                     f"{under_str}. Trim the lowest-conviction {top_sec} names first — keep your "
                     "best ideas, prune the marginal ones."
@@ -866,7 +866,7 @@ def build_risk_advisor_recommendations(
                     f"Pulling {top_sec} from {top_wt:.1f}% to {SECTOR_ELEVATED:.0f}% cuts your "
                     f"single-sector exposure by roughly **${excess_dollar:,.0f}** while preserving "
                     f"capital deployment. Sector-shock loss in a -10% {top_sec} move drops "
-                    f"by ~${round(excess_pp / 100.0 * _gd * 0.10):,.0f}."
+                    f"by ≈${round(excess_pp / 100.0 * _gd * 0.10):,.0f}."
                 ),
                 "institutional_lens": (
                     "Sector concentration is the most under-priced risk in retail portfolios. "
@@ -949,19 +949,19 @@ def build_risk_advisor_recommendations(
                 "trim_sized": _trim_sized,
                 "recommendation": (
                     (
-                        f"Trim **{t}** by ~**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** back toward the "
+                        f"Trim **{t}** by ≈**{excess_pp:.0f}pp (≈${excess_dollar:,.0f})** back toward the "
                         f"{SINGLE_NAME_CEILING:.0f}% ceiling. Keep the thesis — just cap the size so a "
                         "single name can't dominate the outcome."
                     ) if _trim_sized else (
                         f"**{t}** is over the {SINGLE_NAME_CEILING:.0f}% ceiling by less than one "
-                        f"share (~${excess_dollar:,.0f}), so the ceiling alone sizes no trim. "
+                        f"share (≈${excess_dollar:,.0f}), so the ceiling alone sizes no trim. "
                         "Don't add to it."
                     )
                 ),
                 "expected_outcome": (
                     (
                         f"Bringing {t} from {w:.1f}% to {SINGLE_NAME_CEILING:.0f}% frees "
-                        f"~${excess_dollar:,.0f} to diversify and bounds single-name shock."
+                        f"≈${excess_dollar:,.0f} to diversify and bounds single-name shock."
                     ) if _trim_sized else (
                         f"The ceiling alone sizes no trade; {t}'s weight drifts back under it as "
                         "the rest of the book grows or the price falls."

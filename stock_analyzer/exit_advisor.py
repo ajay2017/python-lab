@@ -681,7 +681,7 @@ def assess_risk_off_derisk(
     implied = (fragility or {}).get("implied_move")
     pullback = (fragility or {}).get("pullback_pct")
     book_line = (
-        f" A {abs(pullback):.0f}% market pullback implies ~{abs(implied):.0f}% on this book."
+        f" A {abs(pullback):.0f}% market pullback implies ≈{abs(implied):.0f}% on this book."
         if implied is not None and pullback else ""
     )
 
@@ -694,10 +694,10 @@ def assess_risk_off_derisk(
         if c["atr"] and c["price"] > 0:
             new_stop = c["price"] - stop_tighten_atr_mult * float(c["atr"])
             if new_stop > 0:
-                tighten_txt = f" — or, if you'd rather not sell into weakness, tighten the stop to ~${new_stop:.2f}"
+                tighten_txt = f" — or, if you'd rather not sell into weakness, tighten the stop to ≈${new_stop:.2f}"
         trim_clause = (
-            f"Trim ~{trim_pct:.0f}% ({trim_shares} share{'s' if trim_shares != 1 else ''}) of {t}"
-            if trim_shares > 0 else f"Trim ~{trim_pct:.0f}% of {t}"
+            f"Trim ≈{trim_pct:.0f}% ({trim_shares} share{'s' if trim_shares != 1 else ''}) of {t}"
+            if trim_shares > 0 else f"Trim ≈{trim_pct:.0f}% of {t}"
         )
         cards.append({
             "priority": "high",

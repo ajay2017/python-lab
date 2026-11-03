@@ -49,3 +49,13 @@ def signed_count(n, word: str) -> str:
     except (TypeError, ValueError):
         return f"— {word}"
     return f"{i} {word}"
+
+
+def plural(n, noun: str) -> str:
+    """"1 downgrade" / "3 downgrades" / "0 downgrades". An unreadable count
+    prints "— downgrades"."""
+    try:
+        i = int(round(float(n)))
+    except (TypeError, ValueError):
+        return f"— {noun}s"
+    return f"{i} {noun}" if i == 1 else f"{i} {noun}s"

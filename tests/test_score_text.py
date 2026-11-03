@@ -42,3 +42,11 @@ def test_unusable_input_is_na(bad):
 def test_literal_examples():
     assert t(64.6) == "64.6" and t(64.4) == "64" and t(64.96) == "64.9"
     assert t(70.0) == "70" and t(65.0) == "65"
+
+
+def test_extra_edges_never_crossed():
+    assert t(54.6) == "55"
+    assert t(54.6, 55) == "54.6"
+    assert t(54.99, 55) == "54.9"
+    assert t(55.2, 55) == "55"
+    assert t(64.6, 55) == "64.6"

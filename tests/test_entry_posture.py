@@ -494,3 +494,19 @@ def test_home_today_nan_pct_never_falls_back_to_live():
     ctx = {"tone": "bull", "sp500_pct": float("nan"), "tone_available": True}
     st = tone_state_for_page(_synth(ctx), _TODAY_ISO, 2.0, True)
     assert st == _UNAVAIL
+
+
+def test_entry_text_rr_never_rounds_across_favourable_edge():
+    from stock_analyzer.constants import RR_FAVOURABLE_MIN
+    h = redeploy_headline([_cand(rr=RR_FAVOURABLE_MIN - 0.04)])
+    call = redeploy_call(h, _post("open"))
+    assert call["entry_called"] is True
+    assert f"R:R {RR_FAVOURABLE_MIN - 0.04:.2f}:1" in call["text"]
+    assert f"R:R {RR_FAVOURABLE_MIN:.1f}:1" not in call["text"]
+
+
+def test_none_score_candidate_is_withheld_not_called():
+    h = redeploy_headline([_cand()])
+    h = dict(h, score=None)
+    call = redeploy_call(h, _post("open"))
+    assert call["entry_called"] is False

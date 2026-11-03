@@ -178,7 +178,7 @@ def test_same_holding_same_trim_on_brief_playbook_and_signals():
         3, 70.0, 19.0, 70.0, 10.0, 0, "Buy", 100, 5000.0, 8.0, n_positions=15)
     assert action == "REDUCE" and prio == "HIGH"
     assert f"sell {expected:,} shares" in detail
-    assert f"~{EARNINGS_OVERWEIGHT_TRIM_TO_PCT:.0f}%" in detail
+    assert f"≈{EARNINGS_OVERWEIGHT_TRIM_TO_PCT:.0f}%" in detail
 
     acts = rebalance_actions(df, earnings_days={"AAA": 3})
     trim = next(a for a in acts if a["type"] == "trim" and a["ticker"] == "AAA")
@@ -220,7 +220,7 @@ def test_outside_window_keeps_single_name_ceiling_target():
     action, _p, detail, _l = ea._recommend(
         10, 70.0, 19.0, 70.0, 10.0, 0, "Buy", 100, 5000.0, 8.0, n_positions=15)
     assert action == "REDUCE"
-    assert f"~{SINGLE_NAME_CEILING:.0f}%" in detail
+    assert f"≈{SINGLE_NAME_CEILING:.0f}%" in detail
     n = ts.shares_to_trim(100, 19.0, SINGLE_NAME_CEILING)
     assert f"sell {n:,} shares" in detail
 
@@ -230,7 +230,7 @@ def test_recommend_13pct_in_window_reduces_to_10_but_not_outside():
     action, _p, detail, _l = ea._recommend(
         3, 70.0, 13.0, 10.0, 10.0, 0, "Buy", 100, 5000.0, 8.0, n_positions=15)
     assert action == "REDUCE"
-    assert f"~{EARNINGS_OVERWEIGHT_TRIM_TO_PCT:.0f}%" in detail
+    assert f"≈{EARNINGS_OVERWEIGHT_TRIM_TO_PCT:.0f}%" in detail
     assert f"sell {ts.shares_to_trim(100, 13.0, EARNINGS_OVERWEIGHT_TRIM_TO_PCT)} shares" in detail
     action2, _p2, detail2, _l2 = ea._recommend(
         10, 70.0, 13.0, 10.0, 10.0, 0, "Buy", 100, 5000.0, 8.0, n_positions=15)

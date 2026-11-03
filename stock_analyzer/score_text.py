@@ -16,9 +16,9 @@ from stock_analyzer.constants import (
 _EDGES = (COMPOSITE_SELL, COMPOSITE_HOLD, COMPOSITE_BUY, COMPOSITE_STRONG_BUY)
 
 
-def composite_score_text(score) -> str:
-    """Whole-number score, unless rounding would cross a composite band edge;
-    then the score floored to one decimal. Unusable input -> "n/a"."""
+def composite_score_text(score, *extra_edges) -> str:
+    """Whole-number score, unless rounding would cross a composite band edge
+    (or any of ``extra_edges``, e.g. WEAK_CONVICTION_SCORE); then the score floored to one decimal. Unusable input -> "n/a"."""
     try:
         s = float(score)
     except (TypeError, ValueError):
@@ -26,7 +26,7 @@ def composite_score_text(score) -> str:
     if not math.isfinite(s):
         return "n/a"
     rounded = float(f"{s:.0f}")
-    for edge in _EDGES:
+    for edge in _EDGES + tuple(extra_edges):
         if (s < edge) != (rounded < edge):
             return f"{math.floor(s * 10) / 10:.1f}"
     return f"{s:.0f}"

@@ -1079,7 +1079,7 @@ def decision_role_view(role, snapshot, now_utc: datetime) -> dict:
         if today >= eff:
             out["effective_line"] = f"This entry applies {label}."
         else:
-            out["effective_line"] = (f"Pending: {entry.get('model')} applies {label}; "
+            out["effective_line"] = (f"Pending: {entry.get('model')} ({_effort_text(entry.get('effort'))}) applies {label}; "
                                      f"until then {model} scores.")
         prior = entry.get("prior")
         out["prior_line"] = "Prior model: " + (

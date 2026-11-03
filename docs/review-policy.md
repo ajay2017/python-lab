@@ -92,3 +92,4 @@ The deterministic gates are the safety net; the **paid agents are for judgment o
 - 2026-11-02 · added `stock_analyzer/account_row_trust.py` (bug register N1 C6): decides which account rows feed the account return, reconciliation and debrief; a wrong mask moves reported performance.
 - 2026-11-02 · added `stock_analyzer/signals_headline.py` (bug register Bal / Reb): decides the Signals headline — act / attention / all-clear — a wrong call shows an all-clear over a breached stop.
 - 2026-11-03 · added `stock_analyzer/journal_rebuild.py` (bug register HoldWipe): decides whether a Trade Journal holdings rebuild may run and whether it may save an empty book (an empty save sweeps every holdings row and every manual stop).
+- 2026-11-03 · added `stock_analyzer/risk_banner.py` (bug register RiskLit): decides which ⚠️ flags the 📊 Risk Analysis banner raises (or the ✅ all-clear) from beta / volatility / Sharpe / max drawdown.

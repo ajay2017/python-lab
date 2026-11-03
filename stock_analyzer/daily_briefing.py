@@ -98,6 +98,8 @@ from stock_analyzer import entry_eligibility
 from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map, macro_hold
 from stock_analyzer.analyst_intel import trustworthy_composite
 from stock_analyzer import held_news_check
+from stock_analyzer.score_text import composite_score_text
+from stock_analyzer.text_fmt import share_word
 from stock_analyzer import g32_shadow
 from stock_analyzer.news_feed import brief_news_disclosure
 
@@ -568,7 +570,7 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         buy_words       = ("Strong Buy", "Buy")
         hold_sell_words = ("Hold", "Sell", "Avoid", "Weak")
         _sig_disp = comp_sig or "n/a"
-        _scr_disp = f"{comp_scr:.0f}/100" if comp_scr is not None else "—"
+        _scr_disp = f"{composite_score_text(comp_scr)}/100" if comp_scr is not None else "—"
         if comp_sig and any(w in comp_sig for w in buy_words):
             agreed.append(f"Composite signal: {_sig_disp} ({_scr_disp})")
         elif comp_sig and any(w in comp_sig for w in hold_sell_words):
@@ -2774,7 +2776,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                 "kind":     "stop_breach",
                 "action":   "SELL — Stop Breached",
                 "directive": (
-                    f"Sell all {_trim_sizing.fmt_shares(_shares)} shares at next open — mechanical stop rule."
+                    f"Sell all {_trim_sizing.fmt_shares(_shares)} {share_word(_trim_sizing.fmt_shares(_shares))} at next open — mechanical stop rule."
                 ),
                 "why": _stop_breach_text.breach_why(
                     _f(row.get("Price")), _f(row.get("Stop")),
@@ -2801,7 +2803,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                     f"Reduce or exit — composite signal has shifted to {sig}."
                 ),
                 "why": (
-                    f"Composite score {_f(row.get('Score')):.0f}/100 in the Sell zone. "
+                    f"Composite score {composite_score_text(_f(row.get('Score')))}/100 in the Sell zone. "
                     f"P&L {_f(row.get('P&L (%)')):+.1f}%, weight {_f(row.get('Weight (%)')):.1f}%."
                 ),
                 "trigger": "Confirm before close; if price is also below stop, exit fully.",
@@ -2831,10 +2833,10 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         _det_n = _trim_sizing.fraction_trim_shares(d["shares"], DETERIORATION_TRIM_SUGGESTED_PCT)
         _det_sh = _trim_sizing.fmt_shares(d["shares"])
         if d["shares"] > 0 and _det_n >= 1:
-            _trim_qty_clause = f" ({_det_n} of {_det_sh} shares)"
+            _trim_qty_clause = f" ({_det_n} of {_det_sh} {share_word(_det_sh)})"
         elif d["shares"] >= 1:
             _trim_qty_clause = (
-                f" (at {_det_sh} shares a {DETERIORATION_TRIM_SUGGESTED_PCT:.0f}% "
+                f" (at {_det_sh} {share_word(_det_sh)} a {DETERIORATION_TRIM_SUGGESTED_PCT:.0f}% "
                 f"trim is under one share; the smallest real trim is 1 share, "
                 f"{100.0 / d['shares']:.0f}% of the position, or exit)"
             )
@@ -2846,7 +2848,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             )
         else:
             _trim_qty_clause = ""
-        _exit_qty_clause = f"of {_det_sh} shares" if d["shares"] > 0 else "of the position"
+        _exit_qty_clause = f"of {_det_sh} {share_word(_det_sh)}" if d["shares"] > 0 else "of the position"
         items.append({
             "priority": "high",
             "icon":     "📉" if _is_exit else "✂️",
@@ -3523,7 +3525,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 )
                 _first_act["why"] = (_first_act.get("why") or "") + (
                     f" Also your largest weak holding: weight {weight:.1f}% ≥ "
-                    f"{LARGE_POSITION_WEIGHT_PCT:.0f}% with score {score:.0f} < "
+                    f"{LARGE_POSITION_WEIGHT_PCT:.0f}% with score {composite_score_text(score, WEAK_CONVICTION_SCORE)} < "
                     f"{WEAK_CONVICTION_SCORE}."
                 )
                 # `reason` was synthesized in _consolidate_act_today before
@@ -3552,11 +3554,11 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 "priority": "medium",
                 "icon":     "🔍",
                 "ticker":   ticker,
-                "headline": f"largest weak holding — {weight:.1f}% weight, score {score:.0f}/100",
+                "headline": f"largest weak holding — {weight:.1f}% weight, score {composite_score_text(score, WEAK_CONVICTION_SCORE)}/100",
                 "action":   {"type": "WATCH"},
                 "why": (
                     f"Weight {weight:.1f}% ≥ {LARGE_POSITION_WEIGHT_PCT:.0f}% AND score "
-                    f"{score:.0f} < {WEAK_CONVICTION_SCORE} — largest position with weakest "
+                    f"{composite_score_text(score, WEAK_CONVICTION_SCORE)} < {WEAK_CONVICTION_SCORE} — largest position with weakest "
                     f"conviction. {_wl_why_tail}"
                 ),
                 "trigger": _wl_trigger,
@@ -3567,7 +3569,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "priority": "medium",
             "icon":     "🔍",
             "ticker":   ticker,
-            "headline": f"largest weak holding — {weight:.1f}% weight, score {score:.0f}/100",
+            "headline": f"largest weak holding — {weight:.1f}% weight, score {composite_score_text(score, WEAK_CONVICTION_SCORE)}/100",
             "action":   {
                 "type":          "TRIM_TO_TARGET",
                 "trim_shares":   trim_shares,

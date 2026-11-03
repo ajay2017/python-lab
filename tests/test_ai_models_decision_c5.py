@@ -514,7 +514,10 @@ def test_decision_role_view_defaults_and_score_dates():
     before = datetime(2026, 11, 9, 12, tzinfo=timezone.utc)
     v = ams.decision_role_view("score", snap, before)
     assert v["model"] == llm.CODE_DEFAULTS["score"] and v["source"] == llm.SOURCE_CODE
-    assert v["effective_line"].startswith("Pending: claude-sonnet-5-5 applies")
+    assert v["effective_line"].startswith("Pending: claude-sonnet-5-5 (no explicit effort) applies")
+    snap_e = _snap({"version": 1, "roles": {"score": _cur(effort="low", effective_from="2026-11-10")}})
+    v = ams.decision_role_view("score", snap_e, before)
+    assert v["effective_line"].startswith("Pending: claude-sonnet-5-5 (effort low) applies")
 
 
 def test_can_reset_decision():

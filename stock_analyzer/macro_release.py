@@ -107,3 +107,29 @@ def pre_event_view(released) -> dict:
         "auto_expand_ok": not r,
         "header_suffix": " (pre-release call)" if r else "",
     }
+
+
+def release_signature(events, today, now) -> frozenset:
+    """Memo-signature piece for the Home Brief: one (event, date, time, released)
+    tuple per HIGH-impact event dated ``today``. ``released`` is
+    ``release_passed(...)`` (True / False / None when the time is unknown), so
+    the signature changes exactly when a same-day release time passes and the
+    memoized Brief is rebuilt with post-release wording; time passing with no
+    release in between leaves it unchanged. Never raises: unreadable input
+    gives an empty signature.
+
+    Not wired: folding this into Home's `_synth_sig` would move the G-07 same-day
+    lift earlier (a gate-timing change), not just wording. See bug register Macro."""
+    from stock_analyzer.macro_calendar import HIGH
+    out = []
+    try:
+        for e in (events or []):
+            if not isinstance(e, dict) or e.get("date") != today or e.get("impact") != HIGH:
+                continue
+            out.append((
+                str(e.get("event")), str(e.get("date")), str(e.get("time_et")),
+                release_passed(e.get("date"), e.get("time_et"), now),
+            ))
+    except Exception:
+        return frozenset()
+    return frozenset(out)

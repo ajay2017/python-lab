@@ -21,7 +21,12 @@ import math
 
 from stock_analyzer import entry_eligibility
 from stock_analyzer.act_today_view import locked_snapshot_servable
-from stock_analyzer.constants import COMPOSITE_BUY, MARKET_TONE_BEAR_PCT, RR_ENTRY_MIN
+from stock_analyzer.constants import (
+    COMPOSITE_BUY,
+    MARKET_TONE_BEAR_PCT,
+    RR_ENTRY_MIN,
+    RR_FAVOURABLE_MIN,
+)
 from stock_analyzer.entry_eligibility import (
     classify_tone,
     data_trust_hold,
@@ -29,6 +34,7 @@ from stock_analyzer.entry_eligibility import (
     tone_source_line,
 )
 from stock_analyzer.rr_readout import fmt_ratio_vs
+from stock_analyzer.score_text import composite_score_text
 
 _UNAVAILABLE = {"tone": None, "sp500_pct": None, "available": False, "source": None, "as_of": None}
 
@@ -211,8 +217,12 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
     try:
         t = h.get("ticker")
         sec = f" ({h['sector']})" if h.get("sector") else ""
-        s = f"{h.get('score'):.0f}"
-        rr = fmt_ratio_vs(h.get("rr"), RR_ENTRY_MIN)
+        s = composite_score_text(h.get("score"))
+        if s == "n/a":
+            # An unreadable score must still fail closed (the old ":.0f" raised
+            # here and the except below withheld the entry call).
+            raise ValueError("score unreadable")
+        rr = fmt_ratio_vs(h.get("rr"), RR_ENTRY_MIN, RR_FAVOURABLE_MIN)
         if kind == "open" and hold is None and not hold_failed:
             out.update(
                 entry_called=True, level="success", icon="🎯", invite_own_pick=True,

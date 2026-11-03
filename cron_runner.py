@@ -3020,8 +3020,13 @@ def _run_monthly_report(now_et, force: bool) -> int:
             for idx, row in spy.iterrows():
                 d = idx.date() if hasattr(idx, "date") else None
                 try:
-                    c = float(row["Close"])
-                except (TypeError, ValueError):
+                    _c_raw = row["Close"]
+                    # yf.download gives a one-element Series for a single ticker
+                    # (MultiIndex columns); float(Series) is a FutureWarning.
+                    if hasattr(_c_raw, "iloc"):
+                        _c_raw = _c_raw.iloc[0]
+                    c = float(_c_raw)
+                except (TypeError, ValueError, IndexError):
                     c = None
                 if d is not None and c and c > 0:
                     spy_by_date[d] = c

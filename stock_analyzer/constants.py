@@ -34,6 +34,12 @@ DEFENSIVE_DIVERSIFIER_MAX_PCT = 10.0
 SHARPE_HIGH_RISK_MAX   = 0.4     # below this -> HIGH priority ("risk not rewarded")
 SHARPE_MEDIUM_RISK_MAX = 0.8     # below this -> an action fires (HIGH or MEDIUM)
 SHARPE_STRONG_MIN      = 1.0     # at/above this -> OK, "strong risk-adjusted returns"
+# 📊 Risk Analysis banner (risk_banner.py): a portfolio Sharpe below this is the
+# metric label's "Weak" band and raises the ⚠️ flag. Named 2026-11-03 (RiskLit)
+# from the banner's bare 0.5; value unchanged. The banner's beta / volatility /
+# drawdown flags reuse PORTFOLIO_BETA_CEILING / PORTFOLIO_VOL_HIGH_PCT /
+# PORTFOLIO_DRAWDOWN_ACTION_MAX.
+PORTFOLIO_SHARPE_WEAK_MAX = 0.5
 
 # Selection-only (does NOT gate whether the Sharpe rec above fires at all) —
 # a ticker is named as a "Sharpe drag" contributor in the rec's root_cause

@@ -12,6 +12,7 @@ import pytz as _pytz
 from datetime import date as _date, datetime as _datetime
 
 from stock_analyzer import revision_flag as _revflag
+from stock_analyzer.text_fmt import share_word
 from stock_analyzer.earnings_stop_cover import (
     SECTOR_DEFAULTS,
     estimate_earnings_move,
@@ -196,7 +197,7 @@ def _trim_sentence(n, held, pct) -> str:
     """The one wording for a whole-share trim sized by a percentage rule."""
     pct_of = 100.0 * n / held if held else 0.0
     return (
-        f"**Sell {_sh(n)}** (about {pct_of:.0f}% of your {fmt_shares(held)} shares) "
+        f"**Sell {_sh(n)}** (about {pct_of:.0f}% of your {fmt_shares(held)} {share_word(fmt_shares(held))}) "
         f"before the report. The rule's {pct:.0f}% trim rounds down to whole shares."
     )
 
@@ -306,7 +307,7 @@ def _recommend_core(
                 f"You already have a **Sell signal** on this position. "
                 "Holding through a binary earnings event with a bearish signal is one of the highest-risk "
                 "decisions in portfolio management — you are hoping the event reverses the trend. "
-                f"**Sell all {fmt_shares(shares)} shares before the report.** "
+                f"**Sell all {fmt_shares(shares)} {share_word(fmt_shares(shares))} before the report.** "
                 "If the report is positive and you want back in, you can re-enter after confirmation."
             ),
             (
@@ -340,7 +341,7 @@ def _recommend_core(
                     f"{r['floor_pct']:.1f}% earnings-week line for a binary earnings event. "
                     f"An estimated ±{est_move:.0f}% earnings move on a ${market_value:,.0f} position = "
                     f"±${est_move / 100 * market_value:,.0f} in a single session. "
-                    f"**Trim to ~{r['target_pct']:.0f}% weight: sell {_sh(trim_sh)} (~${trim_val:,.0f})** before earnings. "
+                    f"**Trim to ≈{r['target_pct']:.0f}% weight: sell {_sh(trim_sh)} (≈${trim_val:,.0f})** before earnings. "
                     "Keep the core position for the upside scenario — just cap the binary risk."
                 ),
                 (
@@ -364,7 +365,7 @@ def _recommend_core(
                     f"Position is **{weight:.0f}% of your portfolio** — too concentrated for a binary earnings event. "
                     f"An estimated ±{est_move:.0f}% earnings move on a ${market_value:,.0f} position = "
                     f"±${est_move / 100 * market_value:,.0f} in a single session. "
-                    f"**Trim to ~{SINGLE_NAME_CEILING:.0f}% weight: sell {_sh(trim_sh)} (~${trim_val:,.0f})** before earnings. "
+                    f"**Trim to ≈{SINGLE_NAME_CEILING:.0f}% weight: sell {_sh(trim_sh)} (≈${trim_val:,.0f})** before earnings. "
                     "Keep the core position for the upside scenario — just cap the binary risk."
                 ),
                 (
