@@ -32602,15 +32602,15 @@ elif page == "📒 Trade Journal":
                     bt = stats["best_trade"]
                     bw1.success(
                         f"🏆 **Best trade**: {bt['ticker']} — "
-                        f"sold {bt['shares']:.0f} {_share_word(bt['shares'])} @ ${bt['price']:.2f} · "
-                        f"**+${bt['realized_pnl']:,.2f}**"
+                        f"sold {bt['shares']:.0f} {_share_word(bt['shares'])} @ \\${bt['price']:.2f} · "
+                        f"**{_sd(bt['realized_pnl'], 2).replace('$', chr(92) + '$')}**"
                     )
                 if stats["worst_trade"]:
                     wt = stats["worst_trade"]
                     bw2.error(
                         f"📉 **Worst trade**: {wt['ticker']} — "
-                        f"sold {wt['shares']:.0f} {_share_word(wt['shares'])} @ ${wt['price']:.2f} · "
-                        f"**${wt['realized_pnl']:,.2f}**"
+                        f"sold {wt['shares']:.0f} {_share_word(wt['shares'])} @ \\${wt['price']:.2f} · "
+                        f"**{_sd(wt['realized_pnl'], 2).replace('$', chr(92) + '$')}**"
                     )
 
         # ── Behavioral Analytics ──────────────────────────────────────────────────
