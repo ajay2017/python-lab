@@ -1223,6 +1223,8 @@ _GATE_FILES = {
     "stock_analyzer/account_snapshot_repair.py",
     "stock_analyzer/account_snapshot_autorepair.py",
     "stock_analyzer/account_row_trust.py",
+    # Added 2026-11-02 (bug register Bal): decides the Signals headline.
+    "stock_analyzer/signals_headline.py",
 }
 
 

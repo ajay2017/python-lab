@@ -701,7 +701,10 @@ def alerts(
     pt_cut_signals: dict[str, dict] | None = None,   # ticker -> analyst_targets.detect_pt_cut() output
 ) -> list[dict]:
     """
-    Returns list of alert dicts with keys: level, msg, category.
+    Returns list of alert dicts with keys: level, msg, category. Per-holding
+    alerts (stop, concentration, bearish-signal) also carry `ticker`, and a
+    breached stop (rounded gap <= 0) carries `breached: True`; earnings,
+    revisions, sector and signal-change alerts carry no `ticker` / `breached`.
     Levels: danger, warning, info.
     Categories: stop, signal, concentration, earnings, revisions.
 
@@ -736,31 +739,32 @@ def alerts(
         # separately via the Stop Type column.
         if gap is None or pd.isna(gap):
             result.append({
-                "level": "warning", "category": "stop",
+                "level": "warning", "category": "stop", "ticker": ticker,
                 "msg": f"🟡 **{ticker}** — stop data unavailable; set a manual stop in your broker",
             })
         elif gap <= 0:
             # Breached (the rounded gap the Brief's breach rule uses): finding #24.
             from stock_analyzer.stop_breach_text import alert_breach_msg
             result.append({
-                "level": "danger", "category": "stop",
+                "level": "danger", "category": "stop", "ticker": ticker,
+                "breached": True,
                 "msg": alert_breach_msg(ticker, gap, row["Stop"]),
             })
         elif gap < POSITION_AT_RISK_GAP_PCT:
             result.append({
-                "level": "danger", "category": "stop",
+                "level": "danger", "category": "stop", "ticker": ticker,
                 "msg": f"🔴 **{ticker}** is within {gap:.1f}% of stop ${row['Stop']:.2f} — review immediately",
             })
         elif gap < APPROACHING_STOP_GAP_PCT:
             result.append({
-                "level": "warning", "category": "stop",
+                "level": "warning", "category": "stop", "ticker": ticker,
                 "msg": f"🟡 **{ticker}** is {gap:.1f}% above stop ${row['Stop']:.2f} — monitor closely",
             })
 
         # Concentration
         if w > SINGLE_NAME_CEILING:
             result.append({
-                "level": "warning", "category": "concentration",
+                "level": "warning", "category": "concentration", "ticker": ticker,
                 "msg": f"⚠️ **{ticker}** is {w:.1f}% of portfolio — above {SINGLE_NAME_CEILING}% concentration threshold",
             })
 
@@ -768,12 +772,12 @@ def alerts(
         _tier_note = f" (deterioration tier: {_det_tier[ticker]})" if ticker in _det_tier else ""
         if "Sell" in signal and pnl > ALERT_PNL_PROFIT_TAKE_PCT:
             result.append({
-                "level": "warning", "category": "signal",
+                "level": "warning", "category": "signal", "ticker": ticker,
                 "msg": f"📉 **{ticker}** signal turned bearish with {pnl:.1f}% gain — consider taking partial profits{_tier_note}",
             })
         if "Sell" in signal and pnl < ALERT_PNL_STOP_LOSS_PCT:
             result.append({
-                "level": "danger", "category": "signal",
+                "level": "danger", "category": "signal", "ticker": ticker,
                 "msg": f"⛔ **{ticker}** bearish signal with {pnl:.1f}% loss — stop at ${row['Stop']:.2f}{_tier_note}",
             })
 

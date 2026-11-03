@@ -103,6 +103,11 @@ def stop_noun(stop_type) -> str:
     return f"profit-lock stop ({t})"
 
 
+# The Brief claim in the Signals breach line; signals_headline swaps it out
+# when the Brief is unavailable or the breach has resolved.
+BRIEF_SELL_CLAUSE = "Today's Brief says sell at the next open"
+
+
 def alert_breach_msg(ticker, gap, stop) -> str:
     """Signals Active Alerts line for a stop at or past the price (gap <= 0,
     the rounded gap the breach rule uses). Exactly one `$`, so Streamlit's
@@ -114,4 +119,4 @@ def alert_breach_msg(ticker, gap, stop) -> str:
     where = (f"is {abs(g):.{GAP_TO_STOP_ROUND_DECIMALS}f}% below its stop" if g < 0
              else "is at or just above its stop")
     return (f"⛔ **{ticker}** {where} ${_money(stop)} — breached; "
-            "Today's Brief says sell at the next open")
+            + BRIEF_SELL_CLAUSE)

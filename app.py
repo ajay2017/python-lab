@@ -93,6 +93,7 @@ from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import held_stop_view as _held_stop_view
 from stock_analyzer import thesis_review_status
+from stock_analyzer import signals_headline
 from stock_analyzer import forward_sim as _fsim
 from stock_analyzer import attribution_readiness as _attr_ready
 from stock_analyzer.personalized_discovery import build_winner_profile
@@ -15836,18 +15837,48 @@ elif page == "📡 Signals & Advice":
     _sa_tab1, _sa_tab2 = st.tabs(["📡 Active Signals", "🧩 Diversification"])
 
     with _sa_tab1:
+        # Defaults for the offline path (nothing below renders alerts then).
+        _sa_bstate, _sa_active_br, _sa_resolved = "not_built", frozenset(), frozenset()
         if _sa_offline:
             st.warning(
                 "⚠ **Risk analysis offline** — the gates that compute alerts and "
                 "actions did not run this session. Visit 🏠 Home to rebuild."
             )
-        elif not actions:
-            st.success("✅ Portfolio is well-balanced — no signal-driven actions needed at this time.")
+        else:
+            # Same Brief read Home / Summary use (act_today_view): the Brief claim
+            # is made only when it is built and still lists the breach as active.
+            from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT as _SA_STOP_REC_MARGIN
+            _sa_synth  = st.session_state.get("_home_synth_cache")
+            _sa_bundle = _sa_synth.get("bundle") if isinstance(_sa_synth, dict) else None
+            if not isinstance(_sa_bundle, dict):
+                _sa_bundle = {}
+            _sa_brief  = _sa_bundle.get("_daily_brief")
+            _sa_boff   = _sa_bundle.get("_daily_brief_offline", False)
+            _sa_view   = act_today_view(
+                daily_brief      = _sa_brief,
+                brief_offline    = bool(_sa_boff),
+                port_df_enriched = st.session_state.get("_port_df_enriched"),
+                live_prices      = st.session_state.get("_live_prices"),
+                margin_pct       = _SA_STOP_REC_MARGIN,
+                now              = _now_et(),
+            )
+            _sa_bstate, _sa_active_br, _sa_resolved = signals_headline.brief_context(
+                _sa_brief, _sa_boff, _sa_view)
+            _sa_head = signals_headline.decide(
+                actions, alert_list, _sa_offline, brief_state=_sa_bstate,
+                active_breach=_sa_active_br, resolved=_sa_resolved)
+            if _sa_head["kind"] == "act":
+                st.error(_sa_head["text"])
+            elif _sa_head["kind"] == "attention":
+                st.warning(_sa_head["text"])
+            elif _sa_head["kind"] == "clear":
+                st.success(_sa_head["text"])
+            if _sa_head["note"]:
+                st.caption(_sa_head["note"])
 
         # ── Active Alerts — grouped by category ──────────────────────────────
-        _danger_alerts  = [a for a in alert_list if a["level"] == "danger"]
-        _warning_alerts = [a for a in alert_list if a["level"] == "warning"]
-        _info_alerts    = [a for a in alert_list if a["level"] == "info"]
+        _danger_alerts, _warning_alerts, _info_alerts = signals_headline.split_alert_levels(
+            alert_list, brief_state=_sa_bstate, resolved=_sa_resolved)
 
         if _sa_offline:
             pass  # offline banner already rendered above
@@ -15902,17 +15933,23 @@ elif page == "📡 Signals & Advice":
                                 unsafe_allow_html=True,
                             )
                             for _a in _items:
-                                if _a["level"] == "danger":
+                                _sa_lvl = signals_headline.effective_level(
+                                    _a, brief_state=_sa_bstate, resolved=_sa_resolved)
+                                if _sa_lvl == "danger":
                                     _chip_bg     = "#3b0a0a"
                                     _chip_border = "#ff4444"
-                                elif _a["level"] == "warning":
+                                elif _sa_lvl == "warning":
                                     _chip_bg     = "#2d2000"
                                     _chip_border = "#f59e0b"
                                 else:
                                     _chip_bg     = "#0a1a2d"
                                     _chip_border = "#3b82f6"
                                 import re as _re
-                                _msg_html = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', _a['msg'])
+                                _msg_html = _re.sub(
+                                    r'\*\*(.+?)\*\*', r'<b>\1</b>',
+                                    signals_headline.alert_line(
+                                        _a, brief_state=_sa_bstate, resolved=_sa_resolved,
+                                        active_breach=_sa_active_br))
                                 st.markdown(
                                     f"<div style='"
                                     f"background:{_chip_bg};"

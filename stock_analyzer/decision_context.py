@@ -45,6 +45,15 @@ def _num(x) -> float | None:
         return None
 
 
+def is_unsized_trim(a) -> bool:
+    """True for a trim action whose trim_shares is a number < 1 (no sell call).
+    Shared with signals_headline so both agree on what "actionable" means."""
+    if not isinstance(a, dict) or a.get("type") != "trim":
+        return False
+    ts = a.get("trim_shares")
+    return isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts == ts and ts < 1
+
+
 def build_snapshot(
     *,
     ticker: str | None,
@@ -122,11 +131,7 @@ def build_snapshot(
     # trim_shares is a number < 1 made no sell call, so it isn't counted.
     # 2026-10-23: act_today_n excludes oversized-trim actions that size 0
     # shares; earlier rows counted them.
-    def _unsized_trim(a) -> bool:
-        if not isinstance(a, dict) or a.get("type") != "trim":
-            return False
-        ts = a.get("trim_shares")
-        return isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts == ts and ts < 1
+    _unsized_trim = is_unsized_trim
 
     act_today_n = None
     try:
