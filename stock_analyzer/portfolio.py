@@ -22,6 +22,17 @@ def _safe_float(val, default: float = 0.0) -> float:
         return default
 
 
+def _num_or_none(val):
+    """float(val), or None when val is missing / NaN / non-numeric / infinite."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 TICKER_SECTORS = {
     "AVGO": "Semiconductors", "NVDA": "Semiconductors", "AMD": "Semiconductors",
     "MU": "Semiconductors", "QCOM": "Semiconductors", "INTC": "Semiconductors",
@@ -2247,9 +2258,20 @@ def diversification_recommendations(
     # ── REDUCE: overweight sectors ────────────────────────────────────────────
     for sector, pct in sector_pcts.items():
         if pct > SECTOR_REDUCE_TRIGGER:
-            target_pct = SINGLE_NAME_CEILING
-            reduce_pct = round(pct - target_pct, 1)
+            # SecTrig (owner decision 2026-11-03, option a): the card is an
+            # EARLY AWARENESS signal at SECTOR_REDUCE_TRIGGER, so its size is
+            # the trim that brings the sector back UNDER the trigger -- not
+            # down to SINGLE_NAME_CEILING (a single-NAME cap, not a sector
+            # target). WHEN it fires is unchanged (pct > trigger above).
+            target_pct = SECTOR_REDUCE_TRIGGER
+            # Selling shrinks the book as well as the sector (Pct is the share of
+            # held market value), so the share of the book to sell is
+            # (S - T) / (1 - T), not S - T: 23.5% -> 20% needs 4.375% of the
+            # book, not 3.5% (which would leave it at 20.7%).
+            _reduce_frac = (pct - target_pct) / (1 - target_pct / 100)
+            reduce_pct = round(_reduce_frac, 1)
             sector_rows = port_df[port_df["Sector"] == sector]
+            _n_holdings = int(len(sector_rows))
             # Exclude score-withheld holdings (a fund/ETF or a stock
             # mid-data-outage — see build_portfolio_df's "Score Available")
             # from trim-candidate ranking: their Score is NaN post-fix (was a
@@ -2259,16 +2281,28 @@ def diversification_recommendations(
             if "Score Available" in sector_rows.columns:
                 sector_rows = sector_rows[sector_rows["Score Available"]]
             sector_rows = sector_rows.sort_values("Score")
-            weakest = [
-                {
+            weakest = []
+            for _, row in sector_rows.head(2).iterrows():
+                # Near-stop fact for the card's wording: a gap strictly between
+                # 0 and POSITION_AT_RISK_GAP_PCT (the band behind Signals'
+                # "within X% of stop"). gap <= 0 is a breach, which Act Today
+                # owns; a missing / NaN gap is "unknown", never near.
+                _gap = _num_or_none(row.get("Gap to Stop (%)"))
+                _near = _gap is not None and 0 < _gap < POSITION_AT_RISK_GAP_PCT
+                weakest.append({
                     "ticker":  row["Ticker"],
-                    "score":   round(row["Score"], 0),
+                    # Unrounded: the card prints it via composite_score_text,
+                    # which must see 64.6, not a pre-rounded 65.
+                    "score":   row["Score"],
                     "signal":  row["Signal"],
                     "pnl_pct": row["P&L (%)"],
                     "weight":  row["Weight (%)"],
-                }
-                for _, row in sector_rows.head(2).iterrows()
-            ]
+                    "gap_to_stop": _gap,
+                    "near_stop":   _near,
+                    # Exiting this whole name would, by itself, bring the sector
+                    # back to or under the trigger.
+                    "exit_resolves": bool(_near) and row["Weight (%)"] >= _reduce_frac,
+                })
             recs.append({
                 "type":            "REDUCE",
                 "urgency":         "high" if pct > DIVERSIFY_REDUCE_HIGH_URGENCY_PCT else "medium",
@@ -2276,10 +2310,12 @@ def diversification_recommendations(
                 "current_pct":     round(pct, 1),
                 "target_pct":      target_pct,
                 "reduce_pct":      reduce_pct,
-                "reduce_dollars":  round(portfolio_value * reduce_pct / 100),
+                "reduce_dollars":  round(portfolio_value * _reduce_frac / 100),
                 "weakest_tickers": weakest,
+                "n_holdings":      _n_holdings,
                 "reason": (
-                    f"**{sector}** is {pct:.0f}% of your portfolio — above the {SECTOR_REDUCE_TRIGGER:.0f}% sector cap. "
+                    f"{sector} is {pct:.1f}% of your portfolio, above the {SECTOR_REDUCE_TRIGGER:.0f}% "
+                    f"diversification trigger. Awareness only. "
                     f"Intra-sector correlation means these names move together on the same macro catalyst."
                 ),
             })

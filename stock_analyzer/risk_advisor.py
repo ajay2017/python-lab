@@ -828,6 +828,9 @@ def build_risk_advisor_recommendations(
             recs.append({
                 "priority": sec_priority,
                 "type":     "sector_concentration",
+                # Additive (SecTrig 2026-11-03): the sector this rec is about, so
+                # the Signals REDUCE card can defer to it without parsing `title`.
+                "sector":   top_sec,
                 "title": (
                     f"{top_sec} {top_wt:.1f}% — "
                     + ("Hard Cap Breach" if sec_priority == "HIGH"

@@ -379,6 +379,7 @@ from stock_analyzer import api_health as _ah
 from stock_analyzer import grow_dropoff as _grow_dropoff
 from stock_analyzer import ticker_history as _ticker_history
 from stock_analyzer import sector_fit
+from stock_analyzer import sector_trigger_text as _sector_trigger_text
 from stock_analyzer.pillar_availability import (
     verdict_basis as _verdict_basis,
     unmeasured_pillars as _unmeasured_pillars,
@@ -16724,26 +16725,35 @@ elif page == "📡 Signals & Advice":
             withheld_recs = [r for r in div_recs if r.get("type") == "PAIR_RISK_WITHHELD"]
 
             if reduce_recs:
-                st.subheader("🔻 Reduce / Rebalance")
+                st.subheader("🔻 Concentration")
+                # SecTrig: the sector card defers to the Risk Advisor's own rec
+                # (the detector Today's Brief uses); None = couldn't check.
+                _sec_risk_recs = _get_or_offline(st.session_state, "_risk_advisor_recs_cache")
                 for rec in reduce_recs:
-                    urgency_color = "#ff4444" if rec["urgency"] == "high" else "#ffbb33"
                     if rec["type"] == "REDUCE":
                         with st.container(border=True):
                             rc1, rc2 = st.columns([3, 1])
                             with rc1:
+                                # SecTrig: an early-awareness trigger, not a cap or a
+                                # reduce-by call; wording lives in sector_trigger_text.
+                                # Always amber: "awareness only" beside a red icon
+                                # contradicts itself; the 25% / 35% lines alarm elsewhere.
                                 st.markdown(
-                                    f"<span style='color:{urgency_color};font-weight:bold'>"
-                                    f"{'🔴' if rec['urgency']=='high' else '🟡'} "
-                                    f"{rec['sector']} — {rec['current_pct']}% → {rec['target_pct']}% target"
+                                    "<span style='color:#ffbb33;font-weight:bold'>🟡 "
+                                    f"{_safe_html(_sector_trigger_text.title(rec))}"
                                     f"</span>",
                                     unsafe_allow_html=True,
                                 )
-                                st.caption(rec["reason"])
+                                _sec_state = _sector_trigger_text.card_state(rec, _sec_risk_recs)
+                                st.caption(_sector_trigger_text.body(rec, _sec_state))
                             with rc2:
-                                st.metric("Reduce by", f"${rec['reduce_dollars']:,.0f}",
-                                          f"-{rec['reduce_pct']:.1f}%", delta_color="inverse")
+                                if _sec_state["show_size"]:
+                                    st.metric(_sector_trigger_text.size_label(),
+                                              _sector_trigger_text.size_value(rec))
+                                elif _sec_state["pointer"]:
+                                    st.caption(_sec_state["pointer"])
                             if rec["weakest_tickers"]:
-                                st.markdown("**Trim candidates** *(lowest conviction first)*:")
+                                st.markdown("**Weakest names in this sector** *(lowest conviction first)*:")
                                 cols = st.columns(len(rec["weakest_tickers"]))
                                 for col, wt in zip(cols, rec["weakest_tickers"]):
                                     sig_clean = wt["signal"].split()[-1] if wt["signal"] else "—"

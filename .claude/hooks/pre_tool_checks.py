@@ -1227,6 +1227,9 @@ _GATE_FILES = {
     "stock_analyzer/account_row_trust.py",
     # Added 2026-11-02 (bug register Bal): decides the Signals headline.
     "stock_analyzer/signals_headline.py",
+    # Added 2026-11-03 (bug register SecTrig): decides which band the Signals
+    # sector REDUCE card is in (early / elevated / hard_cap / unchecked) from the Risk Advisor's rec.
+    "stock_analyzer/sector_trigger_text.py",
 }
 
 

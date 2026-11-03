@@ -152,7 +152,7 @@ DAILY_NEW_POSITION_BUDGET_PCT = 40.0  # Owner decision 2026-10-15. Caps the SUM 
 # dropped. ADDITIVE to NET_CAPITAL_POSITION_CAP_PCT / SINGLE_NAME_CEILING; never trims
 # a holding; not a leverage gate (sizing only). Investment-policy value.
 SINGLE_NAME_TRIM_TRIGGER = 18.0  # soft trim trigger — position that grew past ceiling (price appreciation after entry)
-SECTOR_REDUCE_TRIGGER = 20.0     # sector diversification reduce trigger — recommend reducing to SINGLE_NAME_CEILING
+SECTOR_REDUCE_TRIGGER = 20.0     # sector diversification EARLY-AWARENESS trigger (not a cap): the 📡 Signals REDUCE card fires above it and sizes the trim back UNDER it (bug SecTrig, 2026-11-03)
 # diversification_recommendations() literals, named per 2026-07-29 audit
 # Medium finding (sat near-but-not-matching the ladder above with no comment).
 DIVERSIFY_REDUCE_HIGH_URGENCY_PCT = 30.0  # sector REDUCE rec above this pct = "high" urgency (else "medium")
