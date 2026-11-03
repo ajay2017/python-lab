@@ -184,7 +184,7 @@ def test_macro_protect_overweight_trim_sizes_from_exact():
     detail = mp._action_detail(
         _mp_row(Shares=2, **{"Shares Exact": 2.95, "Weight (%)": 13.0, "Market Value": 295.0}),
         "Non-Farm Payrolls", "PROTECT")
-    assert "sell 1 shares" in detail.lower()
+    assert "sell 1 share " in detail.lower()  # 1 share (text_fmt.share_word)
 
 
 # ── port_df column (Shares int baseline preserved, Shares Exact added) ────────

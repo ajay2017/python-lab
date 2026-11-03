@@ -14,6 +14,7 @@ from stock_analyzer.market_time import now_et, today_et
 from stock_analyzer.macro_release import release_passed, released_text
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.trim_sizing import exact_shares, fmt_shares, fraction_trim_shares, shares_to_trim
+from stock_analyzer.text_fmt import share_word
 
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
@@ -407,7 +408,7 @@ def _build_rationale(row, event_name: str, action: str, opp_downgraded: bool = F
         text = (
             f"**{ticker}** is high-conviction (score {composite_score_text(score)}/100, {signal}) in {sector} — "
             f"a sector that could move ~{bull_move:.0f}% on a {bull_label}. "
-            f"Positive revision momentum into an event is the strongest alpha setup in institutional investing."
+            f"Analyst rating changes ahead of the release are flagged to watch, not acted on: they size nothing here."
         )
         if action == "HOLD":
             text += (f" With the release within {MACRO_IMMINENT_DAYS} days this isn't shown as an add "
@@ -451,7 +452,7 @@ def _action_detail(row, event_name: str, action: str, time_et=None) -> str:
                 )
             trim_val   = round(trim_sh * (mval / shares)) if shares > 0 else 0
             return (
-                f"Trim to ~{SINGLE_NAME_CEILING:.0f}% weight: **sell {trim_sh:,} shares (~${trim_val:,.0f})** before the event. "
+                f"Trim to ≈{SINGLE_NAME_CEILING:.0f}% weight: **sell {trim_sh:,} {share_word(trim_sh)} (≈${trim_val:,.0f})** before the event. "
                 f"Keep the core position for the upside scenario — just cap the binary event risk."
             )
         trim_sh  = fraction_trim_shares(shares, MACRO_PROTECT_HALF_TRIM_PCT)
@@ -462,7 +463,7 @@ def _action_detail(row, event_name: str, action: str, time_et=None) -> str:
             )
         trim_val = round(trim_sh * price)
         return (
-            f"Reduce {MACRO_PROTECT_HALF_TRIM_PCT:.0f}% before the release: **sell {trim_sh:,} shares (~${trim_val:,.0f})**. "
+            f"Reduce {MACRO_PROTECT_HALF_TRIM_PCT:.0f}% before the release: **sell {trim_sh:,} {share_word(trim_sh)} (≈${trim_val:,.0f})**. "
             f"Re-enter from a smaller base if the report clears the risk."
         )
 

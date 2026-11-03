@@ -21,6 +21,7 @@ from stock_analyzer.entry_eligibility import email_footer_lines
 from stock_analyzer.risk import capital_equivalent_risk
 from stock_analyzer.sizing_path import room_note as _room_note
 from stock_analyzer.trade_economics import entry_tier
+from stock_analyzer.text_fmt import share_word
 
 _RESEND_ENDPOINT = "https://api.resend.com/emails"
 
@@ -163,7 +164,7 @@ def _cap_note_core(sz: dict) -> str:
         parts.append(
             f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
             f'📐 Size capped at {int(SINGLE_NAME_CEILING)}% single-name limit — '
-            f'risk-budget size would be {int(sz["uncapped_shares"])} shares.</div>'
+            f'risk-budget size would be {int(sz["uncapped_shares"])} {share_word(int(sz["uncapped_shares"]))}.</div>'
         )
     if sz.get("capital_capped") and sz.get("capital_pct") is not None:
         parts.append(
@@ -708,7 +709,7 @@ def render_buy_picks_email(picks: list[dict], built_at: str) -> tuple[str, str]:
         act_bits = []
         if _lo is not None and _hi is not None:
             _buy = f"Buy in <b style='color:#e5e7eb'>${float(_lo):.2f}–${float(_hi):.2f}</b>"
-            if _sh: _buy += f", ~<b style='color:#e5e7eb'>{int(_sh)} shares</b>"
+            if _sh: _buy += f", ~<b style='color:#e5e7eb'>{int(_sh)} {share_word(int(_sh))}</b>"
             if _tc: _buy += f" (~${float(_tc):,.0f}" + (f", {float(_pp):.1f}% of book" if _pp is not None else "") + ")"
             act_bits.append(_buy)
         if _stop is not None:
@@ -875,7 +876,7 @@ def render_daily_action_email(
     act_bits = []
     if _lo is not None and _hi_p is not None:
         _buy = f"Buy ${float(_lo):.2f}–${float(_hi_p):.2f}"
-        if _sh:  _buy += f", ~{int(_sh)} shares"
+        if _sh:  _buy += f", ~{int(_sh)} {share_word(int(_sh))}"
         if _tc:  _buy += f" (~${float(_tc):,.0f}" + (f", {float(_pp):.1f}% of book" if _pp is not None else "") + ")"
         act_bits.append(_buy)
     if _stop is not None:
@@ -1033,7 +1034,7 @@ def render_intraday_entry_email(
         _sh, _tc, _pp = sz.get("shares"), sz.get("total_cost"), sz.get("port_pct")
         size_str = ""
         if _sh:
-            size_str = f"~<b style='color:#e5e7eb'>{int(_sh)} shares</b>"
+            size_str = f"~<b style='color:#e5e7eb'>{int(_sh)} {share_word(int(_sh))}</b>"
             if _tc:
                 size_str += f" (~${float(_tc):,.0f}" + (f", {float(_pp):.1f}% of book" if _pp is not None else "") + ")"
 
@@ -1308,7 +1309,7 @@ def render_watchlist_entries_email(
                     _risk_dollars = round(float(_sh) * float(econ["risk_per_share"]), 2)
             except (TypeError, ValueError):
                 _risk_dollars = None
-            _size_bits = [f"{int(_sh)} shares"]
+            _size_bits = [f"{int(_sh)} {share_word(int(_sh))}"]
             if _tc is not None:
                 _size_bits.append(f"~${float(_tc):,.0f}")
             if _risk_dollars is not None:

@@ -666,7 +666,9 @@ def summary_stats(enriched: list[dict]) -> dict:
       best_pct / worst : largest gain / largest loss outcome
       avg_acted_pct    : mean outcome_pct for MATURE acted with priced outcome
       avg_missed_pct   : mean outcome_pct for MATURE missed with priced outcome
-      missed_alpha     : avg_missed_pct - avg_acted_pct (positive = leaving money on table)
+      missed_alpha     : avg_missed_pct - avg_acted_pct (positive = leaving money on table).
+                         A RAW-return gap, not alpha: shown as the "missed-return gap";
+                         the stored key keeps its name so saved reports still read.
       avg_acted_alpha  : mean alpha_pct (vs SPY) for mature acted — the regime-
                          adjusted read of whether acting beat the market
       avg_missed_alpha : mean alpha_pct (vs SPY) for mature missed

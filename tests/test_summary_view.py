@@ -12,6 +12,7 @@ to be safe:
   - a ticker with no quote is NEVER rendered as a 0% (flat) mover
   - the concentration badge fires AT the ceiling, not just past it
 """
+from datetime import datetime
 import pandas as pd
 import pytest
 
@@ -284,46 +285,47 @@ def test_drift_in_sync_is_reported_as_in_sync():
 # Tier-B measures from the last close (zero on a Saturday) while the providers'
 # change_pct still describes FRIDAY. Only the heading was wrong.
 
+def _et(y, mo, d, h, mi=0):
+    from stock_analyzer.market_time import ET
+    return ET.localize(datetime(y, mo, d, h, mi))
+
+
 def test_open_market_is_today():
-    assert summary_view.movers_window("Market Open") == "today"
+    assert summary_view.movers_window(_et(2026, 10, 28, 11)) == "today"       # Wed
 
 
 def test_after_hours_is_still_today():
-    # Today's session ran and closed; change_pct describes it.
-    assert summary_view.movers_window("After-Hours") == "today"
+    assert summary_view.movers_window(_et(2026, 10, 28, 17)) == "today"
 
 
-def test_early_close_half_day_is_today():
-    # Traded this morning, then closed for the holiday.
-    assert summary_view.movers_window("Market Closed (Early Close)") == "today"
+def test_between_2000_and_midnight_et_is_today():
+    # The Movers bug: the old label rule said "last_session" here while Home's
+    # Day Shock (session_label) said today.
+    assert summary_view.movers_window(_et(2026, 10, 28, 20, 30)) == "today"
+    assert summary_view.movers_window(_et(2026, 10, 28, 23, 59)) == "today"
 
 
 def test_weekend_is_last_session_not_today():
-    assert summary_view.movers_window("Market Closed (Weekend)") == "last_session"
+    assert summary_view.movers_window(_et(2026, 10, 31, 12)) == "last_session"  # Sat
+    assert summary_view.movers_window(_et(2026, 11, 1, 12)) == "last_session"   # Sun
 
 
 def test_holiday_is_last_session_not_today():
-    assert summary_view.movers_window("Market Closed (Holiday)") == "last_session"
+    assert summary_view.movers_window(_et(2026, 11, 26, 12)) == "last_session"  # Thanksgiving
 
 
 def test_pre_market_is_last_session_not_today():
-    # THE case that makes this more than a weekend fix: before the open on a
-    # normal trading day, change_pct still describes yesterday.
-    assert summary_view.movers_window("Pre-Market") == "last_session"
+    assert summary_view.movers_window(_et(2026, 10, 28, 8)) == "last_session"
+    assert summary_view.movers_window(_et(2026, 10, 28, 9, 29)) == "last_session"
 
 
-def test_ambiguous_closed_resolves_to_the_weaker_claim():
-    # market_status() emits a bare "Market Closed" both late on a trading
-    # evening (when the change IS today's) and pre-dawn (when it is not).
-    # Resolving to last_session can under-state but never over-state.
-    assert summary_view.movers_window("Market Closed") == "last_session"
-
-
-def test_unknown_label_does_not_claim_today():
-    # Fails safe: a label this function has never seen (a renamed phase, an
-    # empty string from a .get() miss) must not be read as "today".
-    for lbl in ("", "Something New", "market open"):   # note: case-sensitive
-        assert summary_view.movers_window(lbl) == "last_session"
+def test_agrees_with_session_label_everywhere():
+    from stock_analyzer.session_label import price_move_session
+    for day in (28, 30, 31):                       # Wed, Fri, Sat
+        for hour in (0, 8, 9, 10, 16, 19, 20, 23):
+            t = _et(2026, 10, day, hour, 30)
+            want = "today" if price_move_session(t)[0] else "last_session"
+            assert summary_view.movers_window(t) == want
 
 
 # ─── quote_change_pct: the single quote reader ───────────────────────────────

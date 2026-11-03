@@ -657,6 +657,24 @@ def test_build_rebalance_plan_zero_total_val_rebalance_pct_is_zero():
     assert result["rebalance_pct"] == 0.0
 
 
+def test_trim_pct_counts_only_trims_that_size_a_share():
+    # A sub-share trim (508 of drift at a 650 price) sells nothing, so only the
+    # real trim's 8000 counts toward "Trims would move".
+    df = pd.DataFrame([
+        _drift_row("META", "TRIM", 6.0, 508.0, price=650.0),
+        _drift_row("AAPL", "TRIM", 8.0, 8000.0, price=100.0),
+    ])
+    plan = reb.build_rebalance_plan(df, total_val=100_000.0)
+    by = {t["ticker"]: t for t in plan["trims"]}
+    assert by["META"]["shares_delta"] == 0 and by["AAPL"]["shares_delta"] >= 1
+    assert plan["trim_pct"] == 8.0
+
+
+def test_trim_pct_zero_when_every_trim_is_under_one_share():
+    tiny = pd.DataFrame([_drift_row("META", "TRIM", 6.0, 508.0, price=650.0)])
+    assert reb.build_rebalance_plan(tiny, total_val=10_000.0)["trim_pct"] == 0.0
+
+
 def test_trim_action_needed_false_when_action_trim_is_under_one_share():
     # A TRIM-status drift worth less than one share sizes no trim, so the
     # KPI must not say "Action required" for it.

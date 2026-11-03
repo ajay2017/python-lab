@@ -397,6 +397,10 @@ from stock_analyzer.util import sizing_unavailable_caption as _sizing_unavailabl
 from stock_analyzer.util import get_or_offline as _get_or_offline
 from stock_analyzer.util import numeric_or as _numeric_or
 from stock_analyzer.util import finite_or_none as _finite_or_none
+from stock_analyzer.text_fmt import signed_dollars as _sd
+from stock_analyzer.text_fmt import share_word as _share_word
+from stock_analyzer.text_fmt import signed_count as _signed_count
+from stock_analyzer.text_fmt import TRADE_HISTORY_GAP_NOTE as _TRADE_GAP_NOTE
 from stock_analyzer.util import pillar_tile as _pillar_tile
 from stock_analyzer.util import ETF_PILLAR_NA_SHORT, ETF_PILLAR_NA_REASON
 from stock_analyzer.util import bq_score_or_none as _bq_or_none
@@ -1031,7 +1035,7 @@ _TIPS = {
         f"• Technical ({int(COMPOSITE_WEIGHTS['technical']*100)}%): RSI, MACD, Moving Averages, Bollinger Bands, Volume\n"
         f"• Business Quality ({int(COMPOSITE_WEIGHTS['business_quality']*100)}%): Revenue & Earnings Growth, Margins, Debt/Equity\n"
         f"• Valuation ({int(COMPOSITE_WEIGHTS['valuation']*100)}%): Forward P/E, FCF Yield, Analyst PT Upside, Consensus Rating\n"
-        f"• Sentiment ({int(COMPOSITE_WEIGHTS['sentiment']*100)}%): VADER analysis of latest news headlines\n\n"
+        f"• Sentiment ({int(COMPOSITE_WEIGHTS['sentiment']*100)}%): news sentiment of the latest headlines\n\n"
         "Score thresholds:\n"
         f"• ≥ {COMPOSITE_STRONG_BUY} → Strong Buy\n• {COMPOSITE_BUY}–{COMPOSITE_STRONG_BUY - 1} → Buy\n"
         f"• {COMPOSITE_HOLD}–{COMPOSITE_BUY - 1} → Hold\n• {COMPOSITE_SELL}–{COMPOSITE_HOLD - 1} → Sell\n• < {COMPOSITE_SELL} → Strong Sell\n\n"
@@ -1479,13 +1483,13 @@ def _fmt_action(action: dict) -> tuple[str, str, str]:
         ns = action.get("new_stop")
         stop_str = f" AND raise stop to ${ns:.2f}." if ns else "."
         return (_HOME_ELEVATED, "ACT",
-                f"Trim {action['trim_shares']} shares "
+                f"Trim {action['trim_shares']} {_share_word(action['trim_shares'])} "
                 f"(≈${action['trim_dollars']:,.0f}, {action['trim_pct']:.0f}% of position)"
                 f"{stop_str}")
     if t == "TRIM_TO_TARGET":
         return (_HOME_ELEVATED, "ACT",
                 f"Trim {action['from_weight']:.1f}% → {action['target_weight']:.1f}% "
-                f"({action['trim_shares']} shares ≈ ${action['trim_dollars']:,.0f}).")
+                f"({action['trim_shares']} {_share_word(action['trim_shares'])} ≈ ${action['trim_dollars']:,.0f}).")
     if t == "PROTECTIVE_TRIM":
         # B-M6: `weakest_score` is None when every affected holding's score
         # was withheld -- the producer then picked the LARGEST position, so
@@ -1496,7 +1500,7 @@ def _fmt_action(action: dict) -> tuple[str, str, str]:
             else f"weakest in sector, score {action['weakest_score']:.0f}"
         )
         return (_HOME_ELEVATED, "ACT",
-                f"Trim {action['trim_ticker']} ({_pt_basis}) by {action['trim_shares']} shares "
+                f"Trim {action['trim_ticker']} ({_pt_basis}) by {action['trim_shares']} {_share_word(action['trim_shares'])} "
                 f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
                 f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
     if t == "DETERIORATION_WATCH":
@@ -1783,10 +1787,10 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                 _realized_pct = (_active / avg_cost - 1) * 100
                 _realized = (_active - avg_cost) * shares
                 _outcome = (
-                    f"locking in <b>{_realized_pct:+.1f}%</b> (<b>${_realized:+,.0f}</b> on {_trim_sizing.fmt_shares(shares)} shares) — "
+                    f"locking in <b>{_realized_pct:+.1f}%</b> (<b>{_sd(_realized, 0)}</b> on {_trim_sizing.fmt_shares(shares)} {_share_word(_trim_sizing.fmt_shares(shares))}) — "
                     f"a profitable exit, not a loss."
                     if _active >= avg_cost else
-                    f"realizing <b>{_realized_pct:+.1f}%</b> (<b>${_realized:+,.0f}</b> on {_trim_sizing.fmt_shares(shares)} shares) — "
+                    f"realizing <b>{_realized_pct:+.1f}%</b> (<b>{_sd(_realized, 0)}</b> on {_trim_sizing.fmt_shares(shares)} {_share_word(_trim_sizing.fmt_shares(shares))}) — "
                     f"the loss is capped here, by design."
                 )
                 st.markdown(
@@ -1825,7 +1829,7 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                     f"border-left:4px solid #3b82f6;color:#bfdbfe'>📈 <b>If a session closed at ${_safe_html(f'{_hypo:.2f}')} "
                     f"({_safe_html(f'{_gain_h:+.1f}')}% vs your cost)</b>, your stop {_safe_html(_verb)} <b>${_safe_html(f'{_in_force:.2f}')}</b> — "
                     f"{_safe_html(_src_txt)}. That is <b>{_safe_html(f'{_new_pct:+.1f}')}%</b> vs your average cost "
-                    f"(<b>${_safe_html(f'{_new_amt:+,.0f}')}</b> on {_safe_html(_trim_sizing.fmt_shares(shares))} shares). "
+                    f"(<b>{_safe_html(_sd(_new_amt, 0))}</b> on {_safe_html(_trim_sizing.fmt_shares(shares))} {_safe_html(_share_word(_trim_sizing.fmt_shares(shares)))}). "
                     f"The app doesn't place orders: put the same level in your broker "
                     f"yourself.{_safe_html(_note)}</div>",
                     unsafe_allow_html=True,
@@ -4572,7 +4576,7 @@ def _render_holdings_earnings(port_df, held_data):
             )
             _disp_earn.append({
                 "Ticker":        _r["Ticker"],
-                "Company":       _r["Company"][:28],
+                "Company":       _r["Company"][:40],
                 "Date":          str(_r["Earnings Date"]) if _r["Earnings Date"] else "—",
                 "Days Away":     _days_str,
                 "Urgency":       _urgency,
@@ -5082,10 +5086,10 @@ if page == "🏠 Home":
                         _sc[0].metric("Portfolio Value", f"${_s_total:,.0f}")
                         _s_prev_total = _s_total - _s_day
                         _sc[1].metric(
-                            "Today (held)", f"${_s_day:+,.0f}",
+                            "Today (held)", f"{_sd(_s_day, 0)}",
                             f"{(_s_day / _s_prev_total * 100 if _s_prev_total > 0 else 0):+.2f}%",
                         )
-                        _sc[2].metric("Open P&L", f"${_s_open:+,.0f}")
+                        _sc[2].metric("Open P&L", f"{_sd(_s_open, 0)}")
                         st.dataframe(
                             pd.DataFrame(_s_rows),
                             hide_index=True, width='stretch',
@@ -5663,11 +5667,11 @@ if page == "🏠 Home":
                 f"detected on {_sp['split_date']}</span>"
                 f"<div style='display:flex;gap:40px;margin-top:12px;font-size:0.9em'>"
                 f"<div><span style='color:#ef4444'>❌ Before adjustment</span><br>"
-                f"<b>{_sp['orig_shares']:g} shares</b> @ <b>${_sp['orig_avg_cost']:,.2f}</b><br>"
+                f"<b>{_sp['orig_shares']:g} {_share_word(_sp['orig_shares'])}</b> @ <b>${_sp['orig_avg_cost']:,.2f}</b><br>"
                 f"<span style='color:#ef4444'>P&L: {_sp['orig_pnl_pct']:+.1f}%</span></div>"
                 f"<div style='color:#aaa;font-size:1.4em;align-self:center'>→</div>"
                 f"<div><span style='color:#22c55e'>✅ After adjustment</span><br>"
-                f"<b>{_sp['adj_shares']:g} shares</b> @ <b>${_sp['adj_avg_cost']:,.2f}</b><br>"
+                f"<b>{_sp['adj_shares']:g} {_share_word(_sp['adj_shares'])}</b> @ <b>${_sp['adj_avg_cost']:,.2f}</b><br>"
                 f"<span style='color:#22c55e'>P&L: {_sp['adj_pnl_pct']:+.1f}%</span></div>"
                 f"<div style='color:#aaa;font-size:0.82em;align-self:center;max-width:260px'>"
                 f"Current price: <b>${_sp['current_price']:,.2f}</b><br>"
@@ -5727,8 +5731,8 @@ if page == "🏠 Home":
                         st.session_state.pop("_tj_drift_checked", None)
                         st.session_state.pop("_tj_drift_state",  None)
                         st.success(
-                            f"{_sp['ticker']} adjusted: {_sp['orig_shares']:g} shares @ "
-                            f"${_sp['orig_avg_cost']:,.2f} → {_sp['adj_shares']:g} shares @ "
+                            f"{_sp['ticker']} adjusted: {_sp['orig_shares']:g} {_share_word(_sp['orig_shares'])} @ "
+                            f"${_sp['orig_avg_cost']:,.2f} → {_sp['adj_shares']:g} {_share_word(_sp['adj_shares'])} @ "
                             f"${_sp['adj_avg_cost']:,.2f}"
                         )
                         st.rerun()
@@ -7825,7 +7829,7 @@ if page == "🏠 Home":
         _dp_flat = _signed_display(_dp_val, 0)[1] and _signed_display(_dp_pct, 2)[1]
         _c3.metric(
             "Today's P&L",
-            _m("$0" if _dp_flat else f"${_dp_val:+,.0f}"),
+            _m("$0" if _dp_flat else f"{_sd(_dp_val, 0)}"),
             ("0.00%" if _dp_flat else f"{_dp_pct:+.2f}%") + _dp_scope,
             # delta_color="normal" ALWAYS — it already colors green/red from the
             # delta string's own sign. The old "normal if X>=0 else inverse"
@@ -7834,6 +7838,7 @@ if page == "🏠 Home":
             # BOTH branches (a real loss showed a green down-arrow). Caught via
             # a user screenshot, 2026-08-31 — see feedback_streamlit_renderer_mismatch.
             delta_color="off" if _dp_flat else "normal",
+            delta_arrow="off" if _dp_flat else "auto",  # flat zero draws no arrow
             help=(
                 f"TRUE day P&L for your tracked positions, measured from the "
                 f"{_dpnl_baseline_date} close — held names + today's realized trades "
@@ -7846,9 +7851,10 @@ if page == "🏠 Home":
         _tp_flat = _signed_display(_today_pnl, 0)[1] and _signed_display(_today_pnl_pct, 2)[1]
         _c3.metric(
             "Today's P&L",
-            _m("$0" if _tp_flat else f"${_today_pnl:+,.0f}"),
+            _m("$0" if _tp_flat else f"{_sd(_today_pnl, 0)}"),
             "0.00%" if _tp_flat else f"{_today_pnl_pct:+.2f}%",
             delta_color="off" if _tp_flat else "normal",  # see the Tier-B branch above for why not a ternary
+            delta_arrow="off" if _tp_flat else "auto",  # flat zero draws no arrow
             help=(
                 "Held-position mark-to-market vs yesterday's close, updated every 60s. "
                 "Scope: currently-held positions only — excludes realized P&L from today's "
@@ -8015,7 +8021,7 @@ if page == "🏠 Home":
         _ub_bits = []
         for _d in _dpnl["unbaselined"]:
             _ub_amt = _m(f"\\${_d['value_impact']:,.0f}")
-            _ub_bits.append(f"**{_d['ticker']}** (~{_ub_amt})")
+            _ub_bits.append(f"**{_d['ticker']}** (≈{_ub_amt})")
         _ub_parts = ", ".join(_ub_bits)
         _dq_msgs.append(
             f"⚠️ Held with no prior-close baseline row: {_ub_parts}. Their **full value**, not "
@@ -8035,7 +8041,7 @@ if page == "🏠 Home":
         _ubs_bits = []
         for _d in _dpnl["unbaselined_sells"]:
             _ubs_amt = _m(f"\\${_d['value_impact']:,.0f}")
-            _ubs_bits.append(f"**{_d['ticker']}** (~{_ubs_amt})")
+            _ubs_bits.append(f"**{_d['ticker']}** (≈{_ubs_amt})")
         _ubs_parts = ", ".join(_ubs_bits)
         _dq_msgs.append(
             f"⚠️ Sold today with no prior-close baseline row and no current holding: "
@@ -9444,7 +9450,7 @@ if page == "🏠 Home":
 
         _g_bg    = "#052e16" if tone == "bull" else "#1c1917"
         _g_bdr   = "#22c55e" if tone == "bull" else "#ef4444" if tone == "bear" else "#4b5563"
-        _g_count = f" ({len(new_picks) + len(add_pos)} setups)" if (new_picks or add_pos) else ""
+        _g_count = f" ({len(new_picks) + len(add_pos)} setup{'' if len(new_picks) + len(add_pos) == 1 else 's'})" if (new_picks or add_pos) else ""
         _g_subtitle = (
             "Defer new entries — protect capital, reduce exposure."   if tone == "bear" else
             "High-conviction only — elevated caution in effect."       if tone == "flat" else
@@ -9972,7 +9978,7 @@ if page == "🏠 Home":
                     f"<span style='background:#052e16;border:1px solid #22c55e;color:#4ade80;"
                     f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'"
                     f" title='Surfaced from the broad ~200-name discovery universe — a breakout outside your tracked list'>"
-                    f"🔥 +{_gp['day_change']:.1f}% today</span>"
+                    f"🔥 +{_gp['day_change']:.1f}% {_move_when_phrase(_now_et())}</span>"
                 )
 
             # Steady-vs-yesterday chip (calm advisor 2C): a calm grey marker
@@ -10042,15 +10048,15 @@ if page == "🏠 Home":
                 + f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
                 f"💡 <em>{_gp['thesis']}</em></div>"
                 + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
-                   f"📐 Suggested: {_sz.get('shares',0)} shares · "
+                   f"📐 Suggested: {_sz.get('shares',0)} {_share_word(_sz.get('shares',0))} · "
                    f"Entry zone ${_sz.get('entry_lo', _gp['price']):.2f}–${_sz.get('entry_hi', _gp['price']):.2f} "
-                   f"= ~${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
+                   f"= ≈${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
                    # 1 decimal, not 0: the retired _suggest_size produced stop_pct
                    # of exactly 5.0/7.0/8.0 so :.0f was lossless, but an
                    # ATR-derived stop is fractional — 7.7 rendered as "8%" here
                    # while Analysis showed "-7.7%" for the same stop, which is the
                    # same two-numbers-for-one-thing incoherence F-249 removed.
-                   f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.1f}% below)"
+                   f"Stop ≈${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.1f}% below)"
                    f"</div>" if _sz.get('shares') else "")
                 + (
                     f"<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:6px'>"
@@ -10073,7 +10079,7 @@ if page == "🏠 Home":
             if _sz.get("ceiling_capped"):
                 st.caption(
                     f"📐 Size reduced to the {int(SINGLE_NAME_CEILING)}% single-name ceiling. "
-                    f"Risk-budget size would be {_sz['uncapped_shares']} shares."
+                    f"Risk-budget size would be {_sz['uncapped_shares']} {_share_word(_sz['uncapped_shares'])}."
                 )
             elif _sz.get("ceiling_infeasible"):
                 st.caption(
@@ -10392,7 +10398,7 @@ if page == "🏠 Home":
                 f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
                 f"💡 <em>{_ga['thesis']}</em></div>"
                 + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
-                   f"📐 Add: {_sz.get('shares',0)} shares ≈ ${_sz.get('total_cost',0):,.0f} "
+                   f"📐 Add: {_sz.get('shares',0)} {_share_word(_sz.get('shares',0))} ≈ ${_sz.get('total_cost',0):,.0f} "
                    # "Sizing stop", not "stop" — this is the fresh-entry ATR stop the
                    # add is sized against, deliberately NOT the ratcheted/manual
                    # protective stop the thesis line's "% above stop" measures from
@@ -10414,7 +10420,7 @@ if page == "🏠 Home":
             if _sz.get("ceiling_capped") and _room_txt is None:
                 st.caption(
                     f"📐 Add size reduced to the {int(SINGLE_NAME_CEILING)}% single-name ceiling. "
-                    f"Risk-budget size would be {_sz['uncapped_shares']} shares."
+                    f"Risk-budget size would be {_sz['uncapped_shares']} {_share_word(_sz['uncapped_shares'])}."
                 )
             elif _sz.get("room_capped") and _room_txt is not None:
                 st.caption(f"📐 {_room_txt.replace('$', chr(92) + '$')}.")
@@ -10918,7 +10924,7 @@ if page == "🏠 Home":
                 # momentum" would misdescribe it (F-302 follow-up).
                 _dc = c.get("day_change")
                 if c.get("is_mover") and isinstance(_dc, (int, float)):
-                    return f"Breakout {_dc:+.1f}% today", "→ skip (composite doesn't back the breakout)."
+                    return f"Breakout {_dc:+.1f}% {_move_when_phrase(_now_et())}", "→ skip (composite doesn't back the breakout)."
                 return (f"Momentum {c.get('momentum_score', 0):.0f}/100",
                         "→ skip (composite contradicts momentum).")
             _cs_rows = "".join(
@@ -11648,8 +11654,8 @@ if page == "🏠 Home":
                                     "low-conviction name(s)"
                                 )
                             st.caption(
-                                f"✓ **\\${_alloc['total_allocated']:,.0f}** of ~\\${_alloc['target']:,.0f} "
-                                f"· sector → ~{SECTOR_ELEVATED:.0f}%"
+                                f"✓ **\\${_alloc['total_allocated']:,.0f}** of ≈\\${_alloc['target']:,.0f} "
+                                f"· sector → ≈{SECTOR_ELEVATED:.0f}%"
                             )
                             if _alloc["shortfall"] > 0:
                                 st.caption(
@@ -11671,7 +11677,7 @@ if page == "🏠 Home":
                         _trim_recent = _rebal_flag.get("trim_excluded_recent") or []
                         if _trim_recent:
                             _tr_names = ", ".join(
-                                f"**{r['ticker']}** (~\\${r['market_value']:,.0f})"
+                                f"**{r['ticker']}** (≈\\${r['market_value']:,.0f})"
                                 for r in _trim_recent
                             )
                             st.caption(
@@ -12811,7 +12817,7 @@ if page == "🏠 Home":
                              f"${_ed_sum['deployed']:,.0f}" if _ed_sum["deployed"] else "—")
             _ed_sm_c3.metric(
                 "Realized P&L",
-                f"${_ed_sum['realized_pnl']:+,.0f}",
+                f"{_sd(_ed_sum['realized_pnl'], 0)}",
                 delta=None,
             )
             _ed_sm_c4.metric(
@@ -12828,7 +12834,7 @@ if page == "🏠 Home":
                 elif t.get("followed_signal") is False:
                     _comp_chip = "<span style='color:#fca5a5;font-size:0.78em'>✗ deviated from signal</span>"
                 _rpnl_str = (
-                    f" · Realized <b>${t['realized_pnl']:+,.0f}</b>"
+                    f" · Realized <b>{_sd(t['realized_pnl'], 0)}</b>"
                     if abs(t["realized_pnl"]) > 0 else ""
                 )
                 st.markdown(
@@ -14101,7 +14107,7 @@ elif page == "🧾 Summary":
     # Is the providers' change-vs-prev-close describing TODAY, or the last
     # completed session? On a weekend/holiday, or before the open, it is the
     # latter — and three surfaces on this page were calling it "today".
-    _sm_win = summary_view.movers_window(market_status().get("label", ""))
+    _sm_win = summary_view.movers_window(_now_et())
     _sm_win_word = "Today" if _sm_win == "today" else "Last session"
     _render_section_label("Today")
     _s1, _s2, _s3, _s4, _s5 = st.columns(5)
@@ -14142,12 +14148,13 @@ elif page == "🧾 Summary":
             _sm_dp_flat = (_signed_display(_sm_dpnl["day_pnl"], 0)[1]
                            and _signed_display(_sm_dpnl["day_pnl_pct"], 2)[1])
             st.metric(
-                "Today's P&L", _m("$0" if _sm_dp_flat else f"${_sm_dpnl['day_pnl']:+,.0f}"),
+                "Today's P&L", _m("$0" if _sm_dp_flat else f"{_sd(_sm_dpnl['day_pnl'], 0)}"),
                 ("0.00%" if _sm_dp_flat else f"{_sm_dpnl['day_pnl_pct']:+.2f}%") + _sm_dp_scope,
                 # Always "normal" — Streamlit already colors a signed delta by its
                 # own sign; the old ternary's "inverse" branch flipped a NEGATIVE
                 # delta to GREEN, so a real loss rendered a green down-arrow (2026-08-31).
                 delta_color="off" if _sm_dp_flat else "normal",
+                delta_arrow="off" if _sm_dp_flat else "auto",  # flat zero draws no arrow
                 help=(
                     (f"Day P&L for tracked positions, measured from the "
                      f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
@@ -14167,9 +14174,10 @@ elif page == "🧾 Summary":
             _sm_tp_flat = (_signed_display(_sm_today_pnl, 0)[1]
                            and _signed_display(_sm_today_pnl_pct, 2)[1])
             st.metric(
-                "Today's P&L (held)", _m("$0" if _sm_tp_flat else f"${_sm_today_pnl:+,.0f}"),
+                "Today's P&L (held)", _m("$0" if _sm_tp_flat else f"{_sd(_sm_today_pnl, 0)}"),
                 "0.00%" if _sm_tp_flat else f"{_sm_today_pnl_pct:+.2f}%",
                 delta_color="off" if _sm_tp_flat else "normal",  # see the Tier-B branch above for why not a ternary
+                delta_arrow="off" if _sm_tp_flat else "auto",  # flat zero draws no arrow
                 help="Held-position mark-to-market vs yesterday's close — excludes today's trades. "
                      "Visit 🏠 Home first this session for the fuller Tier-B figure.",
             )
@@ -16502,9 +16510,9 @@ elif page == "📡 Signals & Advice":
                                     f"This fund's expense ratio is a permanent drag, so there's less "
                                     f"reason to hold through a technical rough patch.  \n"
                                 ) + (_no_half_line if _no_half else (
-                                    f"Sell **{half} shares** (~\\${half_val:,.0f}) at market now to bank "
+                                    f"Sell **{half} {_share_word(half)}** (~\\${half_val:,.0f}) at market now to bank "
                                     f"the {act['pnl']:.0f}% gain on {_half_txt}.  \n"
-                                    f"Hold remaining {_trim_sizing.fmt_shares(act['shares'] - half)} shares with stop at "
+                                    f"Hold remaining {_trim_sizing.fmt_shares(act['shares'] - half)} {_share_word(_trim_sizing.fmt_shares(act['shares'] - half))} with stop at "
                                     f"**\\${act['stop']:.2f}** ({act['stop_type']})."
                                 ))
                             else:
@@ -16516,7 +16524,7 @@ elif page == "📡 Signals & Advice":
                                     "Half this position is under one share, so there is no "
                                     "partial trim — hold with the stop.  \n"
                                     if _no_half else
-                                    f"Option B (active): sell **{half} shares** (~\\${half_val:,.0f}) to "
+                                    f"Option B (active): sell **{half} {_share_word(half)}** (~\\${half_val:,.0f}) to "
                                     f"reduce exposure, trail the remainder with the existing stop.  \n"
                                 ) + (
                                     f"A low-cost fund on a technical signal alone doesn't warrant a full exit."
@@ -16526,9 +16534,9 @@ elif page == "📡 Signals & Advice":
                                 action_text = (
                                     f"**Business quality weakness — act with urgency.**  \n"
                                 ) + (_no_half_line if _no_half else (
-                                    f"Sell **{half} shares** (~\\${half_val:,.0f}) at market now to bank the "
+                                    f"Sell **{half} {_share_word(half)}** (~\\${half_val:,.0f}) at market now to bank the "
                                     f"{act['pnl']:.0f}% gain on {_half_txt}.  \n"
-                                    f"Hold remaining {_trim_sizing.fmt_shares(act['shares'] - half)} shares with stop at "
+                                    f"Hold remaining {_trim_sizing.fmt_shares(act['shares'] - half)} {_share_word(_trim_sizing.fmt_shares(act['shares'] - half))} with stop at "
                                     f"**\\${act['stop']:.2f}** ({act['stop_type']})."
                                 )) + (
                                     f"  \nRevisit full exit if stop is breached or next earnings disappoint."
@@ -16542,12 +16550,12 @@ elif page == "📡 Signals & Advice":
                                     "Half this position is under one share, so there is no "
                                     "partial trim — hold with the stop.  \n"
                                     if _no_half else
-                                    f"Option B (active): Sell **{half} shares** (~\\${half_val:,.0f}) to reduce "
+                                    f"Option B (active): Sell **{half} {_share_word(half)}** (~\\${half_val:,.0f}) to reduce "
                                     f"exposure, trail remainder with the existing stop.  \n"
                                 ) + (
                                     ("Do NOT sell the whole position on a technical signal alone "
                                      if _no_half else
-                                     f"Do NOT sell all {_trim_sizing.fmt_shares(act['shares'])} shares on a technical signal alone ")
+                                     f"Do NOT sell all {_trim_sizing.fmt_shares(act['shares'])} {_share_word(_trim_sizing.fmt_shares(act['shares']))} on a technical signal alone ")
                                     + "when fundamentals are solid."
                                 )
                                 if earn_flag:
@@ -16561,7 +16569,7 @@ elif page == "📡 Signals & Advice":
                                         action_text += f"  \n⚠️ Earnings proximity tips toward Option B — reduce before the report."
                         else:
                             action_text = _no_half_line if _no_half else (
-                                f"Sell **{half} shares** (~\\${half_val:,.0f}) to bank gain on {_half_txt}.  \n"
+                                f"Sell **{half} {_share_word(half)}** (~\\${half_val:,.0f}) to bank gain on {_half_txt}.  \n"
                                 f"Hold remainder with stop at **\\${act['stop']:.2f}**."
                             )
                             if _rbc_bq is not None and t_score is not None and not _rbc_bq_available:
@@ -16583,8 +16591,8 @@ elif page == "📡 Signals & Advice":
                         _tw = act.get("target_weight", SINGLE_NAME_CEILING)
                         if ts >= 1:
                             action_text = (
-                                f"Sell **{ts} share{'s' if ts != 1 else ''}** (~${ts * act['price']:,.0f}) to reduce from "
-                                f"{act['weight']:.0f}% → ~{_tw:.0f}% portfolio weight.  \n"
+                                f"Sell **{ts} share{'s' if ts != 1 else ''}** (≈${ts * act['price']:,.0f}) to reduce from "
+                                f"{act['weight']:.0f}% → ≈{_tw:.0f}% portfolio weight.  \n"
                                 f"This locks in a portion of the {act['pnl']:.0f}% gain while keeping "
                                 f"the core position."
                             )
@@ -18745,7 +18753,7 @@ elif page == "🔗 Risk Analysis":
                 f"letter-spacing:0.08em;text-transform:uppercase'>Scenario: {_active_sc['label']}</span><br>"
                 f"<span style='color:#bbb;font-size:0.88em'>{_active_sc['description']}</span><br><br>"
                 f"<span style='font-size:1.35em;font-weight:700;color:{_pnl_clr}'>"
-                f"Estimated Portfolio P&L: {_m(f'${_est_pnl:+,.0f}')}  ({_est_move:+.1f}%)</span><br>"
+                f"Estimated Portfolio P&L: {_m(f'{_sd(_est_pnl, 0)}')}  ({_est_move:+.1f}%)</span><br>"
                 f"<span style='color:#aaa;font-size:0.9em'>"
                 f"Portfolio value: {_m(f'${_port_val:,.0f}')}  →  {_m(f'${_post_val:,.0f}')} after shock</span>"
                 f"</div>",
@@ -18756,7 +18764,7 @@ elif page == "🔗 Risk Analysis":
             _s1, _s2, _s3, _s4 = st.columns(4)
             _s1.metric("SPY Shock",        f"{_sc_result['spy_move']:+.0f}%")
             _s2.metric("Est. Portfolio Δ", f"{_est_move:+.1f}%")  # no delta passed, delta_color was dead
-            st.metric("Est. $ Impact",    _m(f"${_est_pnl:+,.0f}"))  # no delta passed, delta_color was dead
+            st.metric("Est. $ Impact",    _m(f"{_sd(_est_pnl, 0)}"))  # no delta passed, delta_color was dead
             _s4.metric("Post-Shock Value", _m(f"${_post_val:,.0f}"))
 
             # Position impact table
@@ -18772,7 +18780,7 @@ elif page == "🔗 Risk Analysis":
                     x=_st_tickers,
                     y=_st_pnls,
                     marker_color=_st_clrs,
-                    text=[("••••" if st.session_state.get("_privacy") else f"${v:+,.0f}") for v in _st_pnls],
+                    text=[("••••" if st.session_state.get("_privacy") else f"{_sd(v, 0)}") for v in _st_pnls],
                     textposition="outside",
                     customdata=list(zip(_st_moves, [r["Weight (%)"] for r in _st_rows])),
                     hovertemplate=(
@@ -18825,7 +18833,7 @@ elif page == "🔗 Risk Analysis":
                             f"font-size:0.88em'>"
                             f"<b style='color:#ff6666'>{_me['Ticker']}</b> · {_me['Sector']}<br>"
                             f"<span style='color:#ccc'>{_me['Est. Move (%)']:+.1f}%  ·  "
-                            f"${_me['Est. P&L ($)']:+,.0f}  ·  {_me['Weight (%)']:.1f}% weight</span>"
+                            f"{_sd(_me['Est. P&L ($)'], 0)}  ·  {_me['Weight (%)']:.1f}% weight</span>"
                             f"</div>",
                             unsafe_allow_html=True,
                         )
@@ -18839,7 +18847,7 @@ elif page == "🔗 Risk Analysis":
                             f"font-size:0.88em'>"
                             f"<b style='color:#00C851'>{_ag['Ticker']}</b> · {_ag['Sector']}<br>"
                             f"<span style='color:#ccc'>{_ag['Est. Move (%)']:+.1f}%  ·  "
-                            f"${_ag['Est. P&L ($)']:+,.0f}  ·  {_ag['Weight (%)']:.1f}% weight</span>"
+                            f"{_sd(_ag['Est. P&L ($)'], 0)}  ·  {_ag['Weight (%)']:.1f}% weight</span>"
                             f"</div>",
                             unsafe_allow_html=True,
                         )
@@ -21259,7 +21267,7 @@ elif page == "🥧 Portfolio Overview":
                                     "Yield) was available — analyst opinion alone isn't "
                                     "scored as a verdict.")
                 sb4.metric("Sentiment",       f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (10%)",
-                           help="VADER analysis of latest news headlines from Yahoo Finance")
+                           help="News sentiment of the latest headlines from Yahoo Finance")
             else:
                 # An ETF's composite is technical (70%) + cost (30%) only —
                 # Business Quality/Valuation/Sentiment are structurally not
@@ -21336,8 +21344,11 @@ elif page == "🥧 Portfolio Overview":
                 _sm_items.append(("FCF Yield", f"{fcf_y:.1f}%", fcf_clr, _tip("FCF Yield")))
             if rev:
                 net = rev.get("net", 0)
-                rev_lbl = f"+{net} upgrades" if net > 0 else (f"{net} downgrades" if net < 0 else "neutral")
-                rev_clr = "#00C851" if net > 0 else ("#ff4444" if net < 0 else "#888")
+                # Whole-number net so a value that rounds to zero reads "neutral", never "-0 downgrades".
+                _net_n = int(round(float(net))) if isinstance(net, (int, float)) else 0
+                rev_lbl = (f"+{_net_n} upgrades" if _net_n > 0
+                           else (_signed_count(_net_n, "downgrades") if _net_n < 0 else "neutral"))
+                rev_clr = "#00C851" if _net_n > 0 else ("#ff4444" if _net_n < 0 else "#888")
                 _sm_items.append(("Revisions 90d", rev_lbl, rev_clr, _tip("Analyst Revisions")))
 
             if _sm_items:
@@ -22017,7 +22028,7 @@ elif page == "🥧 Portfolio Overview":
                             f"border-radius:6px;border-left:4px solid {_safe_html(_nw_brd)};margin:8px 0'>"
                             f"<span style='font-size:0.72em;color:{_safe_html(_nw_brd)};font-weight:700;"
                             f"letter-spacing:0.09em;text-transform:uppercase'>{_safe_html(_nw_lbl)}</span><br>"
-                            f"<span style='color:{_safe_html(_nw_txt)};font-size:0.88em'>{_safe_html(_nw['message'])}</span>"
+                            f"<span style='color:{_safe_html(_nw_txt)};font-size:0.88em'>{_safe_text(_nw['message'])}</span>"
                             f"</div>",
                             unsafe_allow_html=True,
                         )
@@ -22119,7 +22130,7 @@ elif page == "🥧 Portfolio Overview":
                 width='stretch', hide_index=True,
             )
             st.caption(
-                "Sentiment score: VADER compound −1.0 (very negative) → +1.0 (very positive).  "
+                "Sentiment score: news sentiment −1.0 (very negative) → +1.0 (very positive).  "
                 "Velocity = recent 7-day score minus prior 8–30-day score.  "
                 "🔴 Highlighted = deteriorating · Red row = bearish divergence · Blue row = bullish divergence."
             )
@@ -22156,10 +22167,10 @@ elif page == "🥧 Portfolio Overview":
                         _sv_m = st.columns(4)
                         _sv_m[0].metric("Recent Sentiment",
                                         f"{_sv['recent_score']:+.3f}" if _sv["recent_score"] is not None else "—",
-                                        help="Avg VADER compound score, last 7 days of news")
+                                        help="Avg news sentiment score, last 7 days of news")
                         _sv_m[1].metric("Prior Sentiment",
                                         f"{_sv['prior_score']:+.3f}" if _sv["prior_score"] is not None else "—",
-                                        help="Avg VADER compound score, 8–30 days ago")
+                                        help="Avg news sentiment score, 8–30 days ago")
                         _sv_m[2].metric("Velocity",
                                         f"{_vel:+.3f}" if _vel is not None else "—",
                                         delta="Improving" if (_vel and _vel > 0.12) else
@@ -22369,7 +22380,7 @@ elif page == "🥧 Portfolio Overview":
                     .apply(_tx_row_style, axis=1)
                     .map(_tx_type_style, subset=["Type"])
                     .format({
-                        "Unrealized P&L":  lambda v: f"${v:+,.0f}" if isinstance(v, (int,float)) else v,
+                        "Unrealized P&L":  lambda v: f"{_sd(v, 0)}" if isinstance(v, (int,float)) else v,
                         "Tax Today ($)":   lambda v: f"${v:,.0f}"  if isinstance(v, (int,float)) and v > 0 else "—",
                         "Tax at LTCG ($)": lambda v: f"${v:,.0f}"  if isinstance(v, (int,float)) and v > 0 else "—",
                         "Savings ($)":     lambda v: f"${v:,.0f}"  if isinstance(v, (int,float)) and v > 0 else "—",
@@ -22395,7 +22406,7 @@ elif page == "🥧 Portfolio Overview":
             if _blocked_rows:
                 _bh_rows = "".join(
                     f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{r['ticker']}</b> "
-                    f"(loss ${r['pnl']:+,.0f}, signal: {r.get('signal','')}) — "
+                    f"(loss {_sd(r['pnl'], 0)}, signal: {r.get('signal','')}) — "
                     f"investment view subordinates the tax opportunity.</div>"
                     for r in _blocked_rows[:5]
                 )
@@ -22424,7 +22435,7 @@ elif page == "🥧 Portfolio Overview":
                         expanded=True,
                     ):
                         _hc = st.columns(3)
-                        _hc[0].metric("Unrealized Loss",   f"${_hr['pnl']:+,.0f}")
+                        _hc[0].metric("Unrealized Loss",   f"{_sd(_hr['pnl'], 0)}")
                         _hc[1].metric("Tax Offset Value",  f"~${_hr['harvestable'] * _stcg_r:,.0f}",
                                       help=f"Loss × {_stcg_r*100:.0f}% STCG rate")
                         _hc[2].metric("Held",
@@ -22463,7 +22474,7 @@ elif page == "🥧 Portfolio Overview":
                         expanded=True,
                     ):
                         _wc = st.columns(4)
-                        _wc[0].metric("Unrealized Gain",  f"${_wr2['pnl']:+,.0f}")
+                        _wc[0].metric("Unrealized Gain",  f"{_sd(_wr2['pnl'], 0)}")
                         _wc[1].metric("Days to LTCG",     f"{_wr2['days_to_ltcg']}d")
                         _wc[2].metric("Tax if Sold Now",  f"${_wr2['tax_if_sold_today']:,.0f}")
                         _wc[3].metric("Tax Savings",      f"${_wr2['tax_savings']:,.0f}",
@@ -22499,7 +22510,7 @@ elif page == "🥧 Portfolio Overview":
                     for _lr in _ltcg_rows:
                         st.markdown(
                             f"**{_lr['ticker']}** — {_lr['days_to_ltcg']}d to LTCG · "
-                            f"gain ${_lr['pnl']:+,.0f} · "
+                            f"gain {_sd(_lr['pnl'], 0)} · "
                             f"tax saving ${_lr['tax_savings']:,.0f} by waiting"
                         )
 
@@ -22666,7 +22677,7 @@ elif page == "🥧 Portfolio Overview":
                     _dp1, _dp2, _dp3, _dp4 = st.columns(4)
                     _dp1.metric(
                         f"Net Alpha vs SPY ({_perf_period})",
-                        f"${_net_alpha_dollar:+,.0f}",
+                        f"{_sd(_net_alpha_dollar, 0)}",
                         "Outperforming" if _net_alpha_dollar >= 0 else "Underperforming",
                         delta_color="normal" if _net_alpha_dollar >= 0 else "inverse",
                         # A word delta has no leading "-", so "auto" always drew
@@ -22700,7 +22711,7 @@ elif page == "🥧 Portfolio Overview":
                         f"Alpha vs SPY: {r['Alpha vs SPY (%)']:+.1f}%<br>"
                         f"vs {r['ETF']}: "
                         + (f"{r['Alpha vs Sector (%)']:+.1f}%" if r['Alpha vs Sector (%)'] is not None else "—")
-                        + f"<br>Category: {r['Category']}<br>$ Alpha: ${r['Dollar Alpha ($)']:+,.0f}"
+                        + f"<br>Category: {r['Category']}<br>$ Alpha: {_sd(r['Dollar Alpha ($)'], 0)}"
                         for _, r in _asc.iterrows()
                     ]
                     _attr_fig = go.Figure(go.Bar(
@@ -22848,16 +22859,16 @@ elif page == "🥧 Portfolio Overview":
 
             # KPI strip
             _pk1, _pk2, _pk3, _pk4, _pk5 = st.columns(5)
-            _pk1.metric("Total P&L", _m(f"${_total_pnl:+,.0f}"))  # no delta passed, delta_color was dead
+            _pk1.metric("Total P&L", _m(f"{_sd(_total_pnl, 0)}"))  # no delta passed, delta_color was dead
             _pk2.metric("Gross Gains",    _m(f"${_win_total:,.0f}"),
                         f"{len(_winners)} positions", delta_color="off")
             _pk3.metric("Gross Losses",   _m(f"${_loss_total:,.0f}"),
                         f"{len(_losers)} positions",  delta_color="off")
             _pk4.metric(f"Top: {_best['Ticker']}",
-                        _m(f"${_best['P&L ($)']:+,.0f}"), f"{_best['P&L (%)']:+.1f}%",
+                        _m(f"{_sd(_best['P&L ($)'], 0)}"), f"{_best['P&L (%)']:+.1f}%",
                         delta_color="normal")
             _pk5.metric(f"Drag: {_worst['Ticker']}",
-                        _m(f"${_worst['P&L ($)']:+,.0f}"), f"{_worst['P&L (%)']:+.1f}%",
+                        _m(f"{_sd(_worst['P&L ($)'], 0)}"), f"{_worst['P&L (%)']:+.1f}%",
                         delta_color="inverse")
 
             # ── Waterfall chart ───────────────────────────────────────────────────
@@ -22871,19 +22882,19 @@ elif page == "🥧 Portfolio Overview":
             _priv = st.session_state.get("_privacy")
             _hover = [
                 f"{row['Ticker']}<br>"
-                + (f"P&L: •••• ({row['P&L (%)']:+.1f}%)<br>" if _priv else f"P&L: ${row['P&L ($)']:+,.0f} ({row['P&L (%)']:+.1f}%)<br>")
+                + (f"P&L: •••• ({row['P&L (%)']:+.1f}%)<br>" if _priv else f"P&L: {_sd(row['P&L ($)'], 0)} ({row['P&L (%)']:+.1f}%)<br>")
                 + f"Weight: {row['Weight (%)']:.1f}%<br>"
                 f"Sector: {row['Sector']}<br>"
                 f"Signal: {row['Signal']}"
                 for _, row in _pnl_df.iterrows()
-            ] + [("Total P&L: ••••" if _priv else f"Total P&L: ${_total_pnl:+,.0f}")]
+            ] + [("Total P&L: ••••" if _priv else f"Total P&L: {_sd(_total_pnl, 0)}")]
 
             _wf_fig = go.Figure(go.Waterfall(
                 orientation="v",
                 measure=_measures,
                 x=_tickers,
                 y=_values,
-                text=["••••" if _priv else f"${v:+,.0f}" for v in _values],
+                text=["••••" if _priv else f"{_sd(v, 0)}" for v in _values],
                 textposition="outside",
                 textfont=dict(size=11),
                 customdata=_hover,
@@ -22927,7 +22938,7 @@ elif page == "🥧 Portfolio Overview":
                     "#00C851" if v >= 0 else "#ff4444"
                     for v in _sec_pnl["P&L ($)"]
                 ],
-                text=[("••••" if st.session_state.get("_privacy") else f"${v:+,.0f}") for v in _sec_pnl["P&L ($)"]],
+                text=[("••••" if st.session_state.get("_privacy") else f"{_sd(v, 0)}") for v in _sec_pnl["P&L ($)"]],
                 textposition="outside",
                 customdata=list(zip(_sec_pnl["Sector"], _sec_pnl["Share of P&L (%)"])),
                 hovertemplate=(
@@ -26573,7 +26584,7 @@ elif page == "📈 Analysis":
                             "<div style='padding:12px;border-radius:8px;background:#dc262618;"
                             "border-left:5px solid #dc2626;margin-bottom:10px'>"
                             "<b style='font-size:1.05em;color:#dc2626'>⛔ Stop breached — exit signal</b>"
-                            f"<br><span style='color:#dc2626'>You hold <b>{_safe_html(_br_shares)} shares</b> and "
+                            f"<br><span style='color:#dc2626'>You hold <b>{_safe_html(_br_shares)} {_safe_html(_share_word(_br_shares))}</b> and "
                             f"price <b>${_safe_html(f'{price:.2f}')}</b> is at/below your {_safe_html(_br_stoplabel)} "
                             f"<b>${_safe_html(f'{_sa_stop:.2f}')}</b> (gap {_safe_html(f'{_br_gap:+.1f}')}%). Your mechanical rule says "
                             f"<b>sell all {_safe_html(_br_shares)} at next open</b> — the same exit Today's Brief "
@@ -26587,7 +26598,7 @@ elif page == "📈 Analysis":
                             "border-left:5px solid #dc2626;margin-bottom:10px'>"
                             "<b style='font-size:1.05em;color:#dc2626'>⛔ Stop breached — exit signal, "
                             "not an add</b>"
-                            f"<br><span style='color:#dc2626'>You hold <b>{_br_shares} shares</b> and "
+                            f"<br><span style='color:#dc2626'>You hold <b>{_br_shares} {_share_word(_br_shares)}</b> and "
                             f"price <b>${price:.2f}</b> is at/below your {_br_stoplabel} "
                             f"<b>${_sa_stop:.2f}</b> (gap {_br_gap:+.1f}%). Your mechanical rule says "
                             f"<b>sell all {_br_shares} at next open</b> — the same exit Today's Brief "
@@ -26690,7 +26701,7 @@ elif page == "📈 Analysis":
                     except Exception:
                         pass
                     st.info(
-                        f"**Already held:** {int(_sa_holding.get('Shares', 0))} shares · "
+                        f"**Already held:** {int(_sa_holding.get('Shares', 0))} {_share_word(int(_sa_holding.get('Shares', 0)))} · "
                         f"P&L {_sa_holding.get('P&L (%)', 0):+.1f}%.{_earn_note}"
                     )
                 return _stop_breached, _under_reduce, _rc
@@ -26732,7 +26743,7 @@ elif page == "📈 Analysis":
                             st.caption(_wh_cap)
                         _wc3.metric("Shares Held", f"{int(_sa_holding.get('Shares', 0)):,}")
                         _wc4.metric("P&L",
-                                    f"${_sa_holding.get('P&L ($)', 0):+,.0f}",
+                                    f"{_sd(_sa_holding.get('P&L ($)', 0), 0)}",
                                     f"{_sa_holding.get('P&L (%)', 0):+.1f}%")
                         if _hold_stop:  # skip when the engine reports "Stop Unavailable"
                             _render_stop_ladder(r, _sa_holding, price, under_reduce=bool(_wh_rc) or bool(_wh_br))
@@ -26746,7 +26757,7 @@ elif page == "📈 Analysis":
                         c3.metric("Position Value", f"${_sh.get('Market Value', 0):,.0f}")
                         c4.metric(
                             "P&L if Sold Now",
-                            f"${_sh.get('P&L ($)', 0):+,.0f}",
+                            f"{_sd(_sh.get('P&L ($)', 0), 0)}",
                             f"{_sh.get('P&L (%)', 0):+.1f}%",
                             delta_color="normal",
                         )
@@ -26847,7 +26858,7 @@ elif page == "📈 Analysis":
                                 _impact = ""
                                 if _held_shares and price:
                                     _chg = (_tgt - price) * _held_shares
-                                    _impact = f" (${_chg:+,.0f})"
+                                    _impact = f" ({_sd(_chg, 0)})"
                                 st.markdown(
                                     f"{_lbl} `${_tgt:.2f}` "
                                     f"<span style='color:{_clr}'>{_pct:+.1f}%{_impact}</span>",
@@ -26877,7 +26888,7 @@ elif page == "📈 Analysis":
                     if _sa_holding:
                         c3.metric("Shares Held", f"{int(_sa_holding.get('Shares', 0)):,}")
                         c4.metric("P&L",
-                                  f"${_sa_holding.get('P&L ($)', 0):+,.0f}",
+                                  f"{_sd(_sa_holding.get('P&L ($)', 0), 0)}",
                                   f"{_sa_holding.get('P&L (%)', 0):+.1f}%")
                         _hold_cap = _held_stop_view.basis_caption(_sa_holding)
                         if _hold_cap:
@@ -26891,7 +26902,7 @@ elif page == "📈 Analysis":
                             st.markdown(
                                 "<div style='background:#172554;border-left:4px solid #3b82f6;"
                                 "border-radius:6px;padding:10px 14px;color:#dbeafe;font-size:0.92em'>"
-                                f"<b>Hold</b> your {_safe_html(int(_sa_holding.get('Shares', 0)))} shares with stop at "
+                                f"<b>Hold</b> your {_safe_html(int(_sa_holding.get('Shares', 0)))} {_safe_html(_share_word(int(_sa_holding.get('Shares', 0))))} with stop at "
                                 f"<b>${_safe_html(f'{_hold_stop:.2f}')}</b>{_safe_html(_hold_manual_txt)}. "
                                 f"Mixed signals — re-check {_safe_html(_recheck)}. "
                                 f"Add to position if score ≥ {_safe_html(f'{COMPOSITE_BUY:.0f}')} and price holds above stop. "
@@ -26903,7 +26914,7 @@ elif page == "📈 Analysis":
                             st.markdown(
                                 "<div style='background:#172554;border-left:4px solid #3b82f6;"
                                 "border-radius:6px;padding:10px 14px;color:#dbeafe;font-size:0.92em'>"
-                                f"<b>Hold</b> your {_safe_html(int(_sa_holding.get('Shares', 0)))} shares — "
+                                f"<b>Hold</b> your {_safe_html(int(_sa_holding.get('Shares', 0)))} {_safe_html(_share_word(int(_sa_holding.get('Shares', 0))))} — "
                                 "no stop could be built for this position, so set one at your broker. "
                                 f"Mixed signals — re-check {_safe_html(_recheck)}. "
                                 f"Add to position only if score ≥ {_safe_html(f'{COMPOSITE_BUY:.0f}')}."
@@ -27292,13 +27303,13 @@ elif page == "📈 Analysis":
                         if _ps_f255.get("ceiling_capped") and not _ps_f255.get("room_capped"):
                             st.warning(
                                 f"⚠️ **Capped to your {_ps_f255['ceiling_pct']:.0f}% single-name ceiling.** "
-                                f"A pure risk-based size would be **{_ps_f255['uncapped_shares']:,} shares "
+                                f"A pure risk-based size would be **{_ps_f255['uncapped_shares']:,} {_share_word(_ps_f255['uncapped_shares'])} "
                                 f"(~{_ps_f255['uncapped_pct']:.0f}% of portfolio)** — over the ceiling, because the "
                                 "stop is tight, so the risk-budget math inflates the dollar size. "
-                                + (f"Before today's budget the cap gave **{_ps_f255['shares']:,} shares "
+                                + (f"Before today's budget the cap gave **{_ps_f255['shares']:,} {_share_word(_ps_f255['shares'])} "
                                    f"(~{_ps_f255['portfolio_pct']:.0f}%)**."
                                    if _ps_budget_cut else
-                                   f"The figures above are capped to **{ps['shares']:,} shares "
+                                   f"The figures above are capped to **{ps['shares']:,} {_share_word(ps['shares'])} "
                                    f"(~{ps['portfolio_pct']:.0f}%)**.")
                             )
                         if _ps_f255.get("capital_capped") and not _ps_f255.get("room_capped"):
@@ -27306,10 +27317,10 @@ elif page == "📈 Analysis":
                                 f"⚠️ **Also capped to your {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap"
                                 ".** This is separate from the single-name book cap above — it gates on "
                                 "equity after margin debit, not gross book value. "
-                                + (f"Before today's budget the cap gave **{_ps_f255['shares']:,} shares "
+                                + (f"Before today's budget the cap gave **{_ps_f255['shares']:,} {_share_word(_ps_f255['shares'])} "
                                    f"(~{_ps_f255['capital_pct']:.0f}% of your net capital)**."
                                    if _ps_budget_cut else
-                                   f"The figures above are sized to **{ps['shares']:,} shares "
+                                   f"The figures above are sized to **{ps['shares']:,} {_share_word(ps['shares'])} "
                                    f"(~{ps['capital_pct']:.0f}% of your net capital)**.")
                             )
                         if _ps_bud_note:
@@ -27332,7 +27343,7 @@ elif page == "📈 Analysis":
                                     f"⚠ **Beta envelope:** Portfolio beta is already **{_sa_port_beta:.1f}** (elevated). "
                                     f"This stock's beta is **{_sa_tick_beta:.1f}** — a full-size position would "
                                     f"add meaningful market risk. Consider taking **50–60% of the suggested "
-                                    f"{ps['shares']:,} shares** to keep portfolio beta in check."
+                                    f"{ps['shares']:,} {_share_word(ps['shares'])}** to keep portfolio beta in check."
                                 )
                             elif _sa_tick_beta > TICKER_BETA_CRITICAL:
                                 st.warning(
@@ -27921,7 +27932,7 @@ elif page == "📈 Analysis":
                             )
                 with dd3:
                     st.markdown(f"**Sentiment — {r['s_score']:.0f}/100**")
-                    st.caption("VADER · Yahoo Finance news · −1 bearish → +1 bullish")
+                    st.caption("News sentiment · Yahoo Finance news · −1 bearish → +1 bullish")
                     if _da_etf_ok:
                         st.caption(ETF_PILLAR_NA_REASON)
                     for h in r["headlines"][:6]:
@@ -30822,7 +30833,7 @@ elif page == "📒 Trade Journal":
             _ps_pnl_line = f"  ·  Realized P&L: **{_ps_pnl_sign}${abs(_ps_pnl):,.2f}**"
         st.warning(
             f"⚠️ **Confirm this SELL before it's recorded**\n\n"
-            f"SELL **{_ps_shares:g} shares of {_ps_ticker}** "
+            f"SELL **{_ps_shares:g} {_share_word(_ps_shares)} of {_ps_ticker}** "
             f"at **${_ps_price:,.2f}**"
             f"{_ps_pnl_line}\n\n"
             f"This will update your holdings and P&L — the record cannot be undone without a manual correction."
@@ -30885,12 +30896,12 @@ elif page == "📒 Trade Journal":
                         _ps_h_df.at[_ps_h_idx, "Shares"] = (
                             int(_ps_new) if _ps_new == int(_ps_new) else _ps_new
                         )
-                        _ps_pnl_str = f"${_ps_pnl:+,.2f}" if _ps_pnl is not None else "—"
+                        _ps_pnl_str = f"{_sd(_ps_pnl, 2)}" if _ps_pnl is not None else "—"
                         _ps_pnl_pct = ((_ps_price - _ps_cb) / _ps_cb * 100 if _ps_cb else 0)
                         _ps_msg = (
-                            f"✅ Sold **{_ps_shares:.0f} shares of {_ps_ticker}** "
+                            f"✅ Sold **{_ps_shares:.0f} {_share_word(_ps_shares)} of {_ps_ticker}** "
                             f"@ ${_ps_price:.2f}  ·  "
-                            f"Holdings: {_ps_cur:.0f} → {_ps_new:.0f} shares  ·  "
+                            f"Holdings: {_ps_cur:.0f} → {_ps_new:.0f} {_share_word(_ps_new)}  ·  "
                             f"Realized P&L: **{_ps_pnl_str}** ({_ps_pnl_pct:+.1f}%)"
                         )
                     # D2: only claim success, and only update the app's own view,
@@ -30974,7 +30985,7 @@ elif page == "📒 Trade Journal":
         _pb_extra = ("\n\n" + "\n\n".join(_pb_extra_lines)) if _pb_extra_lines else ""
         st.info(
             f"**Confirm this BUY before it's recorded**\n\n"
-            f"BUY **{_pb_shares:g} shares of {_pb_ticker}** "
+            f"BUY **{_pb_shares:g} {_share_word(_pb_shares)} of {_pb_ticker}** "
             f"at **${_pb_price:,.2f}**"
             f"{_pb_extra}"
         )
@@ -31060,8 +31071,8 @@ elif page == "📒 Trade Journal":
                     )
                     _pb_h_df.at[_pb_h_idx, "Avg Cost ($)"] = _pb_new_avg
                     _pb_msg = (
-                        f"✅ Added **{_pb_shares:.0f} shares of {_pb_ticker}** @ ${_pb_price:.2f}  ·  "
-                        f"Holdings: {_pb_old_shares:.0f} → {_pb_new_shares:.0f} shares  ·  "
+                        f"✅ Added **{_pb_shares:.0f} {_share_word(_pb_shares)} of {_pb_ticker}** @ ${_pb_price:.2f}  ·  "
+                        f"Holdings: {_pb_old_shares:.0f} → {_pb_new_shares:.0f} {_share_word(_pb_new_shares)}  ·  "
                         f"New avg cost: **${_pb_new_avg:.2f}**"
                     )
                 else:
@@ -32079,7 +32090,7 @@ elif page == "📒 Trade Journal":
                 ]
                 if _h_match.empty:
                     _shares_block_reason = (
-                        f"You're trying to sell <b>{shares_val:g} shares</b> of "
+                        f"You're trying to sell <b>{shares_val:g} {_share_word(shares_val)}</b> of "
                         f"<b>{ticker_input}</b> but don't currently hold any "
                         "shares of this ticker. If this is a historical "
                         "backfill (a trade you executed before using the app), "
@@ -32091,7 +32102,7 @@ elif page == "📒 Trade Journal":
                     _held_shares = float(_h_match.iloc[0]["Shares"])
                     if shares_val > _held_shares + 1e-6:
                         _shares_block_reason = (
-                            f"You're trying to sell <b>{shares_val:g} shares</b> of "
+                            f"You're trying to sell <b>{shares_val:g} {_share_word(shares_val)}</b> of "
                             f"<b>{ticker_input}</b> but only hold <b>{_held_shares:g}</b>. "
                             "Correct the share count, tick <b>'Allow unusual "
                             "price'</b> above the form if this is a historical "
@@ -32489,16 +32500,17 @@ elif page == "📒 Trade Journal":
         # ── Performance Dashboard ─────────────────────────────────────────────────
         if stats["total_trades"] > 0:
             st.subheader("📊 Performance Dashboard")
+            st.caption(_TRADE_GAP_NOTE)
             pm1, pm2, pm3, pm4, pm5 = st.columns(5)
             pnl_total = stats["total_realized_pnl"]
-            pm1.metric("Realized P&L",  f"${pnl_total:+,.2f}",
+            pm1.metric("Realized P&L",  f"{_sd(pnl_total, 2)}",
                        help="Total profit/loss from all closed (SELL) trades.")
             pm2.metric("Win Rate",      f"{stats['win_rate']:.0f}%",
                        f"{stats['wins']}W / {stats['losses']}L",
                        help="% of sell trades that were profitable.")
-            pm3.metric("Avg Winner",    f"${stats['avg_winner']:+,.0f}",
+            pm3.metric("Avg Winner",    f"{_sd(stats['avg_winner'], 0)}",
                        help="Average profit on winning trades.")
-            pm4.metric("Avg Loser",     f"${stats['avg_loser']:+,.0f}",
+            pm4.metric("Avg Loser",     f"{_sd(stats['avg_loser'], 0)}",
                        help="Average loss on losing trades.")
             pm5.metric("Trades Logged", stats["total_trades"],
                        f"{stats['sell_trades']} sells · {stats['buy_trades']} buys")
@@ -32538,7 +32550,7 @@ elif page == "📒 Trade Journal":
                     f"border-left:4px solid {exp_clr};margin:8px 0'>"
                     f"<span style='font-size:0.8em;color:#888'>TRADE EXPECTANCY</span> "
                     f"<span style='color:{exp_clr};font-weight:bold;font-size:1.05em'>"
-                    f"${expectancy:+,.2f} per trade</span>"
+                    f"{_sd(expectancy, 2)} per trade</span>"
                     f"<span style='font-size:0.78em;color:#666'> · "
                     f"Positive = your strategy makes money on average across wins and losses</span></div>",
                     unsafe_allow_html=True,
@@ -32554,7 +32566,7 @@ elif page == "📒 Trade Journal":
                 pnl_bar = _go.Figure(_go.Bar(
                     x=tickers_sorted, y=vals,
                     marker_color=colors,
-                    text=[f"${v:+,.0f}" for v in vals],
+                    text=[f"{_sd(v, 0)}" for v in vals],
                     textposition="outside",
                 ))
                 pnl_bar.update_layout(
@@ -32578,14 +32590,14 @@ elif page == "📒 Trade Journal":
                         import pandas as _pd_perf
                         _top_df = _pd_perf.DataFrame(_top5, columns=["Ticker", "Realized P&L ($)"])
                         _top_df["Realized P&L ($)"] = _top_df["Realized P&L ($)"].apply(
-                            lambda v: f"${v:+,.2f}"
+                            lambda v: f"{_sd(v, 2)}"
                         )
                         st.dataframe(_top_df, width="stretch", hide_index=True)
                     with _tp2:
                         st.markdown("**📉 Bottom 5 Performers**")
                         _bot_df = _pd_perf.DataFrame(_bot5, columns=["Ticker", "Realized P&L ($)"])
                         _bot_df["Realized P&L ($)"] = _bot_df["Realized P&L ($)"].apply(
-                            lambda v: f"${v:+,.2f}"
+                            lambda v: f"{_sd(v, 2)}"
                         )
                         st.dataframe(_bot_df, width="stretch", hide_index=True)
 
@@ -32596,14 +32608,14 @@ elif page == "📒 Trade Journal":
                     bt = stats["best_trade"]
                     bw1.success(
                         f"🏆 **Best trade**: {bt['ticker']} — "
-                        f"sold {bt['shares']:.0f} shares @ ${bt['price']:.2f} · "
+                        f"sold {bt['shares']:.0f} {_share_word(bt['shares'])} @ ${bt['price']:.2f} · "
                         f"**+${bt['realized_pnl']:,.2f}**"
                     )
                 if stats["worst_trade"]:
                     wt = stats["worst_trade"]
                     bw2.error(
                         f"📉 **Worst trade**: {wt['ticker']} — "
-                        f"sold {wt['shares']:.0f} shares @ ${wt['price']:.2f} · "
+                        f"sold {wt['shares']:.0f} {_share_word(wt['shares'])} @ ${wt['price']:.2f} · "
                         f"**${wt['realized_pnl']:,.2f}**"
                     )
 
@@ -32676,7 +32688,7 @@ elif page == "📒 Trade Journal":
                         y=_mon["pnl"],
                         marker_color=_mon_colors,
                         name="Monthly P&L",
-                        text=[f"${v:+,.0f}" for v in _mon["pnl"]],
+                        text=[f"{_sd(v, 0)}" for v in _mon["pnl"]],
                         textposition="outside",
                         customdata=list(zip(_mon["trade_count"], _mon["win_rate"])),
                         hovertemplate=(
@@ -32733,7 +32745,7 @@ elif page == "📒 Trade Journal":
                     for _tc in ["Total P&L ($)", "Avg Win ($)", "Avg Loss ($)", "Expectancy ($)"]:
                         if _tc in _trig_display.columns:
                             _trig_display[_tc] = _trig_display[_tc].apply(
-                                lambda v: f"${v:+,.0f}" if pd.notna(v) else "—"
+                                lambda v: f"{_sd(v, 0)}" if pd.notna(v) else "—"
                             )
                     for _tc in ["Win Rate (%)"]:
                         if _tc in _trig_display.columns:
@@ -32984,12 +32996,12 @@ elif page == "📒 Trade Journal":
             )
             _dj_k4.metric(
                 "P&L from following",
-                f"${_dj['followed_pnl']:+,.0f}",
+                f"{_sd(_dj['followed_pnl'], 0)}",
                 help="Total realized P&L on trades where you followed the signal",
             )
             _dj_k5.metric(
                 "P&L from overrides",
-                f"${_dj['ignored_pnl']:+,.0f}",
+                f"{_sd(_dj['ignored_pnl'], 0)}",
                 help="Total realized P&L on trades where you overrode the signal",
             )
 
@@ -33003,7 +33015,7 @@ elif page == "📒 Trade Journal":
                         f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
                         f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
                         f"📉 <span style='color:#fbbf24'>{_cd['ticker']}</span> · "
-                        f"<span style='color:#ef4444'>${_cd['realized_pnl']:+,.0f}</span> · "
+                        f"<span style='color:#ef4444'>{_sd(_cd['realized_pnl'], 0)}</span> · "
                         f"<span style='color:#9ca3af;font-weight:400'>{_cd['traded_at']}</span></div>"
                         + (f"<div style='color:#9ca3af;font-size:0.8em;margin-top:2px'>"
                            f"Signal: {_cd['signal_seen']}</div>" if _cd["signal_seen"] else "")
@@ -33024,7 +33036,7 @@ elif page == "📒 Trade Journal":
                             f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
                             f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
                             f"✅ <span style='color:#4ade80'>{_go_item['ticker']}</span> · "
-                            f"<span style='color:#22c55e'>${_go_item['realized_pnl']:+,.0f}</span> · "
+                            f"<span style='color:#22c55e'>{_sd(_go_item['realized_pnl'], 0)}</span> · "
                             f"<span style='color:#9ca3af;font-weight:400'>{_go_item['traded_at']}</span></div>"
                             + (f"<div style='color:#9ca3af;font-size:0.8em;margin-top:2px'>"
                                f"Signal: {_go_item['signal_seen']}</div>" if _go_item["signal_seen"] else "")
@@ -33055,7 +33067,7 @@ elif page == "📒 Trade Journal":
                             _cat_clr    = "#22c55e" if _cat_avg >= 0 else "#ef4444"
                             _cat_wl     = (
                                 f"<span style='color:#9ca3af;font-size:0.78em'> · "
-                                f"{_cat_wins}W/{_cat_losses}L · avg ${_cat_avg:+,.0f}</span>"
+                                f"{_cat_wins}W/{_cat_losses}L · avg {_sd(_cat_avg, 0)}</span>"
                                 if (_cat_wins + _cat_losses) > 0 else ""
                             )
                             st.markdown(
@@ -33425,8 +33437,8 @@ elif page == "📒 Trade Journal":
                                 _corr_rows.append({
                                     "Trade ID":      _tid,
                                     "Ticker":        _ticker,
-                                    "Stored P&L":    f"${(_c['stored_pnl'] or 0):+,.2f}",
-                                    "Corrected P&L": f"${_c['realized_pnl']:+,.2f}",
+                                    "Stored P&L":    f"{_sd(_c['stored_pnl'] or 0, 2)}",
+                                    "Corrected P&L": f"{_sd(_c['realized_pnl'], 2)}",
                                     "Corrected basis": f"${_c['cost_basis']:.2f}",
                                 })
                             st.dataframe(pd.DataFrame(_corr_rows), hide_index=True,
@@ -34104,6 +34116,8 @@ elif page == "🪞 Trade Review":
     )
 
     # ── Look-back toggle ──────────────────────────────────────────────────────
+    st.caption(_TRADE_GAP_NOTE)
+
     _tr_options = {"Last 2 weeks": 14, "Last 30 days": 30, "Last 60 days": 60, "Last 90 days": 90, "All time": 0}
     _tr_choice  = st.radio(
         "Look-back window",
@@ -34291,7 +34305,7 @@ elif page == "🪞 Trade Review":
                 f"<div style='color:#f9fafb;font-size:1.7em;font-weight:700;margin-top:4px'>{_fmt_win_rate(_m)}</div>"
                 f"<div style='color:#cbd5e1;font-size:0.82em;margin-top:4px'>"
                 f"Net P&L: <b style='color:{'#86efac' if _m['net_pnl'] >= 0 else '#fca5a5'}'>"
-                f"${_m['net_pnl']:+,.0f}</b> · {_m['n_trades']} total</div>"
+                f"{_sd(_m['net_pnl'], 0)}</b> · {_m['n_trades']} total</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -34306,7 +34320,7 @@ elif page == "🪞 Trade Review":
                 f"<div style='color:#f9fafb;font-size:1.7em;font-weight:700;margin-top:4px'>{_fmt_win_rate(_m)}</div>"
                 f"<div style='color:#cbd5e1;font-size:0.82em;margin-top:4px'>"
                 f"Net P&L: <b style='color:{'#86efac' if _m['net_pnl'] >= 0 else '#fca5a5'}'>"
-                f"${_m['net_pnl']:+,.0f}</b> · {_m['n_trades']} total</div>"
+                f"{_sd(_m['net_pnl'], 0)}</b> · {_m['n_trades']} total</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -34333,7 +34347,7 @@ elif page == "🪞 Trade Review":
                     f"<div style='color:#f9fafb;font-size:1.7em;font-weight:700;margin-top:4px'>{_fmt_win_rate(_m)}</div>"
                     f"<div style='color:#cbd5e1;font-size:0.82em;margin-top:4px'>"
                     f"Net P&L: <b style='color:{'#86efac' if _m['net_pnl'] >= 0 else '#fca5a5'}'>"
-                    f"${_m['net_pnl']:+,.0f}</b> · {_m['n_trades']} total · S&P ≤ -1.5% days</div>"
+                    f"{_sd(_m['net_pnl'], 0)}</b> · {_m['n_trades']} total · S&P ≤ -1.5% days</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -34555,7 +34569,7 @@ elif page == "🪞 Trade Review":
                 f"<span style='color:{_act_col};font-weight:600'>{_action_esc}</span> "
                 f"<b>{_ticker_esc}</b> · "
                 f"{t['shares']:.0f}sh @ ${t['price']:.2f} · "
-                f"<b style='color:{_pnl_col}'>${t['outcome_pnl']:+,.0f} "
+                f"<b style='color:{_pnl_col}'>{_sd(t['outcome_pnl'], 0)} "
                 f"({t['outcome_pct']:+.2f}%)</b>"
                 f"{_extra_str}"
                 f" <span style='color:#64748b'>· {_dt_str}</span>{_chip}"
@@ -34665,7 +34679,7 @@ elif page == "🪞 Trade Review":
                         f"margin:10px 0 4px'>{_tr} — "
                         f"<span style='font-weight:400'>{_w}/{_n} wins · "
                         f"<b>{_wr:.0f}%</b> win rate · net "
-                        f"<b style='color:{_net_col}'>${_net:+,.0f}</b></span></div>",
+                        f"<b style='color:{_net_col}'>{_sd(_net, 0)}</b></span></div>",
                         unsafe_allow_html=True,
                     )
                     for _t in _ts:
@@ -34726,7 +34740,7 @@ elif page == "🪞 Trade Review":
                         f"margin:10px 0 4px'>{_day} — "
                         f"<span style='font-weight:400'>{_w}/{_n} wins · "
                         f"<b>{_wr:.0f}%</b> win rate · net "
-                        f"<b style='color:{_net_col}'>${_net:+,.0f}</b></span></div>",
+                        f"<b style='color:{_net_col}'>{_sd(_net, 0)}</b></span></div>",
                         unsafe_allow_html=True,
                     )
                     for _t in _ts:
@@ -34746,7 +34760,7 @@ elif page == "🪞 Trade Review":
                             f"<div style='color:#f9fafb;font-weight:700;font-size:0.88em;"
                             f"margin:8px 0 4px'>{_g['ticker']} — "
                             f"<span style='color:#fca5a5'>{_g['n_trades']}× = "
-                            f"${_g['net_pnl']:+,.0f}</span></div>",
+                            f"{_sd(_g['net_pnl'], 0)}</span></div>",
                             unsafe_allow_html=True,
                         )
                         for _t in _g.get("trades", []):
@@ -34762,7 +34776,7 @@ elif page == "🪞 Trade Review":
                             f"<div style='color:#f9fafb;font-weight:700;font-size:0.88em;"
                             f"margin:8px 0 4px'>{_g['ticker']} — "
                             f"<span style='color:#86efac'>{_g['n_trades']}× = "
-                            f"${_g['net_pnl']:+,.0f}</span></div>",
+                            f"{_sd(_g['net_pnl'], 0)}</span></div>",
                             unsafe_allow_html=True,
                         )
                         for _t in _g.get("trades", []):
@@ -34954,9 +34968,9 @@ elif page == "🪞 Trade Review":
                         _unr_col  = "#86efac" if _unr  >= 0 else "#fca5a5"
                         _split_note = (
                             f"<div style='color:#a78bfa;font-size:0.78em;margin-top:3px'>"
-                            f"📦 Realized <b style='color:{_real_col}'>${_real:+,.0f}</b> "
+                            f"📦 Realized <b style='color:{_real_col}'>{_sd(_real, 0)}</b> "
                             f"on {t['shares_sold']:.0f} sh "
-                            f"+ Unrealized <b style='color:{_unr_col}'>${_unr:+,.0f}</b> "
+                            f"+ Unrealized <b style='color:{_unr_col}'>{_sd(_unr, 0)}</b> "
                             f"on {t['shares_remaining']:.0f} sh held"
                             f"</div>"
                         )
@@ -34994,7 +35008,7 @@ elif page == "🪞 Trade Review":
                         f"<div style='font-size:0.84em'>{_status_chip}</div>"
                         f"</div>"
                         f"<div style='color:#cbd5e1;font-size:0.85em;margin-top:6px'>"
-                        f"P&L: <b style='color:{_pnl_col}'>${_pnl:+,.0f} ({_pct:+.2f}%)</b> · "
+                        f"P&L: <b style='color:{_pnl_col}'>{_sd(_pnl, 0)} ({_pct:+.2f}%)</b> · "
                         f"{_hold_str}{_vs_spy_str} · "
                         f"<span style='color:{_cat_col}'>{_cat_label}</span> · {_win_chip}"
                         f"</div>"
@@ -35264,7 +35278,7 @@ elif page == "📜 Recommendations History":
             f"Outcomes exclude **{_rh_stats.get('n_maturing', 0)}** rec(s) younger than "
             f"{REC_SCORE_MIN_DAYS} days (still listed below, flagged ⏳ — one session of "
             f"wiggle isn't an outcome). **vs SPY** = alpha (return minus SPY over the same "
-            f"window). Raw acted−missed gap: "
+            f"window). Missed-return gap (raw return, not alpha; missed minus acted): "
             f"{('+' if (_rh_gap or 0) >= 0 else '')}{_rh_gap:.1f}pp." if _rh_gap is not None else
             f"Outcomes exclude **{_rh_stats.get('n_maturing', 0)}** rec(s) younger than "
             f"{REC_SCORE_MIN_DAYS} days (flagged ⏳ below). **vs SPY** = alpha (return minus "
@@ -35412,7 +35426,7 @@ elif page == "📜 Recommendations History":
                     "Verdict":       m["verdict"] or "—",
                     "Outcome":       f"{m['outcome_pct']:+.1f}%",
                     "α vs SPY":      f"{m['alpha_pct']:+.1f}pp" if m.get("alpha_pct") is not None else "—",
-                    "Per $1k":       f"${m['outcome_dollars']:+,.0f}" if m.get("outcome_dollars") is not None else "—",
+                    "Per $1k":       f"{_sd(m['outcome_dollars'], 0)}" if m.get("outcome_dollars") is not None else "—",
                 }
                 for m in _rh_missed
             ])
@@ -39823,7 +39837,7 @@ elif page == "💰 Account":
             _gc1.metric("Net Contributed Capital", _m(f"${_g['ncc']:,.0f}"),
                         help="Baseline + deposits − withdrawals — what you've put in.")
             if _g["growth"] is not None:
-                _gc2.metric("Growth ($)", _m(f"${_g['growth']:+,.0f}"))  # no delta passed, delta_color was dead
+                _gc2.metric("Growth ($)", _m(f"{_sd(_g['growth'], 0)}"))  # no delta passed, delta_color was dead
             else:
                 _gc2.metric("Growth ($)", "—",
                             help="Open 🏠 Home and set your cash balance so total account value can be computed.")
@@ -42223,6 +42237,7 @@ elif page == "💰 Account":
 
                             # ── Trade Behavior ───────────────────────────────
                             st.markdown("#### 📊 Trade Behavior")
+                            st.caption(_TRADE_GAP_NOTE)
                             _ptb = _perf_review["trade_behavior"]
                             if _ptb["status"] == "offline":
                                 st.warning("⚪ Could not read trade history right now.")
@@ -42434,6 +42449,7 @@ elif page == "💰 Account":
                     "Verify every figure against your broker's official 1099-B "
                     "before filing."
                 )
+                st.caption(_TRADE_GAP_NOTE)
                 if _rpt_trades_df is None:
                     st.error(
                         "⛔ Couldn't load your trade history right now — the tax "
@@ -43206,8 +43222,8 @@ elif page == "📅 Economic Calendar":
                                 delta_color="inverse" if _pb["exposure_level"] in ("HIGH","CRITICAL") else "off")
                     _sign_bear = "-" if _pb["total_bear_impact"] < 0 else "+"
                     _sign_bull = "+" if _pb["total_bull_impact"] > 0 else ""
-                    _pk2.metric("🐻 Bear Scenario",  f"${_pb['total_bear_impact']:+,.0f}")
-                    _pk3.metric("🐂 Bull Scenario",  f"${_pb['total_bull_impact']:+,.0f}")
+                    _pk2.metric("🐻 Bear Scenario",  f"{_sd(_pb['total_bear_impact'], 0)}")
+                    _pk3.metric("🐂 Bull Scenario",  f"{_sd(_pb['total_bull_impact'], 0)}")
                     _pb_view = _macro_release.pre_event_view(_pb.get("released"))
                     _pb_prot_live = _pb["protect_count"] > 0 and _pb_view["protect_delta_on"]
                     _pk4.metric("🛡️ PROTECT",        _pb["protect_count"],
@@ -43278,8 +43294,8 @@ elif page == "📅 Economic Calendar":
                             # lookups above and the comparison below.
                             _ac_label = {"WATCH": "Watch", "OPPORTUNITY": "Add"}.get(_ac, _ac)
 
-                            _bear_str = f"${_pos['bear_impact']:+,.0f}" if _pos["bear_impact"] != 0 else "—"
-                            _bull_str = f"${_pos['bull_impact']:+,.0f}" if _pos["bull_impact"] != 0 else "—"
+                            _bear_str = f"{_sd(_pos['bear_impact'], 0)}" if _pos["bear_impact"] != 0 else "—"
+                            _bull_str = f"{_sd(_pos['bull_impact'], 0)}" if _pos["bull_impact"] != 0 else "—"
 
                             # Action badge row
                             _pa1, _pa2, _pa3, _pa4 = st.columns([1.5, 1, 1, 1])
@@ -43676,7 +43692,7 @@ elif page == "📅 Economic Calendar":
                                     with st.expander(
                                         f"{_aicon} **{_pp['ticker']}**  ·  "
                                         f"Sector {_pp['sector_move']:+.1f}%  ·  "
-                                        f"${_imp:+,.0f}  ·  "
+                                        f"{_sd(_imp, 0)}  ·  "
                                         f"**{_act_label}**"
                                     ):
                                         _ppc1, _ppc2 = st.columns(2)
@@ -43688,7 +43704,7 @@ elif page == "📅 Economic Calendar":
                                                 f"{_pp['sector_move']:+.1f}%</span>  \n"
                                                 f"**Dollar impact:** "
                                                 f"<span style='color:{_mc};font-weight:bold'>"
-                                                f"${_imp:+,.0f}</span>  \n"
+                                                f"{_sd(_imp, 0)}</span>  \n"
                                                 f"**Weight:** {_pp['weight']:.1f}%  ·  "
                                                 f"**Score:** {_pp['score']:.0f}/100  ·  "
                                                 f"**P&L:** {_pp['pnl_pct']:+.1f}%",
@@ -45601,14 +45617,22 @@ elif page == "🧠 AI Insights":
             # Month-by-month archive: one entry per calendar month (the row with the latest
             # period_end in each month wins, since an on-demand re-run within a month would
             # otherwise duplicate), newest first. _mr_df is ordered period_end DESC, so the
-            # first row seen per (year, month) is that month's latest. Labelled by the month
-            # the report's window ends in.
+            # first row seen per month key is that month's latest. Labelled by the month
+            # most of the report's window falls in (report_labels), not its end date's.
+            from stock_analyzer.report_labels import (
+                period_label as _period_label, period_month_key as _period_month_key,
+                generated_et_date as _generated_et_date,
+            )
             _mr_opts: list = []
             _mr_seen: set = set()
             for _ri in range(len(_mr_df)):
                 try:
                     _pe = pd.to_datetime(_mr_df.iloc[_ri].get("period_end"))
-                    _key, _lbl = (_pe.year, _pe.month), _pe.strftime("%B %Y")
+                    _ps = _mr_df.iloc[_ri].get("period_start")
+                    _key = _period_month_key(_ps, _pe)
+                    _lbl = _period_label(_ps, _pe)
+                    if _key is None or _lbl is None:
+                        _key, _lbl = (_pe.year, _pe.month), _pe.strftime("%B %Y")
                 except Exception:
                     _key, _lbl = (_ri,), f"Report {_ri + 1}"
                 if _key in _mr_seen:
@@ -45636,7 +45660,7 @@ elif page == "🧠 AI Insights":
 
             st.caption(
                 f"Period {_mr.get('period_start', '—')} → {_mr.get('period_end', '—')} · "
-                f"generated {str(_mr.get('generated_at', ''))[:10]}"
+                f"generated {_generated_et_date(_mr.get('generated_at')) or str(_mr.get('generated_at', ''))[:10]} ET"
                 + (" · ✉ emailed" if _mr.get("email_sent") else "")
             )
 
@@ -48740,7 +48764,7 @@ elif page == "🎯 My Edge":
                         _me_hover.append(
                             f"Invested: ${_mf['amount']:,.0f}<br>"
                             f"Worth today: ${_mf['current_value']:,.0f}<br>"
-                            f"Gain/Loss: ${_mf_gl:+,.0f}<br>"
+                            f"Gain/Loss: {_sd(_mf_gl, 0)}<br>"
                             f"Return: {_mf_ret:+.1f}%" if _mf_ret is not None else ""
                         )
 
@@ -48749,7 +48773,7 @@ elif page == "🎯 My Edge":
                         y=_me_labels,
                         orientation="h",
                         marker_color=_me_colors,
-                        text=[f"${v:+,.0f}" for v in _me_values],
+                        text=[f"{_sd(v, 0)}" for v in _me_values],
                         textposition="outside",
                         hovertext=_me_hover,
                         hoverinfo="text",

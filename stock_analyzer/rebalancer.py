@@ -519,7 +519,12 @@ def build_rebalance_plan(
         "reduce_blocked_adds_count": len(reduce_blocked_adds_list),
         "grow_paused_adds":          grow_paused_adds_list,
         "grow_paused_adds_count":    len(grow_paused_adds_list),
-        "trim_pct": round(total_trim / total_val * 100, 1) if total_val > 0 else 0.0,
+        # Only trims that size at least one share (the same shares_delta >= 1 test
+        # as trim_action_needed): a drift under one share sells nothing, so it
+        # must not count toward what the trims "would move".
+        "trim_pct": round(
+            sum(t["drift_val"] for t in trims if t["shares_delta"] >= 1) / total_val * 100, 1
+        ) if total_val > 0 else 0.0,
         # True only when a trim is past the action band (status TRIM), not
         # merely DRIFTING (watch).
         "trim_action_needed": any(t["status"] == "TRIM" and t["shares_delta"] >= 1 for t in trims),

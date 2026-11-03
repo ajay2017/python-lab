@@ -27,6 +27,7 @@ Pure logic — no Streamlit, no API calls. Caller supplies:
 from datetime import date, timedelta
 from collections import defaultdict
 
+from stock_analyzer.text_fmt import signed_dollars as _sd
 from stock_analyzer.constants import (
     SINGLE_NAME_CEILING,
     SECTOR_ELEVATED,
@@ -747,8 +748,8 @@ def _diag_signal_defying_bias(trades: list[dict]) -> dict | None:
             detection = (
                 f"<b>{len(defying)}</b> trades went against the signal you saw "
                 f"in the journal — avg outcome <b style='color:#fca5a5'>"
-                f"${avg_def:+,.0f}</b> vs <b style='color:#86efac'>"
-                f"${avg_comp:+,.0f}</b> on the {len(compliant)} compliant trades "
+                f"{_sd(avg_def, 0)}</b> vs <b style='color:#86efac'>"
+                f"{_sd(avg_comp, 0)}</b> on the {len(compliant)} compliant trades "
                 f"(<b>${spread:,.0f}</b> per-trade gap)."
             )
             action = (
@@ -760,7 +761,7 @@ def _diag_signal_defying_bias(trades: list[dict]) -> dict | None:
             severity  = "note"
             detection = (
                 f"Interestingly, defying the signal worked better in your sample: "
-                f"avg <b>${avg_def:+,.0f}</b> vs <b>${avg_comp:+,.0f}</b> compliant "
+                f"avg <b>{_sd(avg_def, 0)}</b> vs <b>{_sd(avg_comp, 0)}</b> compliant "
                 f"({len(defying)} defied · {len(compliant)} compliant)."
             )
             action = (
@@ -774,7 +775,7 @@ def _diag_signal_defying_bias(trades: list[dict]) -> dict | None:
             severity  = "note"
             detection = (
                 f"<b>{len(defying)}</b> signal-defying trades averaged "
-                f"<b style='color:#fca5a5'>${avg_def:+,.0f}</b> "
+                f"<b style='color:#fca5a5'>{_sd(avg_def, 0)}</b> "
                 f"(win rate {def_wr:.0f}%). Insufficient compliant trades in window "
                 "to compare directly."
             )
@@ -840,7 +841,7 @@ def _diag_vs_spy_drag(trades: list[dict]) -> dict | None:
         detection = (
             f"<b>{beat_spy}/{len(closed)}</b> closed trades beat SPY "
             f"(<b>{beat_pct:.0f}%</b>) — net alpha "
-            f"<b style='color:#86efac'>${cumulative_alpha:+,.0f}</b>. "
+            f"<b style='color:#86efac'>{_sd(cumulative_alpha, 0)}</b>. "
             "Active trading is earning its keep vs just holding the index."
         )
         action = None
@@ -850,7 +851,7 @@ def _diag_vs_spy_drag(trades: list[dict]) -> dict | None:
             f"<b>{beat_spy}/{len(closed)}</b> closed trades beat SPY "
             f"(<b>{beat_pct:.0f}%</b>) — net alpha "
             f"<b style='color:{'#86efac' if cumulative_alpha >= 0 else '#fca5a5'}'>"
-            f"${cumulative_alpha:+,.0f}</b>. Barely beating buy-and-hold."
+            f"{_sd(cumulative_alpha, 0)}</b>. Barely beating buy-and-hold."
         )
         action = (
             "Tighten entry discipline — only act on high-conviction setups "
@@ -861,7 +862,7 @@ def _diag_vs_spy_drag(trades: list[dict]) -> dict | None:
         detection = (
             f"Only <b>{beat_spy}/{len(closed)}</b> closed trades beat SPY "
             f"(<b>{beat_pct:.0f}%</b>) — net alpha "
-            f"<b style='color:#fca5a5'>${cumulative_alpha:+,.0f}</b>. You'd be "
+            f"<b style='color:#fca5a5'>{_sd(cumulative_alpha, 0)}</b>. You'd be "
             "ahead just holding the index over the same windows."
         )
         action = (
@@ -932,7 +933,7 @@ def _diag_re_entered_tickers(trades: list[dict]) -> dict | None:
         top3      = repeated_negative[:3]
         total_neg = sum(e["net_pnl"] for e in repeated_negative)
         names     = " · ".join(
-            f"<b>{e['ticker']}</b> ({e['n_trades']}× = ${e['net_pnl']:+,.0f})"
+            f"<b>{e['ticker']}</b> ({e['n_trades']}× = {_sd(e['net_pnl'], 0)})"
             for e in top3
         )
         severity  = "concern" if total_neg <= -200 else "note"
@@ -940,7 +941,7 @@ def _diag_re_entered_tickers(trades: list[dict]) -> dict | None:
             f"<b>{len(repeated_negative)}</b> ticker"
             f"{'s' if len(repeated_negative) != 1 else ''} you've re-entered "
             "are net-negative: " + names
-            + (f". Net drag <b style='color:#fca5a5'>${total_neg:+,.0f}</b>."
+            + (f". Net drag <b style='color:#fca5a5'>{_sd(total_neg, 0)}</b>."
                if total_neg < 0 else ".")
         )
         action = (
@@ -968,7 +969,7 @@ def _diag_re_entered_tickers(trades: list[dict]) -> dict | None:
     # Only positive re-entries — that's a "good" finding
     top3 = repeated_positive[:3]
     names = " · ".join(
-        f"<b>{e['ticker']}</b> ({e['n_trades']}× = ${e['net_pnl']:+,.0f})"
+        f"<b>{e['ticker']}</b> ({e['n_trades']}× = {_sd(e['net_pnl'], 0)})"
         for e in top3
     )
     return {
@@ -1403,9 +1404,9 @@ def build_insights(metrics: dict, trades: list[dict],
         if best["outcome_pnl"] > 0 or worst["outcome_pnl"] < 0:
             findings.append(
                 f"Best: <b>{best['ticker']}</b> {best['action']} "
-                f"<b style='color:#86efac'>${best['outcome_pnl']:+,.0f}</b> · "
+                f"<b style='color:#86efac'>{_sd(best['outcome_pnl'], 0)}</b> · "
                 f"Worst: <b>{worst['ticker']}</b> {worst['action']} "
-                f"<b style='color:#fca5a5'>${worst['outcome_pnl']:+,.0f}</b>."
+                f"<b style='color:#fca5a5'>{_sd(worst['outcome_pnl'], 0)}</b>."
             )
 
     # ── Finding 4: position-size discipline (single-name ceiling 15%) ────────

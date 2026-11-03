@@ -15,6 +15,7 @@ import numpy as np
 import pytz as _pytz
 from datetime import datetime as _dt
 
+from stock_analyzer.text_fmt import signed_dollars as _sd
 from stock_analyzer.constants import POSITION_SETTLING_DAYS
 
 _ET = _pytz.timezone("America/New_York")
@@ -408,10 +409,10 @@ def build_behavioral_insights(
                 "observation": (
                     f"**{best_row['Trigger']}** trades: "
                     f"{best_row['Win Rate (%)']:.0f}% win rate · "
-                    f"${best_row['Expectancy ($)']:+,.0f} expectancy per trade  \n"
+                    f"{_sd(best_row['Expectancy ($)'], 0)} expectancy per trade  \n"
                     f"**{worst_row['Trigger']}** trades: "
                     f"{worst_row['Win Rate (%)']:.0f}% win rate · "
-                    f"${worst_row['Expectancy ($)']:+,.0f} expectancy per trade"
+                    f"{_sd(worst_row['Expectancy ($)'], 0)} expectancy per trade"
                 ),
                 "implication": (
                     f"Not all reasons for entering a trade are equal. "
@@ -443,7 +444,7 @@ def build_behavioral_insights(
                     "Every trade trigger type has produced positive expected value. "
                     + "  \n".join(
                         f"**{r['Trigger']}**: {r['Win Rate (%)']:.0f}% win rate · "
-                        f"${r['Expectancy ($)']:+,.0f} expectancy"
+                        f"{_sd(r['Expectancy ($)'], 0)} expectancy"
                         for _, r in trigger_df.iterrows()
                     )
                 ),
@@ -477,8 +478,8 @@ def build_behavioral_insights(
                 "priority": "MEDIUM",
                 "title":    "Significant Recent Performance Deterioration",
                 "observation": (
-                    f"Last 3 months avg P&L: **${recent_avg:+,.0f}/month**  \n"
-                    f"Prior period avg P&L: **${prior_avg:+,.0f}/month**  \n"
+                    f"Last 3 months avg P&L: **{_sd(recent_avg, 0)}/month**  \n"
+                    f"Prior period avg P&L: **{_sd(prior_avg, 0)}/month**  \n"
                     "Recent performance is significantly below historical average."
                 ),
                 "implication": (
@@ -506,8 +507,8 @@ def build_behavioral_insights(
                 "priority": "OK",
                 "title":    "Strong Recent Performance Momentum",
                 "observation": (
-                    f"Last 3 months avg P&L: **${recent_avg:+,.0f}/month**  \n"
-                    f"Prior period avg P&L: **${prior_avg:+,.0f}/month**  \n"
+                    f"Last 3 months avg P&L: **{_sd(recent_avg, 0)}/month**  \n"
+                    f"Prior period avg P&L: **{_sd(prior_avg, 0)}/month**  \n"
                     "Recent performance is meaningfully above historical average."
                 ),
                 "implication": (
