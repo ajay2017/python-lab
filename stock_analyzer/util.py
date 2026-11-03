@@ -377,6 +377,21 @@ def holdings_write_failed_message(ticker: str) -> str:
     )
 
 
+def journal_read_failed_msg(context: str) -> str:
+    """User-facing message for a trade-journal write that succeeded but whose
+    follow-up re-read of the journal failed (HoldWipe). Holdings are NOT
+    rebuilt from an unreadable journal — an empty replay would sweep every
+    holdings row and every manual stop — so both are left unchanged.
+    `context` is the lead clause, e.g. "Trade(s) deleted". No `$`, no `**`.
+    """
+    return (
+        f"⚠️ {context}, but the trade journal couldn't be re-read, so holdings "
+        "were NOT rebuilt (your holdings and manual stops are unchanged). "
+        "Open 📒 Trade Journal → ⚠️ Fix drift between trades and holdings → "
+        "Run rebuild now once the database is reachable."
+    )
+
+
 def xcheck_is_alarm_worthy(result: dict, market_is_open: bool) -> bool:
     """Whether one price cross-check result should trigger the loud "sources
     disagree" banner, vs staying quiet (finding D23).

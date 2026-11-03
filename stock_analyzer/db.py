@@ -1611,13 +1611,21 @@ def load_holdings() -> pd.DataFrame:
     return df if df is not None else pd.DataFrame(columns=_HOLDINGS_COLS)
 
 
-def save_holdings(df: pd.DataFrame) -> bool:
+def save_holdings(df: pd.DataFrame, *, allow_empty: bool = False) -> bool:
     """Persist the holdings DataFrame to Supabase. Returns True on success.
 
     Atomic-ish replace: upsert every current row on the ticker unique key,
     then sweep tickers no longer in the DataFrame. Order matters — upsert
     first so a transient failure leaves the prior data intact, never wipes.
     Requires UNIQUE(ticker) on holdings (see one-time SQL at module top).
+
+    HoldWipe guard: a frame with no valid rows is REFUSED (returns False,
+    no DB call) unless `allow_empty=True`. An empty frame sweeps every
+    holdings row AND every manual_stops row (owner-entered, can't be
+    rebuilt), so a failed upstream read that degrades to an empty frame must
+    never become an all-rows sweep. Pass `allow_empty=True` only from a
+    caller that KNOWS the book is empty (a successful read of the journal
+    that replays to zero shares, or the sale of the last position).
     """
     if is_readonly(): return False  # read-only viewer: no-op
     from stock_analyzer import api_health as _ah
@@ -1641,6 +1649,10 @@ def save_holdings(df: pd.DataFrame) -> bool:
                 "asset_type": _at.normalize(row.get("Asset Type")),
             })
             seen.add(ticker)
+
+    if not records and not allow_empty:
+        print("[save_holdings] refused: empty holdings would delete every holdings row and every manual stop; pass allow_empty=True only for a deliberate sell-everything")
+        return False
 
     try:
         client = _client()

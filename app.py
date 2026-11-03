@@ -405,6 +405,8 @@ from stock_analyzer.util import t_score_or_none as _t_or_none
 from stock_analyzer.util import sentiment_value_or_none as _sentiment_or_none
 from stock_analyzer.util import xcheck_is_alarm_worthy as _xcheck_is_alarm_worthy
 from stock_analyzer.util import holdings_write_failed_message as _holdings_write_failed_msg
+from stock_analyzer.util import journal_read_failed_msg as _journal_read_failed_msg
+from stock_analyzer.journal_rebuild import decide as _journal_rebuild_decide
 from stock_analyzer.util import dropped_holdings_banner_text as _dropped_holdings_banner_text
 from stock_analyzer.util import score_withheld_banner_text as _score_withheld_banner_text
 # 2026-09-24 app review, A2/A3/A4 — nav-badge / mini-card tri-state
@@ -30905,7 +30907,9 @@ elif page == "📒 Trade Journal":
                     # that supported mode would show a FALSE "write failed"
                     # error and never update session_state, breaking no-DB
                     # mode entirely. Caught by Opus review, not the author.
-                    if db.save_holdings(_ps_h_df) or not db.has_db():
+                    # HoldWipe: only the sale of the LAST row may save an empty book.
+                    _ps_allow_empty = _ps_h_df.empty
+                    if db.save_holdings(_ps_h_df, allow_empty=_ps_allow_empty) or not db.has_db():
                         st.success(_ps_msg)
                         st.session_state.holdings_df = _ps_h_df
                         _refresh_portfolio_cache_after_trade(_ps_h_df)
@@ -33161,6 +33165,18 @@ elif page == "📒 Trade Journal":
     with _tj_tab_hist:
         # ── Trade History table ───────────────────────────────────────────────────
         st.subheader("📋 Trade History")
+        # One-shot result of the post-delete auto-rebuild (stashed before the
+        # rerun so a skipped / failed rebuild is not wiped by it). HoldWipe.
+        _tj_rb_notes = st.session_state.pop("_tj_rebuild_warning", None)
+        for _tj_rb_note in (_tj_rb_notes if _tj_rb_notes is not None else []):
+            if _tj_rb_note["level"] == "error":
+                st.error(_tj_rb_note["text"])
+            elif _tj_rb_note["level"] == "warning":
+                st.warning(_tj_rb_note["text"])
+            elif _tj_rb_note["level"] == "success":
+                st.success(_tj_rb_note["text"])
+            else:
+                st.info(_tj_rb_note["text"])
         st.caption("Check the **Delete?** box on any row then click **🗑️ Delete selected trade(s)** to remove duplicates or mistakes.")
         # 2026-09-21 app-review Part 2 #3: this table is every trade ever logged,
         # with no tax-year or date-range grouping — the natural place to point
@@ -33263,15 +33279,34 @@ elif page == "📒 Trade Journal":
                                      disabled=st.session_state.get("_readonly", False)):
                             st.session_state.pop("_tj_delete_confirm_pending", None)
                             failed = 0
+                            _ok_ids = []
                             for tid in _pending_ids:
                                 _del_ok = db.delete_trade(tid)
                                 st.session_state.pop("_budget_trades_cache", None)
                                 if not _del_ok:
                                     failed += 1
-                            if failed == 0:
-                                st.success(f"✅ Deleted {_pn} trade{'s' if _pn > 1 else ''}.")
+                                else:
+                                    _ok_ids.append(tid)
+                            # Notes are stashed (not drawn) because the rerun below
+                            # would wipe them; they render at the top of this section.
+                            _tj_notes = []
+                            if _ok_ids:
+                                _del_ctx = (
+                                    f"Deleted {_pn} trade{'s' if _pn > 1 else ''}"
+                                    if failed == 0 else
+                                    f"Deleted {_pn - failed} of {_pn} trade{'s' if _pn > 1 else ''} ({failed} failed)"
+                                )
+                                _tj_notes.append({
+                                    "level": "success" if failed == 0 else "warning",
+                                    "text": (f"✅ {_del_ctx}." if failed == 0
+                                             else f"{_del_ctx} — check logs."),
+                                })
                             else:
-                                st.warning(f"Deleted {_pn - failed} of {_pn}. {failed} failed — check logs.")
+                                _tj_notes.append({
+                                    "level": "warning",
+                                    "text": (f"Couldn't delete any of the {_pn} selected "
+                                             f"trade{'s' if _pn > 1 else ''}; nothing changed."),
+                                })
 
                             # ── Auto-rebuild holdings from the remaining trade history ─────
                             # When a trade is deleted, holdings_df has already absorbed its
@@ -33280,31 +33315,65 @@ elif page == "📒 Trade Journal":
                             # state and corrects any realized_pnl that was computed from the
                             # corrupted basis (the NFLX +$177-when-it-should-have-been-
                             # negative class of bug).
-                            fresh_trades = db.load_trades()
-                            recalc = db.recalculate_from_trades(fresh_trades)
-                            db.save_holdings(recalc["holdings_df"])
-                            st.session_state.holdings_df = recalc["holdings_df"]
-                            _refresh_portfolio_cache_after_trade(recalc["holdings_df"])
-                            _n_corrected = 0
-                            for _tid, _c in recalc["realized_pnl_corrections"].items():
-                                if db.update_trade_realized_pnl(
-                                    _tid, _c["realized_pnl"], cost_basis=_c["cost_basis"]
-                                ):
-                                    _n_corrected += 1
-                            if _n_corrected:
-                                st.info(
-                                    f"🔄 Holdings rebuilt from {len(fresh_trades)} trades. "
-                                    f"Also corrected realized P&L on **{_n_corrected}** SELL "
-                                    "row(s) whose stored figures were computed from a stale "
-                                    "cost basis."
-                                )
-                            if recalc["warnings"]:
-                                for _w in recalc["warnings"][:3]:
-                                    st.warning(f"⚠ {_w}")
-                            st.session_state.trades_df = db.load_trades()
-                            # Invalidate the page-load drift banner — we just resolved it.
-                            st.session_state.pop("_tj_drift_checked", None)
-                            st.session_state.pop("_tj_drift_state", None)
+                            if _ok_ids:
+                                # HoldWipe: strict read. The lenient load_trades() returns
+                                # an empty frame on a failed read, which would replay to
+                                # zero holdings and sweep every holdings row + manual stop.
+                                fresh_trades = db.load_trades_or_none()
+                                _decision = _journal_rebuild_decide(fresh_trades, rows_just_inserted=False)
+                                if _decision["action"] == "unreadable":
+                                    _tj_notes.append({
+                                        "level": "warning",
+                                        "text": _journal_read_failed_msg(_del_ctx),
+                                    })
+                                    # Drift state left alone so the banner can still flag it.
+                                    _old_tdf = st.session_state.get("trades_df")
+                                    if _old_tdf is not None and "id" in _old_tdf.columns:
+                                        st.session_state.trades_df = _old_tdf[~_old_tdf["id"].isin(_ok_ids)]
+                                elif _decision["action"] == "empty":
+                                    _tj_notes.append({
+                                        "level": "info",
+                                        "text": "No trades left to replay; holdings left unchanged.",
+                                    })
+                                    st.session_state.trades_df = fresh_trades
+                                else:
+                                    recalc = db.recalculate_from_trades(fresh_trades)
+                                    if db.save_holdings(recalc["holdings_df"], allow_empty=_decision["allow_empty"]):
+                                        st.session_state.holdings_df = recalc["holdings_df"]
+                                        _refresh_portfolio_cache_after_trade(recalc["holdings_df"])
+                                        _n_corrected = 0
+                                        for _tid, _c in recalc["realized_pnl_corrections"].items():
+                                            if db.update_trade_realized_pnl(
+                                                _tid, _c["realized_pnl"], cost_basis=_c["cost_basis"]
+                                            ):
+                                                _n_corrected += 1
+                                        if _n_corrected:
+                                            _tj_notes.append({
+                                                "level": "info",
+                                                "text": (
+                                                    f"🔄 Holdings rebuilt from {len(fresh_trades)} trades. "
+                                                    f"Also corrected realized P&L on **{_n_corrected}** SELL "
+                                                    "row(s) whose stored figures were computed from a stale "
+                                                    "cost basis."
+                                                ),
+                                            })
+                                        for _w in recalc["warnings"][:3]:
+                                            _tj_notes.append({"level": "warning", "text": f"⚠ {_w}"})
+                                        # Invalidate the page-load drift banner — we just resolved it.
+                                        st.session_state.pop("_tj_drift_checked", None)
+                                        st.session_state.pop("_tj_drift_state", None)
+                                    else:
+                                        _tj_notes.append({
+                                            "level": "error",
+                                            "text": (
+                                                f"⚠️ {_del_ctx}, but the holdings table failed to "
+                                                "update, so holdings may not be fully rebuilt (your "
+                                                "manual stops are unchanged). Open 📒 Trade Journal → ⚠️ "
+                                                "Fix drift between trades and holdings → Run rebuild now."
+                                            ),
+                                        })
+                                    st.session_state.trades_df = fresh_trades
+                            st.session_state["_tj_rebuild_warning"] = _tj_notes
                             st.rerun()
                     with _dc2:
                         if st.button("Cancel", key="_tj_delete_confirm_no"):
@@ -33328,8 +33397,16 @@ elif page == "📒 Trade Journal":
                 if st.button("Run rebuild now", key="_tj_rebuild_holdings_btn",
                              disabled=st.session_state.get("_readonly", False),
                              help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
-                    fresh = db.load_trades()
-                    if fresh.empty:
+                    # HoldWipe: strict read; a failed read is not "no trades".
+                    fresh = db.load_trades_or_none()
+                    _rb_decision = _journal_rebuild_decide(fresh, rows_just_inserted=False)
+                    if _rb_decision["action"] == "unreadable":
+                        st.warning(
+                            "⚠️ The trade journal couldn't be read, so nothing was "
+                            "rebuilt. Holdings and manual stops are unchanged; try "
+                            "again in a minute."
+                        )
+                    elif _rb_decision["action"] == "empty":
                         st.warning("No trades to replay.")
                     else:
                         res = db.recalculate_from_trades(fresh)
@@ -33360,7 +33437,7 @@ elif page == "📒 Trade Journal":
                             for _w in warns[:5]:
                                 st.warning(f"⚠ {_w}")
                         # Apply
-                        if db.save_holdings(new_h):
+                        if db.save_holdings(new_h, allow_empty=_rb_decision["allow_empty"]):
                             st.session_state.holdings_df = new_h
                             _refresh_portfolio_cache_after_trade(new_h)
                             _applied = 0
@@ -33374,7 +33451,7 @@ elif page == "📒 Trade Journal":
                                 "corrections applied. Refresh the Evening Debrief and "
                                 "Trade Review to see the corrected numbers."
                             )
-                            st.session_state.trades_df = db.load_trades()
+                            st.session_state.trades_df = fresh
                             # Invalidate the page-load drift banner — we just resolved it.
                             st.session_state.pop("_tj_drift_checked", None)
                             st.session_state.pop("_tj_drift_state", None)
@@ -33385,6 +33462,8 @@ elif page == "📒 Trade Journal":
             _bi_last = st.session_state.pop("_bi_last_result", None)
             if _bi_last:
                 st.success(f"✅ Imported {_bi_last['n_imported']} trade(s).")
+                if _bi_last.get("rebuild_warning"):
+                    st.warning(_bi_last["rebuild_warning"])
                 if _bi_last.get("n_corrected"):
                     st.info(
                         f"🔄 Holdings rebuilt. Also corrected realized P&L on "
@@ -33579,36 +33658,62 @@ elif page == "📒 Trade Journal":
                                             _bi_n_fail += 1
 
                                     if _bi_n_ok > 0:
-                                        st.session_state["trades_df"] = db.load_trades()
-                                        _bi_recalc = db.recalculate_from_trades(
-                                            st.session_state["trades_df"]
-                                        )
-                                        db.save_holdings(_bi_recalc["holdings_df"])
-                                        st.session_state["holdings_df"] = (
-                                            _bi_recalc["holdings_df"]
-                                        )
-                                        _refresh_portfolio_cache_after_trade(_bi_recalc["holdings_df"])
+                                        # HoldWipe: strict read. A failed (or, after a
+                                        # successful insert, empty) read must not replay
+                                        # to zero holdings and sweep holdings + manual stops.
+                                        _bi_fresh = db.load_trades_or_none()
                                         _bi_n_corrected = 0
-                                        for _bi_tid, _bi_c in (
-                                            _bi_recalc["realized_pnl_corrections"].items()
-                                        ):
-                                            if db.update_trade_realized_pnl(
-                                                _bi_tid,
-                                                _bi_c["realized_pnl"],
-                                                cost_basis=_bi_c["cost_basis"],
+                                        _bi_warn = None
+                                        _bi_res_warnings = []
+                                        _bi_res_holdings = None
+                                        _bi_decision = _journal_rebuild_decide(_bi_fresh, rows_just_inserted=True)
+                                        if _bi_decision["action"] != "rebuild":
+                                            _bi_warn = _journal_read_failed_msg(
+                                                f"Imported {_bi_n_ok} trade(s)"
+                                            )
+                                        else:
+                                            st.session_state["trades_df"] = _bi_fresh
+                                            _bi_recalc = db.recalculate_from_trades(_bi_fresh)
+                                            _bi_res_warnings = list(
+                                                _bi_recalc.get("warnings", [])
+                                            )[:5]
+                                            if db.save_holdings(
+                                                _bi_recalc["holdings_df"],
+                                                allow_empty=_bi_decision["allow_empty"],
                                             ):
-                                                _bi_n_corrected += 1
+                                                st.session_state["holdings_df"] = (
+                                                    _bi_recalc["holdings_df"]
+                                                )
+                                                _refresh_portfolio_cache_after_trade(_bi_recalc["holdings_df"])
+                                                _bi_res_holdings = _bi_recalc["holdings_df"]
+                                                for _bi_tid, _bi_c in (
+                                                    _bi_recalc["realized_pnl_corrections"].items()
+                                                ):
+                                                    if db.update_trade_realized_pnl(
+                                                        _bi_tid,
+                                                        _bi_c["realized_pnl"],
+                                                        cost_basis=_bi_c["cost_basis"],
+                                                    ):
+                                                        _bi_n_corrected += 1
+                                            else:
+                                                _bi_warn = (
+                                                    f"⚠️ Imported {_bi_n_ok} trade(s), but the holdings "
+                                                    "table failed to update, so holdings may not be "
+                                                    "fully rebuilt. Open 📒 Trade Journal → ⚠️ Fix drift "
+                                                    "between trades and holdings → Run rebuild now."
+                                                )
 
-                                        st.session_state.pop("_tj_drift_checked", None)
-                                        st.session_state.pop("_tj_drift_state", None)
+                                        if _bi_warn is None:
+                                            # Resolved the drift banner; leave it up on a warning.
+                                            st.session_state.pop("_tj_drift_checked", None)
+                                            st.session_state.pop("_tj_drift_state", None)
 
                                         st.session_state["_bi_last_result"] = {
                                             "n_imported":  _bi_n_ok,
                                             "n_corrected": _bi_n_corrected,
-                                            "warnings":    list(
-                                                _bi_recalc.get("warnings", [])
-                                            )[:5],
-                                            "holdings_df": _bi_recalc["holdings_df"],
+                                            "warnings":    _bi_res_warnings,
+                                            "holdings_df": _bi_res_holdings,
+                                            "rebuild_warning": _bi_warn,
                                         }
                                         if _bi_n_fail:
                                             st.warning(
@@ -33899,37 +34004,61 @@ elif page == "📒 Trade Journal":
                                             _ss_n_fail += 1
 
                                     if _ss_n_ok > 0:
-                                        st.session_state["trades_df"] = db.load_trades()
-                                        _ss_recalc = db.recalculate_from_trades(
-                                            st.session_state["trades_df"]
-                                        )
-                                        db.save_holdings(_ss_recalc["holdings_df"])
-                                        st.session_state["holdings_df"] = (
-                                            _ss_recalc["holdings_df"]
-                                        )
-                                        _refresh_portfolio_cache_after_trade(_ss_recalc["holdings_df"])
+                                        # HoldWipe: strict read (see the CSV import above).
+                                        _ss_fresh = db.load_trades_or_none()
                                         _ss_n_corrected = 0
-                                        for _ss_tid, _ss_c in (
-                                            _ss_recalc["realized_pnl_corrections"].items()
-                                        ):
-                                            if db.update_trade_realized_pnl(
-                                                _ss_tid,
-                                                _ss_c["realized_pnl"],
-                                                cost_basis=_ss_c["cost_basis"],
+                                        _ss_warn = None
+                                        _ss_res_warnings = []
+                                        _ss_res_holdings = None
+                                        _ss_decision = _journal_rebuild_decide(_ss_fresh, rows_just_inserted=True)
+                                        if _ss_decision["action"] != "rebuild":
+                                            _ss_warn = _journal_read_failed_msg(
+                                                f"Imported {_ss_n_ok} trade(s)"
+                                            )
+                                        else:
+                                            st.session_state["trades_df"] = _ss_fresh
+                                            _ss_recalc = db.recalculate_from_trades(_ss_fresh)
+                                            _ss_res_warnings = list(
+                                                _ss_recalc.get("warnings", [])
+                                            )[:5]
+                                            if db.save_holdings(
+                                                _ss_recalc["holdings_df"],
+                                                allow_empty=_ss_decision["allow_empty"],
                                             ):
-                                                _ss_n_corrected += 1
+                                                st.session_state["holdings_df"] = (
+                                                    _ss_recalc["holdings_df"]
+                                                )
+                                                _refresh_portfolio_cache_after_trade(_ss_recalc["holdings_df"])
+                                                _ss_res_holdings = _ss_recalc["holdings_df"]
+                                                for _ss_tid, _ss_c in (
+                                                    _ss_recalc["realized_pnl_corrections"].items()
+                                                ):
+                                                    if db.update_trade_realized_pnl(
+                                                        _ss_tid,
+                                                        _ss_c["realized_pnl"],
+                                                        cost_basis=_ss_c["cost_basis"],
+                                                    ):
+                                                        _ss_n_corrected += 1
+                                            else:
+                                                _ss_warn = (
+                                                    f"⚠️ Imported {_ss_n_ok} trade(s), but the holdings "
+                                                    "table failed to update, so holdings may not be "
+                                                    "fully rebuilt. Open 📒 Trade Journal → ⚠️ Fix drift "
+                                                    "between trades and holdings → Run rebuild now."
+                                                )
 
-                                        st.session_state.pop("_tj_drift_checked", None)
-                                        st.session_state.pop("_tj_drift_state", None)
+                                        if _ss_warn is None:
+                                            # Resolved the drift banner; leave it up on a warning.
+                                            st.session_state.pop("_tj_drift_checked", None)
+                                            st.session_state.pop("_tj_drift_state", None)
                                         st.session_state.pop("_ss_parsed", None)
 
                                         st.session_state["_bi_last_result"] = {
                                             "n_imported":  _ss_n_ok,
                                             "n_corrected": _ss_n_corrected,
-                                            "warnings":    list(
-                                                _ss_recalc.get("warnings", [])
-                                            )[:5],
-                                            "holdings_df": _ss_recalc["holdings_df"],
+                                            "warnings":    _ss_res_warnings,
+                                            "holdings_df": _ss_res_holdings,
+                                            "rebuild_warning": _ss_warn,
                                         }
                                         if _ss_n_fail:
                                             st.warning(

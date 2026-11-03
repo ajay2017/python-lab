@@ -1222,6 +1222,7 @@ _GATE_FILES = {
     # are stale and what a repaired row's gross book and money fields become.
     "stock_analyzer/account_snapshot_repair.py",
     "stock_analyzer/account_snapshot_autorepair.py",
+    "stock_analyzer/journal_rebuild.py",  # HoldWipe: may a journal rebuild save an empty book
     "stock_analyzer/account_row_trust.py",
     # Added 2026-11-02 (bug register Bal): decides the Signals headline.
     "stock_analyzer/signals_headline.py",
