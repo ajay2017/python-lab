@@ -106,8 +106,10 @@ python-lab/
     ├── ranking.py                  Cross-portfolio stock ranking (composite score sort)
     ├── comparison.py               2-ticker side-by-side comparison engine + one-line verdict (Compare page)
     ├── reference_data.py           App Settings reference-data layer (sector/discovery universes save/validate/canonicalize logic)
-    ├── sector_fit.py               Sector classification for the sector gates: gate_sector() / sector_gate_context() (curated weight, phantom-'Other' guard)
+    ├── sector_fit.py               Sector classification for the sector gates: gate_sector() / sector_gate_context() (curated weight, phantom-'Other' guard, label_source curated/translated/provider/none)
     ├── sector_labels.py            canonical_sector(): one sector vocabulary for stored recommendation rows (read-time)
+    ├── sector_vocab.py             CURATED_SECTORS + PROVIDER_TO_CURATED, to_curated(): the one provider → curated sector table (resolve_sector, the macro gate, display aliases; F-317)
+    ├── macro_sector_gate.py        decide(): macro-event entry gate per sector — unchecked / blocked / clear / unknown (untranslatable label held); banner + hold wording (F-317)
     ├── reference_shelf.py          Shelf-life auditor for hand-maintained reference tables (awareness-only proprioception)
     ├── scanner.py                  Market scanner (curated ~73-ticker universe + Watchlist extension); scan_movers() 1-day-gainer pass
     ├── discovery_universe.py       Broad ~200-name discovery universe (by sector) for movers; discovery_tickers() flatten/dedup
