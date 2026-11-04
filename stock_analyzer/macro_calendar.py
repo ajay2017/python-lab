@@ -271,31 +271,33 @@ _STATIC: list[tuple] = [
 # ── Sector sensitivity map ────────────────────────────────────────────────────
 # 3 = directly impacted, 2 = moderately impacted, 1 = minor
 #
-# THIS MAP IS A GATE, AND IT FAILS OPEN. daily_briefing.py resolves a candidate's
-# sector and tests `sector in _macro_blocked_sectors`; a sector label absent from
-# every category below can never be suppressed — silently, with no banner. So the
-# key set here must cover every portfolio.TICKER_SECTORS value AND every
-# scanner.SECTOR_UNIVERSE bucket label (the fallback when a ticker has no curated
-# entry). tests/test_scanner.py asserts exactly those two sets.
+# THIS MAP IS A GATE, keyed on CURATED sector labels only (pinned by
+# tests/test_macro_sector_gate.py::test_impact_map_keys_are_curated_labels_only).
+# The entry gate translates a candidate's resolved sector with
+# sector_vocab.to_curated before testing membership, and HOLDS an entry whose
+# label it cannot translate (macro_sector_gate.decide, state "unknown": a hold
+# with a visible banner, never a silent pass). portfolio.resolve_sector now
+# translates the provider label at the source, so a HELD name and a candidate
+# with the same provider label ("Financial Services" -> "Financials") land in
+# the same curated bucket and are counted by the held-side exposure math at
+# daily_briefing.py's `port_df["Sector"].isin(ev_affected_sectors)`.
 #
-# It does NOT cover — and cannot — the third thing resolve_sector can return: the
-# RAW PROVIDER GICS STRING, handed to it by build_portfolio_df for a HELD ticker
-# with no TICKER_SECTORS entry ("Technology", "Consumer Cyclical", "Financial
-# Services", …). Such a holding is invisible to the held-side macro exposure math
-# at daily_briefing.py's `port_df["Sector"].isin(ev_affected_sectors)`, so it
-# silently drops out of exposure_pct and UNDER-counts the pre-event trim. That
-# fails in the calm direction (a trim under-fires; it can never manufacture a
-# suppression), which is why it is a documented limitation rather than the
-# fail-open bug fixed below.
+# What stays outside the map: a label sector_vocab deliberately leaves
+# unmapped ("Technology", "Consumer Cyclical", "Communication Services",
+# "AI & Data Platforms", "EV & Clean Energy"; see sector_vocab.PROVIDER_TO_
+# CURATED). On the entry side that name is held; on the held side it stays out
+# of exposure_pct and UNDER-counts the pre-event trim (the calm direction: a
+# trim under-fires, it can never manufacture a suppression).
 #   STANDING RULE: when a position is opened in a ticker with no TICKER_SECTORS
-#   entry, add one — otherwise it is invisible to the macro exposure math.
-# Note "Industrials" is now both a curated label AND a literal yfinance sector
-# string, so uncurated GICS-Industrials holdings newly enter that exposure sum.
+#   entry, add one - otherwise it is only as good as its provider label.
+# Note "Industrials" is both a curated label AND a literal yfinance sector
+# string, so uncurated GICS-Industrials holdings enter that exposure sum.
 #
-# On 2026-08-16 that invariant was found broken for 13 of 73 scan-universe names
+# On 2026-08-16 the key set was found not to cover 13 of 73 scan-universe names
 # (all of Enterprise Tech and Consumer Staples & Retail, plus BA, RIVN, PYPL) and
 # for the held name SPCX — the four rows added below plus the TICKER_SECTORS
-# entries in portfolio.py close it. tests/test_scanner.py now asserts it.
+# entries in portfolio.py close it. tests/test_scanner.py asserts the per-ticker
+# coverage (a curated sector value, or a bucket label, that the map knows).
 # Note "Fed Policy" and "Growth" use __ALL__, so those two event types always
 # suppressed correctly; the hole only ever affected the four keyed categories.
 #

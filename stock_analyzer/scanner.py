@@ -169,13 +169,17 @@ def scan_sectors(
 
     BUCKET LABELS ARE LOAD-BEARING, not just display. daily_briefing.py's
     macro gate resolves a candidate's sector via
-    portfolio.resolve_sector(ticker, <this bucket label>) and then tests
-    `sector in _macro_blocked_sectors`. A label that macro_calendar._SECTOR_
-    IMPACT doesn't know can NEVER be macro-suppressed — it fails OPEN,
-    silently, with no banner. Bucket/label structure is locked in the ⚙️ App
-    Settings editor (only ticker membership is UI-editable) specifically so
-    this invariant can't be broken from the UI; a genuinely new bucket is
-    still a reviewed code + DB change.
+    portfolio.resolve_sector(ticker, <this bucket label>), which translates a
+    provider-style label through sector_vocab.to_curated ("Healthcare &
+    Biotech" -> "Healthcare"), then tests the curated result against the macro
+    block set (macro_calendar._SECTOR_IMPACT, curated keys only). A label that
+    does not translate ("AI & Data Platforms", "EV & Clean Energy") is HELD by
+    the entry gate (macro_sector_gate.decide, state "unknown"), never passed;
+    tests/test_sector_resolution_c3.py pins every bucket label as translating
+    or on an explicit unmapped allowlist. Bucket/label structure is locked in
+    the ⚙️ App Settings editor (only ticker membership is UI-editable)
+    specifically so this stays true; a genuinely new bucket is still a
+    reviewed code + DB change.
     """
     all_tickers, ticker_sector = [], {}
     for sector in selected_sectors:

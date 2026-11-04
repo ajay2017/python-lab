@@ -281,11 +281,23 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
     # check above ran, but against a label the curated map has never vetted,
     # so a sector split across several curated buckets (e.g. "Technology")
     # could undercount against this one ticker's true peer group.
-    if portfolio_ctx.get("sector_label_source") == "provider":
+    _label_src = portfolio_ctx.get("sector_label_source")
+    if _label_src == "provider":
         soft.append(
             f"Sector taken from the provider label ({sector_name}); the curated "
             "sector ceiling may undercount. Add this ticker to the curated "
             "sector map for an exact check."
+        )
+    elif _label_src == "translated":
+        # macro-sector-gate plan C3: the provider label was translated to a
+        # curated one (sector_vocab.to_curated), so the ceiling and macro checks
+        # ran against the curated bucket; only the ticker's own entry is missing.
+        _raw_lbl = str(portfolio_ctx.get("sector_provider_label") or "").strip()
+        _mapped = (f"{_raw_lbl} → {sector_name}"
+                   if _raw_lbl and _raw_lbl.lower() != str(sector_name).lower() else sector_name)
+        soft.append(
+            f"Sector taken from the provider label ({_mapped}); add it to the "
+            "curated sector map to confirm."
         )
 
     if soft:

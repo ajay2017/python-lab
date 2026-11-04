@@ -29244,6 +29244,7 @@ elif page == "📋 Watchlist":
             "sector_weight_pct":       _wl_ctx["weight_pct"],
             "sector_classified":       _wl_ctx["classified"],
             "sector_label_source":     _wl_ctx["label_source"],
+            "sector_provider_label":   _wl_ctx.get("provider_label"),
             "portfolio_beta":          _wl_port_beta,
             "active_high_risk_alerts": _wl_high_alerts,
             "grow_today_sectors":      _wl_grow_sectors,

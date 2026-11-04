@@ -1129,6 +1129,7 @@ def compute_watchlist_entries(
             "sector_weight_pct":   _sctx["weight_pct"],
             "sector_classified":   _sctx["classified"],
             "sector_label_source": _sctx["label_source"],
+            "sector_provider_label": _sctx.get("provider_label"),
             "portfolio_beta":    portfolio_beta,
             # NOT replicated headlessly — these are session-only Risk Advisor /
             # Grow Today state, not part of any headless computation. Omitting

@@ -24,6 +24,7 @@ from __future__ import annotations
 from stock_analyzer.constants import UNCLASSIFIED_SECTOR
 from stock_analyzer.portfolio import resolve_sector, TICKER_SECTORS
 from stock_analyzer.sector_labels import is_placeholder_sector
+from stock_analyzer.sector_vocab import to_curated
 
 
 def gate_sector(ticker: str, *, row_label: str | None = None,
@@ -46,22 +47,28 @@ def gate_sector(ticker: str, *, row_label: str | None = None,
 
 
 def sector_gate_context(ticker: str, provider_sector: str | None, port_df) -> dict:
-    """Build the {sector, classified, label_source, weight_pct} bundle every
+    """Build the {sector, classified, label_source, provider_label, weight_pct}
+    bundle every
     sector gate needs, computed the SAME way regardless of caller — app.py,
     headless_alert_engine.py, and comparison.py all call this one function so
     the interactive and cron paths can never classify a ticker differently
     (the app/cron-parity invariant sector_gate_spec.md requires).
 
     Returns:
-        sector       : the resolved sector label (curated, provider, or
-                        UNCLASSIFIED_SECTOR).
+        sector       : the resolved sector label (curated, translated to
+                        curated, raw provider, or UNCLASSIFIED_SECTOR).
         classified   : False when neither TICKER_SECTORS nor a usable
                         row/provider label resolved the ticker — the sector
                         ceiling and macro sector checks could not run at all
                         for it (a data abstention, not "measured at 0%").
-        label_source : "curated" (ticker is in TICKER_SECTORS), "provider"
-                        (classified via `provider_sector`), or "none"
-                        (unclassified).
+        label_source : "curated" (ticker is in TICKER_SECTORS), "translated"
+                        (not curated; the provider label was translated to a
+                        curated label by sector_vocab.to_curated), "provider"
+                        (not curated, label kept raw: no curated equivalent),
+                        or "none" (unclassified).
+        provider_label: the raw provider/row label gate_sector used (None when
+                        none was usable); lets callers word "Financial
+                        Services -> Financials".
         weight_pct   : sum of the gate-weight column ("Gate Weight (%)" if
                         present, else "Weight (%)" — same rule as
                         daily_briefing._gate_wt_col) over
@@ -76,9 +83,15 @@ def sector_gate_context(ticker: str, provider_sector: str | None, port_df) -> di
     tk = str(ticker or "").strip().upper()
     sector = gate_sector(ticker, provider_sector=provider_sector)
     classified = sector != UNCLASSIFIED_SECTOR
+    # The raw label gate_sector fed resolve_sector (same placeholder screen).
+    provider_label = None
+    if provider_sector is not None and not is_placeholder_sector(provider_sector):
+        provider_label = str(provider_sector).strip() or None
 
     if tk and tk in TICKER_SECTORS:
         label_source = "curated"
+    elif classified and provider_label and to_curated(provider_label) == sector:
+        label_source = "translated"
     elif classified:
         label_source = "provider"
     else:
@@ -96,5 +109,6 @@ def sector_gate_context(ticker: str, provider_sector: str | None, port_df) -> di
         "sector":       sector,
         "classified":   classified,
         "label_source": label_source,
+        "provider_label": provider_label,
         "weight_pct":   weight_pct,
     }

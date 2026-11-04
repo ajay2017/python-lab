@@ -9,6 +9,7 @@ from stock_analyzer import asset_type
 from stock_analyzer import revision_flag as _revision_flag
 from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
+from stock_analyzer.sector_vocab import to_curated as _to_curated_sector
 
 
 def _safe_float(val, default: float = 0.0) -> float:
@@ -258,7 +259,7 @@ TICKER_SECTORS = {
     "000660.KS": "Semiconductors",
     # Paysafe: a payments processor, same class as PYPL/XYZ/COIN.
     "PAY": "Financials",
-    # ENVA (Enova, consumer lender, PAY/PYPL precedent) and WAL (Western
+    # ENVA (Enova, consumer lender, COF/AXP precedent) and WAL (Western
     # Alliance, a bank) added 2026-11-04 (MacroGap, owner U3): with no entry
     # they fell back to the provider's "Financial Services", which the macro
     # block set doesn't hold, so 📋 Watchlist called ENVA "Ready to Enter"
@@ -277,16 +278,23 @@ TICKER_SECTORS = {
 def resolve_sector(ticker: str, fallback: str = "") -> str:
     """Single source of truth for a ticker's sector bucket: curated
     TICKER_SECTORS first, then a provider-supplied fallback (yfinance/scanner
-    sector), then the UNCLASSIFIED_SECTOR catch-all. Used by both held-position
-    classification and the Brief's pick path so a mapped name classifies the
-    same way everywhere."""
+    sector) TRANSLATED to a curated label where sector_vocab has an
+    unambiguous one ("Financial Services" -> "Financials"), else the stripped
+    raw provider label, then the UNCLASSIFIED_SECTOR catch-all. Used by both
+    held-position classification and the Brief's pick path so a mapped name
+    classifies the same way everywhere (macro-sector-gate plan, C3: a held and
+    a candidate name with the same provider label land in the same bucket as
+    the curated names the macro block set and the G-16 ceiling are keyed on).
+    An untranslatable label (e.g. "Technology") stays raw."""
     # None-safe fallback: check truthiness BEFORE str() so a None/blank provider
     # sector falls through to UNCLASSIFIED_SECTOR — NOT the literal "None" (which
     # would dodge the breach-gate's "Other" exclusion). Mirrors the original
     # build_portfolio_df expression `(r.get("sector") or "").strip()`.
+    _fb = str(fallback).strip() if fallback else ""
     return (
         TICKER_SECTORS.get(str(ticker).strip().upper())
-        or (str(fallback).strip() if fallback else "")
+        or (_to_curated_sector(_fb) if _fb else None)
+        or _fb
         or UNCLASSIFIED_SECTOR
     )
 
