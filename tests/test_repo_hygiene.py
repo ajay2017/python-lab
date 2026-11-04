@@ -163,3 +163,44 @@ def test_the_republisher_still_refreshes_the_sizing_inputs():
             "leaves the app sizing trades against the PRE-TRADE book with no "
             "banner — the F-260a defect class."
         )
+
+
+def test_app_top_level_imports_are_never_rebound_at_module_scope():
+    """A name imported at the top of app.py must not be reassigned anywhere
+    in app.py's module scope (page branches, loops, `with` blocks — anything
+    outside a def/lambda/class/comprehension).
+
+    app.py runs top-to-bottom as one module, so `for _sd in _ni_sects:` on the
+    Portfolio page silently rebound the `signed_dollars as _sd` import, and
+    every later `_sd(...)` on that run raised "TypeError: 'dict' object is
+    not callable" (2026-11-04, whole Portfolio page down). Imports done inside
+    a page branch right before use are not covered here.
+    """
+    import ast
+
+    tree = parse_file_cached(_APP_PY)
+    imported = {}
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                imported[(alias.asname or alias.name).split(".")[0]] = node.lineno
+
+    scoped = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef,
+              ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+    clashes = []
+
+    def _walk(node):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, scoped):
+                continue
+            if (isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
+                    and child.id in imported):
+                clashes.append(f"{child.id} (imported line {imported[child.id]}, "
+                               f"rebound line {child.lineno})")
+            _walk(child)
+
+    _walk(tree)
+    assert not clashes, (
+        "app.py rebinds a top-level import at module scope; rename the local "
+        "variable or the import alias: " + "; ".join(clashes)
+    )
