@@ -14,6 +14,8 @@ from __future__ import annotations
 import math
 from datetime import date, time as _time
 
+from stock_analyzer import macro_sector_gate as _msg
+from stock_analyzer.asset_type import ASSET_TYPE_ETF
 from stock_analyzer.news_feed import (
     NEWS_STATUS_CACHED, NEWS_STATUS_ERROR, NEWS_STATUS_NONE,
 )
@@ -125,16 +127,17 @@ def macro_block_map(macro_events, today: date, now_et):
 
 
 def macro_hold(sector, block_map):
-    """Reason string if ``sector`` is held by the macro map, else None."""
+    """Reason string if ``sector`` is held by the macro map, else None.
+
+    Delegates to ``macro_sector_gate.decide``: only a "blocked" state returns a
+    reason (never an empty one: membership decides, the text only words it).
+    An unknown sector is NOT a hold here; Grow Today abstains on it separately."""
     if not block_map:
         return None
-    sectors = block_map["sectors"]
-    reasons = block_map["reasons"]
-    if "__ALL__" in sectors:
-        return reasons.get("__ALL__")
-    if sector in sectors:
-        return reasons.get(sector)
-    return None
+    d = _msg.decide(sector, block_map)
+    if d["state"] != "blocked":
+        return None
+    return d["event_reason"] or "imminent HIGH-impact macro event"
 
 
 # ── Data trust ───────────────────────────────────────────────────────────────
@@ -211,39 +214,28 @@ def check_tone(ctx):
 
 
 def check_macro(ctx):
-    bm = ctx.get("macro_map")
-    if bm is None:
-        return {"kind": "unchecked", "check": "macro",
-                "why": "macro calendar unavailable — the macro-event check couldn't run"}
-    if not isinstance(bm, dict) or bm.get("sectors") is None:
-        # A map without its blocked-sector set is malformed, not "nothing
-        # blocked": say the check couldn't run rather than pass silently.
-        return {"kind": "unchecked", "check": "macro",
-                "why": "macro calendar unreadable — the macro-event check couldn't run"}
-    # The hold is decided on SET MEMBERSHIP; the reason string only words it.
-    # Safe defaults (explicit None handling) so `{}` is a pass, not a crash.
-    sectors = bm.get("sectors")
-    reasons = bm.get("reasons")
-    reasons = {} if reasons is None else reasons
-    sector = ctx.get("sector")
-    if "__ALL__" in sectors:
-        r = reasons.get("__ALL__")
-    elif not sector:
-        # A falsy sector can't be matched against a blocked-sector set: say so
-        # rather than pass silently (chunk-3 review item 3).
-        return {"kind": "unchecked", "check": "macro",
-                "why": "sector unknown — the macro-event check couldn't run"}
-    elif sector in sectors:
-        r = reasons.get(sector)
-    else:
-        return None
-    r = r or "imminent HIGH-impact macro event"
-    return {
-        "kind": "hold", "check": "macro", "gate_id": _gid(ctx, "macro"),
-        "reason": f"macro event · {r}",
-        "clears_when": "the release is out",
-        "gate_value": None, "gate_threshold": MACRO_IMMINENT_DAYS,
-    }
+    bundle = ctx.get("bundle")
+    is_etf = isinstance(bundle, dict) and bundle.get("asset_type") == ASSET_TYPE_ETF
+    d = _msg.decide(ctx.get("sector"), ctx.get("macro_map"), is_etf=is_etf)
+    if d["state"] == "unchecked":
+        return {"kind": "unchecked", "check": "macro", "why": d["reason"]}
+    if d["state"] == "blocked":
+        return {
+            "kind": "hold", "check": "macro", "gate_id": _gid(ctx, "macro"),
+            "reason": f"macro event · {d['event_reason']}",
+            "clears_when": "the release is out",
+            "gate_value": None, "gate_threshold": MACRO_IMMINENT_DAYS,
+        }
+    if d["state"] == "unknown":
+        # No gate_id and no _HOLD_SUPPRESSION_KIND entry: a data abstention, not
+        # a ledgered policy gate (macro-sector-gate plan C2).
+        return {
+            "kind": "hold", "check": "macro_unknown_sector", "gate_id": None,
+            "reason": d["reason"],
+            "clears_when": _msg.unknown_clears_when(is_etf=is_etf),
+            "gate_value": None, "gate_threshold": MACRO_IMMINENT_DAYS,
+        }
+    return None
 
 
 def check_news(ctx):
@@ -395,7 +387,8 @@ def watchlist_run_ctx(tone_state, macro_events, today: date, now_et) -> dict:
 def watchlist_ticker_ctx(run_ctx, *, sector, classified, news_items) -> dict:
     """The full per-ticker ``entry_ctx``. ``sector`` is the curated
     ``sector_gate_context`` sector and is passed ONLY when ``classified`` (else
-    None -> check_macro says "sector unknown"). ``news_items`` None means the
+    None -> check_macro holds it as "sector unknown" while a sector-keyed event
+    is imminent, and passes it when none is). ``news_items`` None means the
     headline read raised (``news_read_failed`` True -> "headlines couldn't be read");
     an empty list is a completed read with nothing usable, which check_news words
     from the bundle's ``news_status`` (``curate_news_items`` never returns None)."""
@@ -581,6 +574,7 @@ def emailed_then_held_line(card, allocs, alloc_times) -> "str | None":
 
 HELD_KIND_LABELS = {
     "macro": "macro event",
+    "macro_unknown_sector": "sector unknown (macro check)",
     "news": "negative news",
     "stale": "stale data",
     "earnings": "earnings",
@@ -608,8 +602,8 @@ def email_footer_lines(entry_run) -> "list[str]":
     None / malformed -> no lines (an old caller says nothing rather than
     guessing). RUN-level lines only: one for the tone the run used -- or that it
     couldn't be read -- and one if the macro calendar was unavailable. A check
-    that couldn't run for a single name (no headlines, unknown sector) is that
-    card's ``entry_unchecked`` note, which the email prints under the name.  The caller escapes before building HTML.
+    that couldn't run for a single name (no headlines) is that card's
+    ``entry_unchecked`` note (an unknown sector is a hold, not a note), which the email prints under the name.  The caller escapes before building HTML.
     """
     if not isinstance(entry_run, dict):
         return []
@@ -731,9 +725,12 @@ def analysis_gate_tiles(decision) -> "list[dict]":
             ("macro", "Macro", "No imminent macro event"),
             ("news", "News", "No negative news"),
             ("stale", "Data fresh", "Data is current"))
+    # The Macro tile reads both the G-28 hold and the unknown-sector hold.
+    _checks_for = {"macro": ("macro", "macro_unknown_sector")}
     tiles = []
     for chk, label, ok in spec:
-        hold = next((h for h in holds if isinstance(h, dict) and h.get("check") == chk), None)
+        _names = _checks_for.get(chk, (chk,))
+        hold = next((h for h in holds if isinstance(h, dict) and h.get("check") in _names), None)
         if crashed:
             tiles.append({"label": label, "state": None, "detail": "not checked"})
         elif hold is not None:

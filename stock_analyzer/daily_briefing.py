@@ -95,7 +95,8 @@ from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 from stock_analyzer import etf_candidates as etf_candidates_mod
 from stock_analyzer import pair_add_gate
 from stock_analyzer import entry_eligibility
-from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map, macro_hold
+from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map
+from stock_analyzer import macro_sector_gate as _macro_sector_gate
 from stock_analyzer.analyst_intel import trustworthy_composite
 from stock_analyzer import held_news_check
 from stock_analyzer.score_text import composite_score_text
@@ -1362,7 +1363,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # Macro gate — hard-suppress if sector has an imminent HIGH-impact
             # macro event. Opening into a known binary catalyst is the
             # anti-pattern; surface the suppression so the user knows.
-            _macro_block = macro_hold(sector, _macro_map)
+            _macro_dec = _macro_sector_gate.decide(sector, _macro_map)
+            # "blocked" is decided on set membership: a blocked state with an
+            # empty reason is still a hold (decide never returns an empty one).
+            _macro_block = (_macro_dec["event_reason"]
+                            if _macro_dec["state"] == "blocked" else None)
+            # An unmatched sector label vs a non-empty block set can't be checked:
+            # remembered here, abstained on at the D1 point below (after every
+            # data-quality / composite gate, which still win).
+            _macro_unknown = _macro_dec["state"] == "unknown"
             if _macro_block:
                 macro_blocked_picks.append({
                     "ticker": ticker, "sector": sector,
@@ -1579,12 +1588,20 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # against it at all — that is a reason to withhold the
             # recommendation, not a green light. No gate_id: a data
             # abstention, not a ledgered policy gate.
-            if sector == UNCLASSIFIED_SECTOR:
+            if sector == UNCLASSIFIED_SECTOR or _macro_unknown:
                 sector_unknown_picks.append({
                     "ticker":          ticker,
                     "sector":          sector,
                     "score":           _f(row.get("Score", 0)),
-                    "reason":          "Sector unknown — the sector ceiling and macro sector checks couldn't run",
+                    # "basis" lets the banner word each case truthfully: an
+                    # "Other" name had neither check run; a macro_unknown name's
+                    # sector ceiling DID run (macro-sector-gate plan C2).
+                    "basis":           (_macro_sector_gate.BASIS_UNCLASSIFIED
+                                        if sector == UNCLASSIFIED_SECTOR
+                                        else _macro_sector_gate.BASIS_MACRO_UNKNOWN),
+                    "reason":          ("Sector unknown — the sector ceiling and macro sector checks couldn't run"
+                                        if sector == UNCLASSIFIED_SECTOR
+                                        else _macro_dec["reason"]),
                     "price":           price,
                     "composite_score": _composite_score,
                     "momentum_score":  _f(row.get("Score"), None),

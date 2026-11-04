@@ -138,7 +138,9 @@ def test_macro_in_sector_holds_with_g28_kind():
 
 def test_other_sector_macro_does_not_hold():
     mm = {"sectors": {"Energy"}, "reasons": {"Energy": "x"}}
-    assert _rec(ctx=_ctx(macro_map=mm))["action"] == "ENTER_NOW"
+    # a CURATED sector outside the block set passes (an uncurated label such as the
+    # default "Technology" is the unknown-sector hold since MacroGap C2)
+    assert _rec(ctx=_ctx(macro_map=mm, sector="Healthcare"))["action"] == "ENTER_NOW"
 
 
 def test_negative_news_holds_without_a_ledger_kind():

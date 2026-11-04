@@ -31,17 +31,13 @@ sector-ceiling gate classifies via `portfolio.resolve_sector` and is untouched.
 from __future__ import annotations
 
 from stock_analyzer.constants import UNCLASSIFIED_SECTOR
+from stock_analyzer.sector_vocab import PROVIDER_TO_CURATED
 
-# Keys are lower-cased and stripped. Only labels whose curated target is
-# unambiguous belong here.
+# One table (sector_vocab.PROVIDER_TO_CURATED, macro-sector-gate plan C1). The
+# gate-side "consumer staples" row is not a label the display path ever
+# aliased, so it is left out here and canonical_sector's outputs are unchanged.
 SECTOR_LABEL_ALIASES: dict[str, str] = {
-    "financial services":     "Financials",
-    "financials & fintech":   "Financials",
-    "health care":            "Healthcare",
-    "healthcare & biotech":   "Healthcare",
-    "basic materials":        "Materials",
-    "consumer defensive":     "Consumer Staples & Retail",
-    "defense & aerospace":    "Defense",
+    k: v for k, v in PROVIDER_TO_CURATED.items() if k != "consumer staples"
 }
 
 # Placeholders that are not a sector at all.

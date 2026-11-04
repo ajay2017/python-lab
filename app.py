@@ -90,6 +90,7 @@ from stock_analyzer.stress_test import (
 )
 from stock_analyzer import monte_carlo as _mc
 from stock_analyzer import trim_sizing as _trim_sizing
+from stock_analyzer import macro_sector_gate as _macro_sector_gate
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import held_stop_view as _held_stop_view
 from stock_analyzer import thesis_review_status
@@ -10821,12 +10822,8 @@ if page == "🏠 Home":
         # with an unchecked sector/macro gate. "Couldn't check," not
         # "checked and breached" (that's the sector_blocked banner above).
         if sector_unknown:
-            _su_tickers = ", ".join(str(b.get("ticker", "?")) for b in sector_unknown)
-            st.warning(
-                f"🧭 Sector unknown — {len(sector_unknown)} pick(s) held back: "
-                "the sector ceiling and macro sector checks couldn't run, so "
-                f"these aren't recommended today: {_su_tickers}"
-            )
+            # Wording decided in macro_sector_gate (each basis worded truthfully).
+            st.warning(_macro_sector_gate.sector_unknown_banner(sector_unknown))
 
         # Risk Advisor suppressed an add-to-winner — surface the conflict so the
         # user understands why a winning held position isn't on the add list.

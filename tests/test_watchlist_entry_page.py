@@ -89,9 +89,14 @@ def test_eligible_check_with_missing_unchecked_key_stays_enter_now(monkeypatch):
 
 
 def test_check_macro_falsy_sector_is_an_unchecked_note():
+    # U4 (macro-sector-gate plan): a falsy sector against an EMPTY block set is a
+    # checked pass with no note (nothing could block); against a non-empty set it
+    # is the unknown-sector hold (tests/test_macro_sector_gate.py).
     for sector in (None, ""):
-        r = ee.check_macro({"macro_map": CLEAR_MAP, "sector": sector})
-        assert r["kind"] == "unchecked" and "sector unknown" in r["why"]
+        assert ee.check_macro({"macro_map": CLEAR_MAP, "sector": sector}) is None
+        r = ee.check_macro({"macro_map": {"sectors": {"Financials"}, "reasons": {}},
+                            "sector": sector})
+        assert r["kind"] == "hold" and r["check"] == "macro_unknown_sector"
     # firing control: a real sector with a clear map passes silently
     assert ee.check_macro({"macro_map": CLEAR_MAP, "sector": "Technology"}) is None
 
@@ -183,13 +188,14 @@ def test_macro_none_becomes_an_unchecked_note_not_a_pass():
     assert ctx["macro_map"] == {"sectors": set(), "reasons": {}}
 
 
-def test_unclassified_sector_is_passed_as_none_and_noted():
+def test_unclassified_sector_is_passed_as_none_with_no_note_on_a_quiet_day():
     ctx = ee.watchlist_run_ctx(FLAT, [], TODAY, NOW)
     t = ee.watchlist_ticker_ctx(ctx, sector="Technology", classified=False, news_items=[])
     assert t["sector"] is None
     r = build_watchlist_recommendation("XYZ", _data(), entry_ctx=t)
-    assert any(u["check"] == "macro" and "sector unknown" in u["why"]
-               for u in r["entry_unchecked"])
+    # U4: an empty block set means the check ran and nothing could block, so there
+    # is no "sector unknown" note any more (an event day holds instead).
+    assert not any(u["check"] == "macro" for u in r["entry_unchecked"])
     t = ee.watchlist_ticker_ctx(ctx, sector="Technology", classified=True, news_items=[])
     assert t["sector"] == "Technology"
 

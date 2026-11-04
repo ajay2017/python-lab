@@ -1230,6 +1230,12 @@ _GATE_FILES = {
     # Added 2026-11-03 (bug register SecTrig): decides which band the Signals
     # sector REDUCE card is in (early / elevated / hard_cap / unchecked) from the Risk Advisor's rec.
     "stock_analyzer/sector_trigger_text.py",
+    # Added 2026-11-04 (MacroGap, docs/plans/macro-sector-gate.md C1): the one
+    # sector vocabulary (curated labels + provider-label translation) the macro gate matches on.
+    "stock_analyzer/sector_vocab.py",
+    # Added 2026-11-04 (MacroGap C2): decides blocked / clear / unknown / unchecked
+    # for an entry against the macro block set, and words the unknown-sector hold.
+    "stock_analyzer/macro_sector_gate.py",
 }
 
 
