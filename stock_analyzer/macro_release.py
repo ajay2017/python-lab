@@ -73,6 +73,9 @@ def refresh_macro_card(item, now):
             return item
         out = dict(item)
         out["directive"] = released_text(t)
+        # `reason` is the back-compat directive+why string synthesized at build
+        # time ("Hold through the print…"); keep it in step after the release.
+        out["reason"] = f"{out['directive']} {out.get('why', '')}".strip()
         _now = now.astimezone(ET) if getattr(now, "tzinfo", None) is not None else now
         # The entry gate holds a Fed Policy event's names only on its own day.
         _same_day = item.get("_event_date") == _now.date()

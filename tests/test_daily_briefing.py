@@ -1626,7 +1626,7 @@ def test_rewrite_macro_affected_drops_tickers_already_under_a_reduce_call():
     # print" -- that reads as a contradictory second opinion on the same name.
     act = [_macro_item(["BKNG", "CRWD", "GD", "LLY", "SHOP"])]
     _rewrite_macro_affected(act, reduced={"GD"})
-    assert act[0]["why"] == "Economic release today. Affected: BKNG, CRWD, LLY, SHOP."
+    assert act[0]["why"] == "Economic release today. Affected: BKNG, CRWD, LLY, SHOP."+' (1 affected name with its own Act Today call not listed)'
 
 
 def test_rewrite_macro_affected_falls_back_when_every_ticker_is_already_reduced():
@@ -1645,7 +1645,7 @@ def test_rewrite_macro_affected_leaves_non_macro_items_untouched():
 def test_rewrite_macro_affected_is_case_insensitive_against_reduced_set():
     act = [_macro_item(["gd", "CRWD"])]
     _rewrite_macro_affected(act, reduced={"GD"})
-    assert act[0]["why"] == "Economic release today. Affected: CRWD."
+    assert act[0]["why"] == "Economic release today. Affected: CRWD."+' (1 affected name with its own Act Today call not listed)'
 
 
 def test_rewrite_macro_affected_leaves_broad_market_card_untouched():
@@ -1670,8 +1670,8 @@ def test_rewrite_macro_affected_keeps_reason_in_sync_with_filtered_why():
     item["reason"] = "Hold through the print. Economic release today. Affected: BKNG, GD."
     act = [item]
     _rewrite_macro_affected(act, reduced={"GD"})
-    assert act[0]["why"] == "Economic release today. Affected: BKNG."
-    assert act[0]["reason"] == "Hold through the print. Economic release today. Affected: BKNG."
+    assert act[0]["why"] == "Economic release today. Affected: BKNG."+' (1 affected name with its own Act Today call not listed)'
+    assert act[0]["reason"] == "Hold through the print. Economic release today. Affected: BKNG."+' (1 affected name with its own Act Today call not listed)'
 
 
 # ── _portfolio_tuneup — beta/sharpe trim-driver dedup (2026-08-04 audit) ──────
@@ -1934,7 +1934,7 @@ def test_macro_affected_strips_reduce_names_only_not_watch_only_names():
     assert reduced == {"AAA"}
     assert "BBB" in decision_bucket.all_flagged_tickers(act, review)
     _rewrite_macro_affected(act, reduced)
-    assert act[0]["why"].endswith("Affected: BBB, CCC.")
+    assert act[0]["why"].endswith("Affected: BBB, CCC."+' (1 affected name with its own Act Today call not listed)')
 
 
 def test_build_daily_briefing_macro_affected_keeps_watch_only_name(monkeypatch):
@@ -1960,7 +1960,7 @@ def test_build_daily_briefing_macro_affected_keeps_watch_only_name(monkeypatch):
     assert find_item(brief["review_list"], "BBB") is not None  # the WATCH exists
     assert find_item(brief["act_today"], "AAA")["kind"] == "stop_breach"
     macro = next(i for i in brief["act_today"] if i.get("kind") == "macro")
-    assert macro["why"].endswith("Affected: BBB.")
+    assert macro["why"].endswith("Affected: BBB."+' (1 affected name with its own Act Today call not listed)')
 
 
 def test_build_daily_briefing_macro_affected_drops_risk_off_trim_name(monkeypatch):
@@ -1988,7 +1988,7 @@ def test_build_daily_briefing_macro_affected_drops_risk_off_trim_name(monkeypatc
     )
     assert find_item(brief["act_today"], "CCC")["kind"] == "risk_off_derisk"
     macro = next(i for i in brief["act_today"] if i.get("kind") == "macro")
-    assert macro["why"].endswith("Affected: BBB.")
+    assert macro["why"].endswith("Affected: BBB."+' (1 affected name with its own Act Today call not listed)')
 
 
 def test_macro_item_carries_release_date_and_time_for_render_swap():

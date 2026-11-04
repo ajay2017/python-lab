@@ -3010,7 +3010,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             ),
             "trigger": (
                 ev.get("playbook_note")
-                or "Hawkish surprise → existing stops protect; dovish → reconsider adds."
+                or _MACRO_TRIGGER_FALLBACK
             ),
             "weight":  None,
             "pnl_pct": None,
@@ -3687,7 +3687,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             sector_rows  = port_df[port_df["Sector"].isin(ev_affected_sectors)] if not port_df.empty else port_df
             exposure_pct = _f(sector_rows["Weight (%)"].sum()) if not sector_rows.empty else 0.0
 
-        affected_tickers_str = ", ".join(ev.get("affected_tickers", [])[:4]) or "macro-sensitive"
+        affected_tickers_str = _affected_text(ev.get("affected_tickers", [])) or "macro-sensitive"
         playbook = ev.get("playbook_note") or ""
 
         # Don't pre-trim a name that already carries its own Act Today decision
@@ -3718,9 +3718,9 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             why = (
                 f"This event touches {exposure_pct:.0f}% of your portfolio — a broad "
                 "macro print, not a sector-specific shock. A token single-name trim "
-                "wouldn't materially reduce that exposure; hold through and let your "
-                "existing stops do the work. Sized de-risking is reserved for events "
-                "that hit a concentrated sector you can actually prune."
+                "wouldn't materially reduce that exposure, so no pre-event trim is "
+                "sized; your stops stay in place. Sized de-risking is reserved for "
+                "events that hit a concentrated sector you can actually prune."
             )
         elif exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not _macro_eligible.empty and portfolio_value > 0:
             # Find lowest-conviction-score holding in the affected sectors
@@ -3858,15 +3858,20 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "headline": (
                 f"{ev.get('event','Macro event')} in {days}d ({ev_date}) · "
                 f"affected: {affected_tickers_str}"
-            ),
+            ),  # rebuilt by _rewrite_macro_affected once the reduce set is final
             "action":   action,
             "why":      why,
             "trigger":  (
                 playbook
                 if playbook
-                else f"Hawkish surprise → existing stops protect; dovish surprise → reconsider add."
+                else _MACRO_TRIGGER_FALLBACK
             ),
             "weight":   None,
+            # Full list kept (private keys, no watch_kind) so the outer builder
+            # can drop names already carrying a reduce call and rebuild the
+            # headline (MacroAff, `_rewrite_macro_affected`).
+            "_affected_all": list(ev.get("affected_tickers", [])),
+            "_headline_head": f"{ev.get('event','Macro event')} in {days}d ({ev_date})",
         })
 
     # Final-pass news-WATCH dedup. The inline check above suppresses a
@@ -3911,7 +3916,46 @@ def _affected_text(names) -> str:
     return out
 
 
-def _rewrite_macro_affected(act: list[dict], reduced: set[str]) -> None:
+_MACRO_TRIGGER_FALLBACK = (
+    "Hawkish surprise → your stops are the exit plan, though a gap can open "
+    "below one; dovish → reconsider adds."
+)
+
+
+def _left_out_clause(n: int) -> str:
+    """U6 clause naming how many affected names were left off a macro card."""
+    if n == 1:
+        return "(1 affected name with its own Act Today call not listed)"
+    return f"({n} affected names with their own Act Today calls not listed)"
+
+
+def _rewrite_macro_review_items(review: list[dict], reduced: set[str]) -> None:
+    """MacroAff: rebuild the Monitoring macro item's headline from the affected
+    list minus names already carrying a reduce call, in place.
+
+    The card's own ``action.trim_ticker`` is kept (a pre-event trim card must
+    name the name it trims). Review macro items are found by the private
+    ``_affected_all`` key (review items carry no ``kind``)."""
+    for it in review:
+        if "_affected_all" not in it or "_headline_head" not in it:
+            continue
+        affected_all = it["_affected_all"] if isinstance(it["_affected_all"], list) else []
+        if not affected_all:
+            continue  # "macro-sensitive" headline — nothing to filter
+        _act = it.get("action")
+        own = str(_act.get("trim_ticker", "")).upper() if isinstance(_act, dict) else ""
+        remaining = [t for t in affected_all
+                     if str(t).upper() == own or str(t).upper() not in reduced]
+        dropped = len(affected_all) - len(remaining)
+        text = (_affected_text(remaining) if remaining
+                else "names already carrying their own Act Today calls")
+        if remaining and dropped:
+            text += " " + _left_out_clause(dropped)
+        it["headline"] = f"{it['_headline_head']} · affected: {text}"
+
+
+def _rewrite_macro_affected(act: list[dict], reduced: set[str],
+                            review: list[dict] | None = None) -> None:
     """Strip tickers already carrying an Act Today reduce card out of every
     macro item's "Affected" list, in place.
 
@@ -3932,6 +3976,8 @@ def _rewrite_macro_affected(act: list[dict], reduced: set[str]) -> None:
     already carries the caution; the macro event's existence still surfaces
     via the card itself, only the restated ticker name is removed.
     """
+    if review:
+        _rewrite_macro_review_items(review, reduced)
     for it in act:
         if it.get("kind") != "macro":
             continue
@@ -3942,6 +3988,8 @@ def _rewrite_macro_affected(act: list[dict], reduced: set[str]) -> None:
         category = it.get("_event_category", "Economic")
         if remaining:
             it["why"] = f"{category} release today. Affected: {_affected_text(remaining)}."
+            if len(remaining) < len(affected_all):
+                it["why"] += " " + _left_out_clause(len(affected_all) - len(remaining))
         else:
             it["why"] = (
                 f"{category} release today. "
@@ -4149,7 +4197,7 @@ def build_daily_briefing(
     # its only mention of the print (2026-10-29 live check, GDP card hid ~10
     # Watch-only names).
     _reduced = decision_bucket.reduce_call_tickers(act, review)
-    _rewrite_macro_affected(act, _reduced)
+    _rewrite_macro_affected(act, _reduced, review)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, review_list=review, composites=grow_composites or {},
                          risk_recs=risk_recs,
