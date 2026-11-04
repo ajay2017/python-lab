@@ -258,6 +258,12 @@ TICKER_SECTORS = {
     "000660.KS": "Semiconductors",
     # Paysafe: a payments processor, same class as PYPL/XYZ/COIN.
     "PAY": "Financials",
+    # ENVA (Enova, consumer lender, PAY/PYPL precedent) and WAL (Western
+    # Alliance, a bank) added 2026-11-04 (MacroGap, owner U3): with no entry
+    # they fell back to the provider's "Financial Services", which the macro
+    # block set doesn't hold, so 📋 Watchlist called ENVA "Ready to Enter"
+    # three days before Non-Farm Payrolls while Grow Today held back CME.
+    "ENVA": "Financials", "WAL": "Financials",
     # FIVN (Five9, contact-center SaaS) and NTCT (NetScout, network
     # performance monitoring with a DDoS/security line) both classified
     # Enterprise Tech -- mature enterprise infrastructure, not a growth/AI-

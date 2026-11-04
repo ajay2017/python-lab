@@ -259,6 +259,21 @@ def test_macro_hold_decided_on_membership_not_reason_truthiness():
                           macro_map={"sectors": {"Technology"}, "reasons": {"Energy": "x"}})["eligible"]
 
 
+def test_enva_and_wal_are_held_by_a_financials_macro_event():
+    # MacroGap 2026-11-03: ENVA resolved to the provider's "Financial Services",
+    # not in the curated block set, so it passed while CME was held for NFP.
+    from stock_analyzer.macro_calendar import affected_sectors
+    from stock_analyzer.sector_fit import gate_sector
+    assert "Financials" in affected_sectors("Employment")
+    bm = {"sectors": {"Financials"}, "reasons": {"Financials": "Non-Farm Payrolls"}}
+    for tk in ("ENVA", "WAL"):
+        sector = gate_sector(tk, provider_sector="Financial Services")
+        assert sector == "Financials"
+        r = ee.entry_check(sector=sector, macro_map=bm, bundle={},
+                           checks=(ee.check_macro,))
+        assert not r["eligible"] and r["binding"]["check"] == "macro"
+
+
 def test_entry_eligibility_is_pure_and_margin_isolated():
     tree = ast.parse((ROOT / "stock_analyzer" / "entry_eligibility.py").read_text(encoding="utf-8"))
     banned = ("streamlit", "stock_analyzer.db", "app", "stock_analyzer.margin")
