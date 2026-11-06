@@ -1,6 +1,6 @@
 # Macro sector gate: provider labels and unknown sectors (MacroGap, MacroAff, Macro)
 
-**Status:** designed 2026-11-04 (planner Opus 5.5, PROCEED WITH CHANGES); owner ruled U1–U7 on 2026-11-04. **SHIPPED 2026-11-04** (F-317, every chunk Opus SHIP, 0 blocking): U3 `fdf3635` (verified live), C1 + C2 `e9f44c6`, C3 `212f2c5`, C4 + C5 `b6113ff`, C6 docs. Close the Macro row after a live check following NFP 08:30 ET Fri 11-06.
+**Status:** designed 2026-11-04 (planner Opus 5.5, PROCEED WITH CHANGES); owner ruled U1–U7 on 2026-11-04. **SHIPPED 2026-11-04** (F-317, every chunk Opus SHIP, 0 blocking): U3 `fdf3635` (verified live), C1 + C2 `e9f44c6`, C3 `212f2c5`, C4 + C5 `b6113ff`, C6 docs. Brief macro card verified live after NFP 2026-11-06 (no "existing stops protect", left-out clause, "Released at 08:30 ET"); Macro row closed. Open: the Watchlist "sector unknown (macro check)" leg before CPI 11-12.
 
 Bug-register rows: MacroGap, MacroAff, Macro (`docs/bug-register.md`). Every file:line below is the planner's reading of HEAD on 2026-11-04 (`aafcdd5`); re-check before building.
 

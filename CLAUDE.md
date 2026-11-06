@@ -218,7 +218,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 *Tidied 2026-11-04: shipped and verified history moved verbatim to [docs/queue.md](docs/queue.md) ("2026-11-04 (verbatim, before the tidy)"); open bugs live one row each in [docs/bug-register.md](docs/bug-register.md). This list keeps only what is still open. `#N` / `U8` IDs match the bug register and the commits.*
 
 **Owner-agreed order (2026-11-03; MacroGap step done 2026-11-04):**
-1. ~~MacroGap + MacroAff + Macro~~ **SHIPPED 2026-11-04** (F-317: `fdf3635` `e9f44c6` `212f2c5` `b6113ff`; plan `docs/plans/macro-sector-gate.md`). Live check after NFP 08:30 ET Fri 11-06, then close the Macro row.
+1. ~~MacroGap + MacroAff + Macro~~ **SHIPPED 2026-11-04** (F-317: `fdf3635` `e9f44c6` `212f2c5` `b6113ff`; plan `docs/plans/macro-sector-gate.md`). Brief leg verified live after NFP 2026-11-06; Macro row closed. Watchlist "sector unknown" leg still open (before CPI 11-12).
 2. **Write-safety batch:** WLWipe, RbPartial, RbAsset, TrPage (bug register; DB-write path → reviewer).
 3. **TJDate Phase 1** (`docs/plans/trade-entry-guard.md`: confirming planner pass, then the P0 probe).
 4. **U7 + #21** (U7: planner + reviewer; #21: trace both budget figures first).
@@ -255,12 +255,12 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 *Only legs not yet seen; what each should read is in the docs/queue.md snapshot. For every check: no literal `**`, `$` as text.*
 
-- **F-317 (2026-11-04):** after NFP 08:30 ET Fri 11-06, the 🏠 Brief macro card (no "existing stops protect"; "(N affected name(s) with their own Act Today call not listed)" when names drop; "Released at 08:30 ET …" after the print); an uncurated Watchlist name with a "Technology"-type label reads "Held: sector unknown (macro check)" before NFP / CPI 11-12; a translated name reads "Sector taken from the provider label (… → …)".
+- **F-317 (2026-11-04):** Brief macro card leg VERIFIED 2026-11-06 (after NFP). Still open: an uncurated Watchlist name with a "Technology"-type label reads "Held: sector unknown (macro check)" before NFP / CPI 11-12; a translated name reads "Sector taken from the provider label (… → …)".
 - **Composite / R:R display:** a 64.5–64.99 composite reads "64.6" (Brief, Signals, Playbook, Portfolio Overview, Analysis, Watchlist), never "65"; a redeploy R:R of 2.45–2.49 reads "2.46:1"; a 1.95–1.99 R:R reads "below 2:1" (parked with the fractional checks).
 - **11-03 batches:** a flat Today's P&L with no arrow; the "≈$" no-baseline alert; "1 share" / "1 setup" / "1 downgrade"; movers after 20:00 ET; "Trims would move" 0.0% when every trim is under one share; Watchlist "is below the entry zone"; App Settings pending line naming the effort.
 - **Signals headline (Bal):** the resolved, attention and clear legs.
 - **Stops and breaches:** the Batch C at-the-stop leg; the ⛔ Exit stop card on a one-card-per-name Act item; #23 "just inside" / "beyond" legs; no degraded-basis warning on a normal load.
-- **Macro / release:** #13 post-release wording on Brief, AI Snapshot, Summary and the Pre-Event Playbook (first chance: NFP 11-06); Batch D's macro card dropping a risk-off trim name; #20 Lock Setup legs (moot if Lock Setup is retired).
+- **Macro / release:** #13 post-release wording on AI Snapshot, Summary and the Pre-Event Playbook (Brief leg seen 2026-11-06); Batch D's macro card dropping a risk-off trim name; #20 Lock Setup legs (moot if Lock Setup is retired).
 - **Watchlist:** Batch B's 55–64 "Constructive, But Earnings in Nd" leg; Batch D's "R:R Can't Be Computed" card with a target; the S-D C4 🎯 Add detail.
 - **Signals / Catalyst:** #22's Signals ⚑ variant and a remaining REDUCE's "Sell N share(s)"; a ⬆️ revision icon; the driver box absent on Add / Trim; the earnings-week Signals trim "→ ~10%"; the S-D C6 "Undersized" card; S-D C4 🔔 Catalyst HOLD / HOLD_OR_ADD text and the 📈 Analysis not-held Sell caption.
 - **Grow Today:** "Markets down — …" empty state on a bear day; the sector hard-cap card's score label; the S-D C3 risk footer and the S-D C5 "⏸ Not adding" warning (need sized picks / a bull day); F-305 overflow and flat-day boxes; F-306 budget lines; F-307 Protect Mode / "Not an entry today"; chunk 7 "Adds held"; F-310 "Capped by what you already hold"; the F-304 withheld verdict on a recent IPO.
