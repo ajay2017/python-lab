@@ -262,7 +262,9 @@ def test_count_models_groups_null_as_legacy(monkeypatch):
     monkeypatch.setattr(db, "_client", lambda: q)
     assert db.count_sentiment_cache_models("2026-11-10") == {
         H55: 2, "legacy (Haiku 4.5)": 2}
-    assert q.filters == [("score_date", "2026-11-10")] and q.cols == "ticker,model"
+    # one build per page (a data page + the empty page that ends the read), so
+    # the same filter is applied once per request; the filter itself is what's pinned.
+    assert set(q.filters) == {("score_date", "2026-11-10")} and q.cols == "ticker,model"
 
 
 def test_count_models_none_on_failure_or_no_db(monkeypatch):

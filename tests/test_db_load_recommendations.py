@@ -199,7 +199,10 @@ def test_load_recommendations_orders_by_id_as_tie_breaker(monkeypatch):
 
     db.load_recommendations()
 
-    assert len(fake.builders) == 1
+    # data page + the empty page that ends the read (TrPage: a short page is
+    # not an end-of-table signal); both builds carry the same ordering.
+    assert len(fake.builders) == 2
+    assert fake.builders[0].order_calls == fake.builders[1].order_calls
     order_calls = fake.builders[0].order_calls
     assert [args[0] for args, _kw in order_calls] == ["surfaced_at", "id"]
     # Direction matters too: both must stay descending (newest-first) -- a

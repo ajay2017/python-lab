@@ -509,8 +509,15 @@ def test_a_shim_failure_falls_back_to_the_raw_frame_not_the_offline_sentinel(mon
     class _Q:
         def select(self, *a, **k): return self
         def order(self, *a, **k):  return self
-        def range(self, *a, **k):  return self
-        def execute(self):         return _Resp()
+        def range(self, a, b):
+            self._rng = (a, b)
+            return self
+        def execute(self):
+            # Honour .range so the paged reader sees the end-of-table empty page.
+            a, b = self._rng
+            r = _Resp()
+            r.data = rows[a:b + 1]
+            return r
 
     class _Client:
         def table(self, *a, **k): return _Q()

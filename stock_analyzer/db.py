@@ -1412,6 +1412,37 @@ def load_watchlist_or_none() -> "list[str] | None":
         return None
 
 
+def _read_all_pages(build, page_size: int, *, dedupe_key: "str | None" = "id") -> list:
+    """Every row of a paged PostgREST read. `build()` returns a FRESH ordered
+    select builder each call (no .range applied). Advances by the number of rows
+    actually returned and stops only on an EMPTY page, so a server-side
+    max-rows cap below `page_size` can't truncate the read (TrPage). Raises on
+    any page failure (callers keep their own except contracts). When
+    `dedupe_key` is set and present on a row, a repeated key (another writer
+    inserted between pages and shifted the offsets) is kept once, first seen.
+
+    Cost: one extra (empty) request per read. A short page can't be told apart
+    from a server-side cap, so the only safe end-of-table signal is an empty
+    page; stopping on `len(page) < page_size` is exactly the bug this replaces.
+    """
+    rows: list = []
+    seen: set = set()
+    start = 0
+    for _ in range(10_000):
+        page = build().range(start, start + page_size - 1).execute().data
+        if not page:
+            return rows
+        for row in page:
+            if dedupe_key and isinstance(row, dict) and row.get(dedupe_key) is not None:
+                key = row[dedupe_key]
+                if key in seen:
+                    continue
+                seen.add(key)
+            rows.append(row)
+        start += len(page)
+    raise RuntimeError("pagination did not terminate")
+
+
 # PostgREST's server-side row cap -- see _RECOMMENDATIONS_PAGE_SIZE's docstring.
 _TRADES_PAGE_SIZE = 1000
 
@@ -1444,22 +1475,15 @@ def load_trades_or_none() -> "pd.DataFrame | None":
         # them). A failure on ANY page raises into the except below -> None,
         # never a partial frame. `id` is the unique tie-breaker so page
         # boundaries are stable across the per-page re-executions.
-        rows: list = []
-        _start = 0
-        while True:
-            _page = (
+        rows = _read_all_pages(
+            lambda: (
                 _client().table("trades")
                 .select("*")
                 .order("traded_at", desc=True).order("id", desc=True)
-                .range(_start, _start + _TRADES_PAGE_SIZE - 1)
-                .execute().data
-            )
-            if not _page:
-                break
-            rows.extend(_page)
-            if len(_page) < _TRADES_PAGE_SIZE:
-                break
-            _start += _TRADES_PAGE_SIZE
+            ),
+            _TRADES_PAGE_SIZE,
+            dedupe_key="id",
+        )
         _ah.record("supabase", "success")
         if not rows:
             # Read succeeded, journal is genuinely empty — NOT unreadable.
@@ -1772,26 +1796,16 @@ def _load_daily_snapshots_all_pages(start_date=None, end_date=None) -> list:
     base_request_builder.order source 2026-10-13 (audit 2026-10-11 Low-D
     had flagged it as assumed-not-tested). Same for every two-column sort
     in this module; re-check on a supabase bump."""
-    page_size = _DAILY_SNAPSHOTS_PAGE_SIZE
-    all_rows: list = []
-    start = 0
-    while True:
+    def _build():
         q = _client().table("daily_snapshots").select("*")
         if start_date is not None:
             q = q.gte("snapshot_date", str(start_date)[:10])
         if end_date is not None:
             q = q.lte("snapshot_date", str(end_date)[:10])
-        page = (
-            q.order("snapshot_date", desc=False).order("ticker")
-            .range(start, start + page_size - 1).execute().data
-        )
-        if not page:
-            break
-        all_rows.extend(page)
-        if len(page) < page_size:
-            break
-        start += page_size
-    return all_rows
+        return q.order("snapshot_date", desc=False).order("ticker")
+
+    # PK is (snapshot_date, ticker): no `id` column, so no dedupe key.
+    return _read_all_pages(_build, _DAILY_SNAPSHOTS_PAGE_SIZE, dedupe_key=None)
 
 
 def load_daily_snapshots(start_date=None, end_date=None) -> "pd.DataFrame":
@@ -2096,22 +2110,15 @@ def load_ticker_last_touched(table_name: str, date_col: str) -> "list[dict] | No
     if not has_db():
         return None
     try:
-        page_size = _TICKER_LAST_TOUCHED_PAGE_SIZE
-        all_rows: list = []
-        start = 0
-        while True:
-            page = (
+        # No `id` in the select (ticker + date_col only) -> no dedupe key.
+        return _read_all_pages(
+            lambda: (
                 _client().table(table_name).select(f"ticker,{date_col}")
                 .order("ticker").order(date_col)
-                .range(start, start + page_size - 1).execute().data
-            )
-            if not page:
-                break
-            all_rows.extend(page)
-            if len(page) < page_size:
-                break
-            start += page_size
-        return all_rows
+            ),
+            _TICKER_LAST_TOUCHED_PAGE_SIZE,
+            dedupe_key=None,
+        )
     except Exception:
         return None
 
@@ -2680,28 +2687,22 @@ def _load_analyst_coverage_all_pages(ticker: str | None, days: int | None) -> li
     table has an unused `id` PK sitting right there, so use it."""
     from datetime import datetime, timedelta
     import pytz
-    page_size = _ANALYST_COVERAGE_PAGE_SIZE
-    all_rows: list = []
-    start = 0
-    while True:
+    # Cutoff computed once, so every page of one read shares the same bound
+    # (it used to be re-derived per page).
+    cutoff = None
+    if days:
+        _et = pytz.timezone("America/New_York")
+        cutoff = (datetime.now(tz=_et) - timedelta(days=days)).date().isoformat()
+
+    def _build():
         q = _client().table("analyst_coverage").select("*")
         if ticker:
             q = q.eq("ticker", ticker.strip().upper())
-        if days:
-            _et = pytz.timezone("America/New_York")
-            cutoff = (datetime.now(tz=_et) - timedelta(days=days)).date().isoformat()
+        if cutoff is not None:
             q = q.gte("article_date", cutoff)
-        page = (
-            q.order("article_date", desc=True).order("id", desc=True)
-            .range(start, start + page_size - 1).execute().data
-        )
-        if not page:
-            break
-        all_rows.extend(page)
-        if len(page) < page_size:
-            break
-        start += page_size
-    return all_rows
+        return q.order("article_date", desc=True).order("id", desc=True)
+
+    return _read_all_pages(_build, _ANALYST_COVERAGE_PAGE_SIZE, dedupe_key="id")
 
 
 def load_analyst_coverage(
@@ -3789,21 +3790,11 @@ def load_gate_suppressions() -> list[dict] | None:
     if not has_db():
         return None
     try:
-        page_size = _GATE_SUPPRESSIONS_PAGE_SIZE
-        all_rows: list = []
-        start = 0
-        while True:
-            page = (
-                _client().table("gate_suppressions").select("*")
-                .order("id").range(start, start + page_size - 1).execute().data
-            )
-            if not page:
-                break
-            all_rows.extend(page)
-            if len(page) < page_size:
-                break
-            start += page_size
-        return all_rows
+        return _read_all_pages(
+            lambda: _client().table("gate_suppressions").select("*").order("id"),
+            _GATE_SUPPRESSIONS_PAGE_SIZE,
+            dedupe_key="id",
+        )
     except Exception:
         return None
 
@@ -4113,11 +4104,8 @@ def _load_recommendations_all_pages(start_date=None, end_date=None) -> list[dict
     unique, so it's a genuine total order alongside surfaced_at -- this
     changes tie-breaking only among rows sharing the exact same surfaced_at,
     never reorders rows with distinct timestamps."""
-    page_size = _RECOMMENDATIONS_PAGE_SIZE
-    all_rows: list = []
-    start = 0
-    while True:
-        # Rebuilt fresh each iteration (mirrors load_model_predictions's loop)
+    def _build():
+        # Rebuilt fresh on every page (`_read_all_pages` calls this each time)
         # rather than reusing one builder across `.range()` calls -- makes
         # correctness independent of whether the client library treats
         # `.range()` as replacing or accumulating bounds on a shared builder.
@@ -4128,17 +4116,9 @@ def _load_recommendations_all_pages(start_date=None, end_date=None) -> list[dict
         if end_date is not None:
             ed = end_date.isoformat() if hasattr(end_date, "isoformat") else str(end_date)[:10]
             q = q.lte("rec_date", ed)
-        page = (
-            q.order("surfaced_at", desc=True).order("id", desc=True)
-            .range(start, start + page_size - 1).execute().data
-        )
-        if not page:
-            break
-        all_rows.extend(page)
-        if len(page) < page_size:
-            break
-        start += page_size
-    return all_rows
+        return q.order("surfaced_at", desc=True).order("id", desc=True)
+
+    return _read_all_pages(_build, _RECOMMENDATIONS_PAGE_SIZE, dedupe_key="id")
 
 
 def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
@@ -4327,22 +4307,15 @@ def _load_exit_signals_all_pages(days_back: int) -> list:
     from datetime import timedelta
     from stock_analyzer.market_time import today_et
     cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-    page_size = _EXIT_SIGNALS_PAGE_SIZE
-    all_rows: list = []
-    start = 0
-    while True:
-        page = (
+    return _read_all_pages(
+        lambda: (
             _client().table("exit_signals").select("*")
             .gte("signal_date", cutoff)
-            .order("id").range(start, start + page_size - 1).execute().data
-        )
-        if not page:
-            break
-        all_rows.extend(page)
-        if len(page) < page_size:
-            break
-        start += page_size
-    return all_rows
+            .order("id")
+        ),
+        _EXIT_SIGNALS_PAGE_SIZE,
+        dedupe_key="id",
+    )
 
 
 def load_exit_signals(days_back: int = 365) -> pd.DataFrame:
@@ -4444,21 +4417,15 @@ def load_analyst_target_snapshots(days_back: int = 365) -> pd.DataFrame:
         from datetime import timedelta
         from stock_analyzer.market_time import today_et
         cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-        page_size = _ANALYST_TARGET_SNAPSHOTS_PAGE_SIZE
-        all_rows: list = []
-        start = 0
-        while True:
-            page = (
+        all_rows = _read_all_pages(
+            lambda: (
                 _client().table("analyst_target_snapshots").select("*")
                 .gte("snapshot_date", cutoff)
-                .order("id").range(start, start + page_size - 1).execute().data
-            )
-            if not page:
-                break
-            all_rows.extend(page)
-            if len(page) < page_size:
-                break
-            start += page_size
+                .order("id")
+            ),
+            _ANALYST_TARGET_SNAPSHOTS_PAGE_SIZE,
+            dedupe_key="id",
+        )
         return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
@@ -4614,21 +4581,15 @@ def load_judgment_opinions(days_back: int = 365) -> pd.DataFrame:
         from datetime import timedelta
         from stock_analyzer.market_time import today_et
         cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-        page_size = _JUDGMENT_OPINIONS_PAGE_SIZE
-        all_rows: list = []
-        start = 0
-        while True:
-            page = (
+        all_rows = _read_all_pages(
+            lambda: (
                 _client().table("judgment_opinions").select("*")
                 .gte("signal_date", cutoff)
-                .order("id").range(start, start + page_size - 1).execute().data
-            )
-            if not page:
-                break
-            all_rows.extend(page)
-            if len(page) < page_size:
-                break
-            start += page_size
+                .order("id")
+            ),
+            _JUDGMENT_OPINIONS_PAGE_SIZE,
+            dedupe_key="id",
+        )
         return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
@@ -4704,21 +4665,15 @@ def load_judgment_grades(days_back: int = 365) -> pd.DataFrame:
         from datetime import timedelta
         from stock_analyzer.market_time import today_et
         cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-        page_size = _JUDGMENT_GRADES_PAGE_SIZE
-        all_rows: list = []
-        start = 0
-        while True:
-            page = (
+        all_rows = _read_all_pages(
+            lambda: (
                 _client().table("judgment_grades").select("*")
                 .gte("signal_date", cutoff)
-                .order("id").range(start, start + page_size - 1).execute().data
-            )
-            if not page:
-                break
-            all_rows.extend(page)
-            if len(page) < page_size:
-                break
-            start += page_size
+                .order("id")
+            ),
+            _JUDGMENT_GRADES_PAGE_SIZE,
+            dedupe_key="id",
+        )
         return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
@@ -4979,20 +4934,13 @@ def load_model_predictions(model_name: str | None = None, days_back: int = 400) 
 
         from stock_analyzer.market_time import today_et
         cutoff = (today_et() - timedelta(days=days_back)).isoformat()
-        page_size = _MODEL_PREDICTIONS_PAGE_SIZE
-        all_rows: list = []
-        start = 0
-        while True:
+        def _build():
             q = _client().table("model_predictions").select("*").gte("made_at", cutoff)
             if model_name:
                 q = q.eq("model_name", model_name)
-            page = q.order("id").range(start, start + page_size - 1).execute().data
-            if not page:
-                break
-            all_rows.extend(page)
-            if len(page) < page_size:
-                break
-            start += page_size
+            return q.order("id")
+
+        all_rows = _read_all_pages(_build, _MODEL_PREDICTIONS_PAGE_SIZE, dedupe_key="id")
         return pd.DataFrame(all_rows) if all_rows else pd.DataFrame(columns=_MODEL_PREDICTIONS_COLS)
     except Exception:
         return None
@@ -5611,19 +5559,11 @@ def save_sentiment_llm_cache(
 _EVAL_PAGE = 1000
 
 
-def _eval_paged(build) -> list:
-    """All rows of a query: `build()` returns a fresh select; paged by .range()."""
-    rows: list = []
-    start = 0
-    while True:
-        page = build().range(start, start + _EVAL_PAGE - 1).execute().data
-        if not page:
-            break
-        rows.extend(page)
-        if len(page) < _EVAL_PAGE:
-            break
-        start += _EVAL_PAGE
-    return rows
+def _eval_paged(build, dedupe_key: "str | None" = None) -> list:
+    """All rows of a query: `build()` returns a fresh select; paged by .range().
+    Thin wrapper over `_read_all_pages` (TrPage). `dedupe_key` is set only by a
+    caller whose select includes a unique `id`."""
+    return _read_all_pages(build, _EVAL_PAGE, dedupe_key=dedupe_key)
 
 
 def save_llm_role_eval(row: dict) -> "int | None":
@@ -5749,7 +5689,7 @@ def load_premortem_trigger_rows() -> "list | None":
                     "premortem_trigger_direction")
             .not_.is_("premortem_commitment", "null")
             .order("id")
-        ))
+        ), dedupe_key="id")
         out = []
         for r in rows:
             if not str(r.get("premortem_commitment") or "").strip():
@@ -6343,22 +6283,15 @@ def load_rec_events() -> "list[dict] | None":
     if not has_db():
         return None
     try:
-        page_size = _REC_EVENTS_PAGE_SIZE
-        all_rows: list = []
-        start = 0
-        while True:
-            page = (
+        # rec_events has no `id` column -> no dedupe key.
+        return _read_all_pages(
+            lambda: (
                 _client().table("rec_events").select("*")
                 .order("fired_date").order("ticker").order("rec_type").order("source")
-                .range(start, start + page_size - 1).execute().data
-            )
-            if not page:
-                break
-            all_rows.extend(page)
-            if len(page) < page_size:
-                break
-            start += page_size
-        return all_rows
+            ),
+            _REC_EVENTS_PAGE_SIZE,
+            dedupe_key=None,
+        )
     except Exception:
         return None
 
@@ -6748,24 +6681,13 @@ def load_snaptrade_income_events_or_none(since_date: str | None = None) -> "list
     if not has_db():
         return None
     try:
-        rows: list = []
-        start = 0
-        while True:
+        def _build():
             q = _client().table("snaptrade_income_events").select("*")
             if since_date:
                 q = q.gte("event_date", since_date)
-            page = (
-                q.order("event_date", desc=False).order("id", desc=False)
-                .range(start, start + _INCOME_EVENTS_PAGE_SIZE - 1)
-                .execute().data
-            )
-            if not page:
-                break
-            rows.extend(page)
-            if len(page) < _INCOME_EVENTS_PAGE_SIZE:
-                break
-            start += _INCOME_EVENTS_PAGE_SIZE
-        return rows
+            return q.order("event_date", desc=False).order("id", desc=False)
+
+        return _read_all_pages(_build, _INCOME_EVENTS_PAGE_SIZE, dedupe_key="id")
     except Exception:
         return None
 

@@ -674,14 +674,20 @@ class _FakeQuery:
         return self
 
     def __getattr__(self, name):
-        if name in ("gte", "lte", "order", "range", "eq", "limit"):
+        if name in ("gte", "lte", "order", "eq", "limit"):
             return lambda *a, **k: self
         raise AttributeError(name)
+
+    def range(self, a, b):
+        self._rng = (a, b)
+        return self
 
     def execute(self):
         if "model" in (self.cols or "") and self._fail:
             raise Exception("{'code': '42703', 'message': 'column sentiment_llm_cache.model does not exist'}")
-        return type("R", (), {"data": [dict(r) for r in self._data]})()
+        # Honour .range so the paged reader sees the end-of-table empty page.
+        a, b = getattr(self, "_rng", (0, len(self._data)))
+        return type("R", (), {"data": [dict(r) for r in self._data[a:b + 1]]})()
 
 
 class _FakeClient:
@@ -706,7 +712,9 @@ def test_cache_sample_legacy_select_fallback(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "first read failed" in out and "without model/effort columns" in out
     assert "columns unavailable" not in out
-    assert fc.tables == ["sentiment_llm_cache"] * 2
+    # failed provenance read (1 request) + legacy read (data page + the empty
+    # page that ends a paged read)
+    assert fc.tables == ["sentiment_llm_cache"] * 3
 
 
 def test_cache_sample_uses_provenance_columns_when_present(monkeypatch, capsys):

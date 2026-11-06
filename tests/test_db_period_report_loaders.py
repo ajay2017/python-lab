@@ -124,7 +124,7 @@ def test_trades_multi_page_concatenates_in_order(monkeypatch):
     out = db.load_trades_or_none()
     assert out is not None
     assert list(out["id"]) == [0, 1, 2, 3, 4]
-    assert c.state["n"] == 3  # 2 + 2 + 1 (short page stops the loop)
+    assert c.state["n"] == 4  # 2 + 2 + 1, then the empty page that ends the read (TrPage)
     assert [a[0] for a, _k in c.builders[0].orders] == ["traded_at", "id"]
     # Newest first on both keys (thesis_cluster / app.py read the latest BUY first).
     assert [_k for _a, _k in c.builders[0].orders] == [{"desc": True}, {"desc": True}]
@@ -136,13 +136,15 @@ def test_trades_failure_on_page_2_is_none_never_partial(monkeypatch):
     assert db.load_trades_or_none() is None
 
 
-def test_trades_single_short_page_stops_after_one_call(monkeypatch):
+def test_trades_single_short_page_stops_after_empty_page(monkeypatch):
+    # A short page is NOT an end-of-table signal (server max-rows cap, TrPage):
+    # the read ends on the first EMPTY page, so 2 requests for one short page.
     monkeypatch.setattr(db, "_TRADES_PAGE_SIZE", 10)
     c = _Client(rows=[_trade(i) for i in range(3)])
     _use(monkeypatch, c)
     out = db.load_trades_or_none()
     assert len(out) == 3
-    assert c.state["n"] == 1
+    assert c.state["n"] == 2
 
 
 def test_trades_empty_is_empty_frame_not_none(monkeypatch):
