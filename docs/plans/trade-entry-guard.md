@@ -1,6 +1,6 @@
 # Trade entry guard + journal vs Robinhood reconciliation (bug register TJDate)
 
-**Status:** CONFIRMING PASS DONE 2026-11-06 (Opus planner: PROCEED WITH CHANGES; see "Confirming pass 2026-11-06" below). C3 BUILT 2026-11-06 (Trade History in ET). New Phase 1 order: ~~C3 (TJUtc)~~ → D0 (TJDup) → P0 (owner, in parallel) → C4 → C1 → C2 → C3b → C5 → U9 → U8 → docs. HoldWipe (`6b3d930`) and RbPartial (`2ca2f29`) have shipped. Earlier: DESIGNED 2026-11-02 (Opus planner: PROCEED WITH CHANGES), owner decisions 2026-11-02 below. Nothing built yet.
+**Status:** CONFIRMING PASS DONE 2026-11-06 (Opus planner: PROCEED WITH CHANGES; see "Confirming pass 2026-11-06" below). C3 BUILT 2026-11-06 (`0e7fb78`, Trade History in ET). P0 RUN 2026-11-06 (results below); D0 decisions made. New Phase 1 order: ~~C3 (TJUtc)~~ → D0 (TJDup) → P0 (owner, in parallel) → C4 → C1 → C2 → C3b → C5 → U9 → U8 → docs. HoldWipe (`6b3d930`) and RbPartial (`2ca2f29`) have shipped. Earlier: DESIGNED 2026-11-02 (Opus planner: PROCEED WITH CHANGES), owner decisions 2026-11-02 below. Nothing built yet.
 
 **Owner decisions 2026-11-02, after the lead's review:**
 1. **Two phases.**
@@ -105,6 +105,18 @@ Re-checked against HEAD `b1dfcf7`. Nothing in Phase 1 rebuilds holdings, so RbPa
 - **C5:** add a CSCO 11-04 fixture (two journal rows, one fill → one LINK + one JOURNAL_ONLY). **U9:** Pending Imports now ~41252-41386 ("Already logged" ~41377). **U8:** register any published matcher key in `coord_freshness.py`, three-state.
 - **Review-required:** D0 (`constants.py`, `trade_confirm.py`, `pre_tool_checks.py`, `data.py`, app.py wiring); C3b; C4 (`broker_sync.py`, `cron_runner.py`, `broker_import.py`); C1 (`trade_entry_checks.py`); C2; C5 (`journal_broker_match.py`); U8/U9 (`coord_freshness.py`). C3 none.
 - **Named, not in scope:** the split-apply `save_trade` (app.py ~5713); FracNew `int(_pb_shares)` (~31089); Trade History Delete is invisible to N1, so the account rows for Nov 4–6 may still count 16 CSCO after the duplicate was deleted (check in N1 C7); the SELL-without-holding block names the wrong override checkbox (~32105 / ~32115) and the help hardcodes "±50%" (~31408) (wording).
+
+## P0 probe results (owner ran `docs/sql/readonly-tjdate-p0-probe.sql`, 2026-11-06)
+
+- **Q1:** all 191 `snaptrade_pending_imports.raw_json` rows carry the same 17 keys: amount, currency, currency_universal_symbol, description, external_reference_id, fee, fx_rate, id, institution, option_symbol, option_type, price, settlement_date, symbol, trade_date, type, units.
+- **Q2:** 191 / 191 `trade_date` values carry a time, 0 are midnight UTC, 0 have an ET date different from the stored date. Q2b: times vary to the second (CSCO 3 @ 102 `2026-11-04T16:39:32Z`), so they are real fill times; `settlement_date` is midnight UTC on T+1. `_activity_date`'s UTC date is right on every stored row; the bug is latent (a fill after ~19:00-20:00 ET). OPEN: owner to confirm one fill's time in Robinhood (CSCO 3 @ 102 Nov 4: 11:39 AM ET if the "Z" is true UTC); two 10-28 fills read 16:06 / 16:09 ET.
+- **Q3:** `raw_price` is exact and equals amount / units on every row; the stored `price` is rounded to 2 dp (SPCX 136.425 → 136.43, OKTA 224.405 → 224.41, WAL 75.985 → 75.98, FSLR 179.3037 → 179.30; at most half a cent per share). Fee 0.0 on every row. C2 / C5 compare against `raw_price`; `JOURNAL_MATCH_PRICE_TOL_USD` 0.01 absorbs the rounding.
+- **Q4:** `external_reference_id` is null on every row: no order-grouping id. C5 groups by ticker + action + ET date (sum + VWAP), as decided 2026-11-02. Split fills are routine (≥ 30 two- or three-fill days); CSCO 11-04 = 2 fills, 8 shares (5 @ 103 + 3 @ 102).
+- **Q5:** dismissed 172 (12 linked, 160 not), logged 18 (12 linked, 6 not), pending 1 (not linked). The 6 logged-unlinked: CSCO 13902 (3 @ 102, 11-04; most likely the Pending-Imports-logged row deleted as the TJDup duplicate on 11-06, the kept RECOMMENDATION row represents the fill unlinked) and five from the mid-August rebaseline era (SPCX 1563 / 1564 08-24, DELL 812 08-20, DELL 588 08-18, SHOP 587 08-18). No new integrity problem.
+- **Q6:** not run; Q5 shows no pending row linked to a trade, so HoldDup has no live trigger. The one pending row (CSCO 13903, 5 @ 103, 11-04) is already in the journal as a MANUAL row: owner to dismiss it (logging it would double-count).
+- **Q7 (D0 calibration, 21 same ticker / action / shares pairs within 3 days):** same day + same price 0; adjacent session + same price 0 (smallest price gap 0.38); same day + same size + different price 5 (HOOD 10-14, COF SELL 09-10, DELL 09-01, WDAY 08-27, PATH 06-03), all genuine separate fills. No exact duplicate remains in the journal.
+- **Owner decisions 2026-11-06 (on the Q7 numbers):** `TRADE_LOG_DUP_WINDOW_SESSIONS` = **1**; KEEP the same-day, same-size, different-price leg (about one tick a month on genuine split fills, in exchange for catching a wrong-price re-log like OKTA 11-02).
+- **Known gap D0 does not close:** a combined journal row (e.g. 8 @ 196.99) plus a later log of one of its fills (5) differ in shares, so D0 doesn't warn; C5 detects it after sync.
 
 ## Chunks (order: P0 → C4 → C1 → C2 → C3 → C5 → C6 → C7 → C8 → C9)
 
