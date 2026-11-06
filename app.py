@@ -4963,10 +4963,7 @@ if page == "🏠 Home":
     # condition/text/logic untouched; only the render DESTINATION moves,
     # reusing the exact mechanism already proven on the original 6 (buttons
     # and loops included, via the Stock Split banner).
-    # AlertsGhost experiment (2026-11-06): no key= here. A keyed expander gets a fixed
-    # block id in Streamlit 1.57, the leading suspect for the 4 faded stale "Alerts"
-    # copies seen on every page. Nothing read the key; expanded=False collapses it.
-    with st.expander("⚠️ Alerts", expanded=False):
+    with st.expander("⚠️ Alerts", expanded=False, key="_home_alerts_exp"):
         _alert_ph_dayshock   = st.empty()
         _alert_ph_xcheck     = st.empty()
         _alert_ph_split      = st.empty()
