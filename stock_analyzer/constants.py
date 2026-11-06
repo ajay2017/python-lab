@@ -2146,15 +2146,21 @@ IMPORTED_TRADE_ANCHOR_ET_HOUR = 16
 # mismatch rather than rounding noise. Absorbs fractional-share noise from
 # SnapTrade's position feed vs the app's trades-derived shares — not a real
 # drift signal below this size.
-# THREE consumers, deliberately sharing one number because it is one question
-# ("is this share difference real or float noise"), not three policies:
+# FOUR consumers, deliberately sharing one number because it is one question
+# ("is this share difference real or float noise"), not four policies:
 #   • broker_sync.diff_positions()      — broker feed vs the app's holdings
 #   • daily_pnl.reconcile_baseline() / fill_late_logged_baseline()
 #                                       — prior-close baseline vs holdings
 #   • account_snapshot_repair           — account-row book vs journal replay
-# Retuning this for the broker feed also moves the day-P&L integrity guard
-# and the account-snapshot repair check.
+#   • trade_confirm (TJDup)             — new entry vs an existing journal row
+# Retuning this for the broker feed also moves the day-P&L integrity guard,
+# the account-snapshot repair check and the duplicate-entry warning.
 BROKER_DRIFT_SHARE_TOL = 0.001
+
+# ── Duplicate trade-entry guard (trade_confirm.py, TJDup). Owner-approved
+# 2026-11-06 on the P0 probe's Q7 calibration (docs/plans/trade-entry-guard.md).
+JOURNAL_MATCH_PRICE_TOL_USD   = 0.01  # two prices within this ($/share) are "the same price" (absorbs the 2-dp rounding of a stored broker price)
+TRADE_LOG_DUP_WINDOW_SESSIONS = 1     # a new entry is compared with rows up to this many trading sessions away (same price only beyond the same day)
 
 # Truncation-ambiguity bound for daily_pnl.reconcile_baseline()'s qty_drift
 # unit guard. A DIFFERENT question from BROKER_DRIFT_SHARE_TOL above: that one

@@ -108,6 +108,7 @@ from stock_analyzer.pnl_display import signed_display as _signed_display
 from stock_analyzer.session_label import move_when_phrase as _move_when_phrase
 from stock_analyzer import broker_sync
 from stock_analyzer import trade_time
+from stock_analyzer import trade_confirm
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
@@ -30832,6 +30833,45 @@ elif page == "📒 Trade Journal":
     if prefill.get("action"):
         st.session_state["_tj_action"] = _prefill_action
 
+    # TJDup: render the duplicate-entry findings `trade_confirm.confirm_gate`
+    # built for a confirm card. Render-only: every decision (hard / tick / text)
+    # is made in stock_analyzer/trade_confirm.py. `_safe_text` escapes the text and
+    # writes `$` as a character reference, so a price can't open a LaTeX span.
+    def _tj_render_gate_blocks(_blocks):
+        for _b in _blocks:
+            if _b["level"] == "info":
+                st.info(_b["title"].replace("$", "\\$"))
+            elif _b["level"] == "error":
+                st.markdown(
+                    f"<div style='background:#3f1d1d;border-left:6px solid #ef4444;"
+                    f"border-radius:6px;padding:10px 14px 4px 14px;margin:0;"
+                    f"color:#fecaca;font-size:0.95em'>"
+                    f"🛑 <b>{_safe_text(_b['title'])}</b></div>",
+                    unsafe_allow_html=True,
+                )
+                for _ln in _b["lines"]:
+                    st.markdown(
+                        f"<div style='background:#3f1d1d;border-left:6px solid #ef4444;"
+                        f"padding:2px 14px 4px 14px;margin:0;color:#fecaca;"
+                        f"font-size:0.9em'>{_safe_text(_ln)}</div>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.markdown(
+                    f"<div style='background:#3b2410;border-left:6px solid #ef4444;"
+                    f"border-radius:6px;padding:10px 14px 4px 14px;margin:0;"
+                    f"color:#fed7aa;font-size:0.95em'>"
+                    f"⚠️ <b>{_safe_text(_b['title'])}</b></div>",
+                    unsafe_allow_html=True,
+                )
+                for _ln in _b["lines"]:
+                    st.markdown(
+                        f"<div style='background:#3b2410;border-left:6px solid #ef4444;"
+                        f"padding:2px 14px 4px 14px;margin:0;color:#fed7aa;"
+                        f"font-size:0.9em'>{_safe_text(_ln)}</div>",
+                        unsafe_allow_html=True,
+                    )
+
     # ── SELL confirmation card ─────────────────────────────────────────────
     _pending_sell = st.session_state.get("_tj_pending_sell")
     if _pending_sell:
@@ -30879,9 +30919,19 @@ elif page == "📒 Trade Journal":
                     f"Awareness only; the sale is not blocked.</div>",
                     unsafe_allow_html=True,
                 )
+        # TJDup: duplicate-entry findings (staged with the record, never part of it).
+        _ps_gate = trade_confirm.confirm_gate(st.session_state.get("_tj_pending_dup_sell"))
+        _tj_render_gate_blocks(_ps_gate["blocks"])
+        _ps_ack = (
+            st.checkbox(_ps_gate["tick_label"],
+                        key=f"_tj_ack_{_pending_sell['idempotency_key']}")
+            if _ps_gate["needs_tick"] else False
+        )
         _ps_c1, _ps_c2 = st.columns([1, 1])
         if _ps_c1.button("✅ Confirm SELL", type="primary", key="_tj_confirm_sell", width="stretch",
-                          disabled=st.session_state.get("_readonly", False)):
+                          disabled=(st.session_state.get("_readonly", False)
+                                    or _ps_gate["hard"]
+                                    or (_ps_gate["needs_tick"] and not _ps_ack))):
             _ps_saved = db.save_trade(_pending_sell)
             st.session_state.pop("_budget_trades_cache", None)
             if _ps_saved or not db.has_db():
@@ -30945,6 +30995,7 @@ elif page == "📒 Trade Journal":
                         f"(not in current holdings — logged as historical trade)."
                     )
                 st.session_state.pop("_tj_pending_sell", None)
+                st.session_state.pop("_tj_pending_dup_sell", None)
                 st.session_state.pop("_tj_prefill", None)
                 st.session_state.pop("_tj_override_price", None)
                 st.session_state.pop("_tj_override_ticker", None)
@@ -30970,6 +31021,7 @@ elif page == "📒 Trade Journal":
                 "price":  _ps_price,
             }
             st.session_state.pop("_tj_pending_sell", None)
+            st.session_state.pop("_tj_pending_dup_sell", None)
             # Cancelling a broker-sourced confirmation also unlocks the form
             # (2026-08-17 review finding) — otherwise the locked fields would
             # persist even though _tj_pending_sell is gone, with no visible
@@ -31043,10 +31095,20 @@ elif page == "📒 Trade Journal":
             _pb_ticker, st.session_state.get("_wl_held_cache"), _today_et().isoformat())
         if _pb_hold_note:
             st.caption(_pb_hold_note.replace("$", "\\$"))
+        # TJDup: duplicate-entry findings (staged with the record, never part of it).
+        _pb_gate = trade_confirm.confirm_gate(st.session_state.get("_tj_pending_dup_buy"))
+        _tj_render_gate_blocks(_pb_gate["blocks"])
+        _pb_ack = (
+            st.checkbox(_pb_gate["tick_label"],
+                        key=f"_tj_ack_{_pending_buy['idempotency_key']}")
+            if _pb_gate["needs_tick"] else False
+        )
         _pb_c1, _pb_c2 = st.columns([1, 1])
         if _pb_c1.button("✅ Confirm BUY", type="primary", key="_tj_confirm_buy",
                           width="stretch",
-                          disabled=st.session_state.get("_readonly", False)):
+                          disabled=(st.session_state.get("_readonly", False)
+                                    or _pb_gate["hard"]
+                                    or (_pb_gate["needs_tick"] and not _pb_ack))):
             _pb_saved = db.save_trade(_pending_buy)
             st.session_state.pop("_budget_trades_cache", None)
             if _pb_saved or not db.has_db():
@@ -31219,6 +31281,7 @@ elif page == "📒 Trade Journal":
                 else:
                     st.error(_holdings_write_failed_msg(_pb_ticker))
                 st.session_state.pop("_tj_pending_buy", None)
+                st.session_state.pop("_tj_pending_dup_buy", None)
                 st.session_state.pop("_tj_pending_buy_trigger_note", None)
                 st.session_state.pop("_tj_prefill", None)
                 st.session_state.pop("_tj_override_price", None)
@@ -31242,6 +31305,7 @@ elif page == "📒 Trade Journal":
                 "price":  _pb_price,
             }
             st.session_state.pop("_tj_pending_buy", None)
+            st.session_state.pop("_tj_pending_dup_buy", None)
             st.session_state.pop("_tj_pending_buy_trigger_note", None)
             # See the matching SELL-cancel comment above — unlock the form.
             st.session_state.pop("_tj_pending_broker_id", None)
@@ -32497,10 +32561,23 @@ elif page == "📒 Trade Journal":
                     # unchanged (same behavior as before this fix existed).
                     record["traded_at"] = _et_anchor_iso(_tj_picked_date)
                 # ── SELL/BUY: hold for confirmation — don't write to DB yet ──
+                # TJDup: ONE strict journal read at staging (never the lenient
+                # load_trades: an unreadable journal must say "couldn't check", not
+                # "no duplicate"). Stored under its own key so the findings can
+                # never reach db.save_trade(record).
+                _dup_journal = (db.load_trades_or_none() if db.has_db()
+                                else st.session_state.get("trades_df"))
+                try:
+                    _dup_check = trade_confirm.find_duplicate_entries(
+                        record, _dup_journal, broker_path=_is_broker_trade)
+                except Exception:
+                    _dup_check = None       # confirm card shows "couldn't check"
                 if action == "SELL":
                     st.session_state["_tj_pending_sell"] = record
+                    st.session_state["_tj_pending_dup_sell"] = _dup_check
                 else:
                     st.session_state["_tj_pending_buy"] = record
+                    st.session_state["_tj_pending_dup_buy"] = _dup_check
                 # Carried alongside the staged record (not part of it, so it's
                 # never sent to save_trade) — the snaptrade_pending_imports row
                 # to flip to 'logged' once this record actually saves.
@@ -43942,7 +44019,7 @@ elif page == "📖 User Guide":
 **The order of operations:**
 
 1. **Log your positions** — **📒 Trade Journal → ➕ Log a Trade.** Enter every **BUY** (and any **SELL**) with ticker, share count, **cost basis (price paid)**, and the **trade date**. This is the source of truth: your holdings, realized P&L, and each position's *age* (the 🌱 Settling / lifecycle badges) all derive from these trades and their dates. On a **BUY** you can also write — or **✨ AI-draft** — your *investment thesis*; 🧠 AI Insights then checks weekly whether it still holds. A live BUY also asks you to **🔍 Run Pre-Mortem** — an optional AI-built case *against* the trade — and requires one line: *what would make you wrong about this*. Write any exit price as a number (e.g. "closes below 150"): the AI reads it into a monitored trigger, and a price the app can't find in your text is refused and not monitored (the confirm screen says so). If you've recorded exit lessons from past trades (📒 Trade Journal → Decision Journal), your own documented patterns appear as chips above the commitment field — ticker-specific first, or your cross-ticker patterns if you haven't exited this name before. This is friction by design (never on SELL, never on an imported/backfilled trade) — the point is to have engaged with the downside before capital moves, not to add a hoop before recording history. **Faster than hand-logging:** use **📥 Import from broker statement** (same page) to upload a Robinhood account-activity CSV — it parses your Buy/Sell rows into an editable preview, flags anything you've already logged so nothing double-counts, and syncs them on confirm. (Buy/Sell only for now; log cash events like dividends separately.)
-2. **Reconcile against your broker.** Confirm share counts and average cost match your brokerage *exactly*. The Trade Journal runs a **drift check** and flags mismatches (a SELL with no prior BUY, or a stored P&L that disagrees with the replayed history); use **⚠️ Fix drift between trades and holdings → Run rebuild now** to preview the correction, then **✅ Apply rebuild**. Deleting or importing trades rebuilds holdings automatically only when the trade history explains every current position; otherwise nothing changes and a warning names the positions that differ, so you can preview the rebuild first. Wrong basis → wrong P&L → wrong trim/stop advice.
+2. **Reconcile against your broker.** Confirm share counts and average cost match your brokerage *exactly*. The Trade Journal runs a **drift check** and flags mismatches (a SELL with no prior BUY, or a stored P&L that disagrees with the replayed history); use **⚠️ Fix drift between trades and holdings → Run rebuild now** to preview the correction, then **✅ Apply rebuild**. Deleting or importing trades rebuilds holdings automatically only when the trade history explains every current position; otherwise nothing changes and a warning names the positions that differ, so you can preview the rebuild first. If a new entry looks like a trade already in your journal (same ticker, action and shares on the same day, or at the same price on the next or previous trading day), the confirm card shows a red **Possible duplicate** panel naming that row, and Confirm stays off until you tick that it is a separate fill. Wrong basis → wrong P&L → wrong trim/stop advice.
 3. **(Optional) Add Watchlist names** — **📋 Watchlist** — anything you're tracking but don't yet hold, so the scanner and brief include them.
 4. **Refresh signals** — **🏠 Home → Refresh Signals** — let live prices, composite scores, and risk metrics populate for your names.
 5. **Now read the Brief / Grow Today / Risk.** Only after steps 1–4 is the intelligence computed on *complete, correct* data — and only then are the recommendations trustworthy.

@@ -1,6 +1,6 @@
 # Trade entry guard + journal vs Robinhood reconciliation (bug register TJDate)
 
-**Status:** CONFIRMING PASS DONE 2026-11-06 (Opus planner: PROCEED WITH CHANGES; see "Confirming pass 2026-11-06" below). C3 BUILT 2026-11-06 (`0e7fb78`, Trade History in ET). P0 RUN 2026-11-06 (results below); D0 decisions made. New Phase 1 order: ~~C3 (TJUtc)~~ → D0 (TJDup) → P0 (owner, in parallel) → C4 → C1 → C2 → C3b → C5 → U9 → U8 → docs. HoldWipe (`6b3d930`) and RbPartial (`2ca2f29`) have shipped. Earlier: DESIGNED 2026-11-02 (Opus planner: PROCEED WITH CHANGES), owner decisions 2026-11-02 below. Nothing built yet.
+**Status:** CONFIRMING PASS DONE 2026-11-06 (Opus planner: PROCEED WITH CHANGES; see "Confirming pass 2026-11-06" below). C3 BUILT 2026-11-06 (`0e7fb78`, Trade History in ET). P0 RUN 2026-11-06 (results below). D0 BUILT 2026-11-06 (F-81e, duplicate-entry warning). NEXT: C4. New Phase 1 order: ~~C3 (TJUtc)~~ → D0 (TJDup) → P0 (owner, in parallel) → C4 → C1 → C2 → C3b → C5 → U9 → U8 → docs. HoldWipe (`6b3d930`) and RbPartial (`2ca2f29`) have shipped. Earlier: DESIGNED 2026-11-02 (Opus planner: PROCEED WITH CHANGES), owner decisions 2026-11-02 below. Nothing built yet.
 
 **Owner decisions 2026-11-02, after the lead's review:**
 1. **Two phases.**

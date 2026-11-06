@@ -219,8 +219,8 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 **Owner-agreed order (2026-11-03; MacroGap step done 2026-11-04):**
 1. ~~MacroGap + MacroAff + Macro~~ **SHIPPED 2026-11-04** (F-317: `fdf3635` `e9f44c6` `212f2c5` `b6113ff`; plan `docs/plans/macro-sector-gate.md`). Brief leg verified live after NFP 2026-11-06; Macro row closed. Watchlist "sector unknown" leg still open (before CPI 11-12).
-2. **Write-safety batch:** ~~WLWipe~~ (fixed 2026-11-06, `72f35ff`), ~~RbPartial~~ (fixed 2026-11-06, F-81d), ~~TrPage~~ ~~DelIdx~~ (fixed 2026-11-06), TJDup (fold into TJDate Phase 1), ~~TJUtc~~ (C3 shipped 2026-11-06; C3b open), RbAsset (re-rated latent 2026-11-06: no reader of the column) (bug register; DB-write path → reviewer).
-3. **TJDate Phase 1** (`docs/plans/trade-entry-guard.md`: confirming planner pass, then the P0 probe).
+2. **Write-safety batch:** ~~WLWipe~~ (fixed 2026-11-06, `72f35ff`), ~~RbPartial~~ (fixed 2026-11-06, F-81d), ~~TrPage~~ ~~DelIdx~~ (fixed 2026-11-06), ~~TJDup~~ (D0 shipped 2026-11-06, F-81e), ~~TJUtc~~ (C3 shipped 2026-11-06; C3b open), RbAsset (re-rated latent 2026-11-06: no reader of the column) (bug register; DB-write path → reviewer).
+3. **TJDate Phase 1** (`docs/plans/trade-entry-guard.md`): confirming pass, P0 probe, C3 and D0 done 2026-11-06; NEXT C4, then C1, C2, C3b, C5, U9, U8.
 4. **U7 + #21** (U7: planner + reviewer; #21: trace both budget figures first).
 5. **#34c probe:** read-only check of SnapTrade's own last-sync time before designing.
 - **Dated:** N1 C6b–C8 before the November report (`docs/plans/account-snapshot-repair.md`: C6b review follow-ups, C7 per-ticker `daily_snapshots` repair, C8 docs); #26 C3c persisted stop floor by 2026-12-07 (`docs/plans/held-trailing-stop.md`).

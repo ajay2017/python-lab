@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timedelta, timezone
 import re
 import pytz
 
@@ -168,6 +168,33 @@ def is_trading_day(d: date) -> bool:
     for 'is the market supposed to be open today'; any new date logic that skips
     weekends should use this so it skips holidays too."""
     return d.weekday() < 5 and not is_market_holiday(d)
+
+
+def previous_trading_day(d: date) -> date:
+    """The last NYSE session strictly BEFORE `d` (skips weekends and holidays).
+    `d` itself need not be a trading day."""
+    p = d - timedelta(days=1)
+    while not is_trading_day(p):
+        p -= timedelta(days=1)
+    return p
+
+
+def trading_sessions_between(a: date, b: date) -> int:
+    """Number of NYSE sessions in the half-open span (earlier, later] — the
+    earlier date is excluded, the later included. Order-independent.
+
+    0 for the same date, for Fri -> Sat / Sun, and for a trading day -> the
+    holiday after it; 1 for Fri -> Mon, and Wed 2026-11-25 -> Fri 2026-11-27
+    (Thanksgiving 11-26 is skipped). Calendar day != trading day, so this is
+    the honest "how many sessions apart" for a journal date comparison."""
+    lo, hi = (a, b) if a <= b else (b, a)
+    n = 0
+    d = lo + timedelta(days=1)
+    while d <= hi:
+        if is_trading_day(d):
+            n += 1
+        d += timedelta(days=1)
+    return n
 
 
 def _early_close_hour(d: date) -> float | None:

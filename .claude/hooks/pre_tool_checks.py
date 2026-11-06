@@ -1093,6 +1093,10 @@ _GATE_FILES = {
     # in the investor's commitment, before it is saved as the declared stop; also
     # defines "invented" in the model eval.
     "stock_analyzer/trigger_price_check.py",
+    # 2026-11-06 (TJDup, docs/plans/trade-entry-guard.md D0): decides whether a new
+    # trade entry looks like a duplicate of a journal row, and whether Confirm is
+    # disabled or needs an explicit tick; a wrong call double-counts a fill.
+    "stock_analyzer/trade_confirm.py",
     # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
     # review policy already listed "DB-write / data-integrity" as review-required,
     # but the hook didn't implement it -- so the Railway-cutover work (db.py,
