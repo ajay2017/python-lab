@@ -992,3 +992,125 @@ def test_fill_is_idempotent_on_its_own_output():
     assert len(filled) == 3
     nb2, filled2 = _fill(held, nb, [], journal, {"CSCO": 58.0})
     assert filled2 == [] and nb2 == nb
+
+
+# ─── sold to zero TODAY on a stale-baseline name (PnlExit, seen live 2026-11-06) ──
+
+def _sold_out(baseline, today_trades, journal, bd, today, held=None):
+    return dp.fill_late_logged_baseline(held or [], baseline, today_trades, journal,
+                                        bd, today, {})
+
+
+def test_sold_to_zero_today_csco_late_buy_repaired_end_to_end():
+    bd, td = _dtm.date(2026, 11, 5), _dtm.date(2026, 11, 6)
+    base = {"CSCO": {"shares": 13, "close": 96.0}}
+    sell = {"ticker": "CSCO", "action": "SELL", "shares": 15, "price": 94.68}
+    journal = [_jb("CSCO", _dtm.date(2026, 10, 30), 5, 100.0),
+               _jb("CSCO", _dtm.date(2026, 11, 4), 5, 103.0),
+               _jb("CSCO", _dtm.date(2026, 11, 4), 3, 102.0),
+               _jb("CSCO", _dtm.date(2026, 11, 5), 2, 98.0),
+               _jb("CSCO", td, 15, 94.68, "SELL")]
+    nb, filled = _sold_out(base, [sell], journal, bd, td)
+    assert filled == [{"ticker": "CSCO", "kind": "adjusted", "shares": 15, "close": 96.0,
+                       "basis": "baseline_close", "from_shares": 13}]
+    assert nb["CSCO"]["shares"] == 15
+    # Unrepaired baseline reads as drift; the repaired one is clean.
+    assert [q["ticker"] for q in dp.compute_positions_day_pnl([], base, [sell], 1000.0)["qty_drift"]] == ["CSCO"]
+    res = dp.compute_positions_day_pnl([], nb, [sell], 1000.0)
+    assert res["qty_drift"] == [] and res["orphans"] == []
+    assert res["day_pnl"] == pytest.approx(15 * (94.68 - 96.0), abs=0.01)
+
+
+def test_sold_to_zero_today_bought_and_sold_today_uses_net_delta():
+    # Review 2026-11-06: start = 0 - (BUY 5 - SELL 20) = 15, not 20.
+    bd, td = _dtm.date(2026, 11, 5), _dtm.date(2026, 11, 6)
+    base = {"CSCO": {"shares": 13, "close": 96.0}}
+    today = [{"ticker": "CSCO", "action": "BUY", "shares": 5, "price": 95.0},
+             {"ticker": "CSCO", "action": "SELL", "shares": 20, "price": 96.0}]
+    journal = [_jb("CSCO", _dtm.date(2026, 10, 30), 5, 100.0),
+               _jb("CSCO", _dtm.date(2026, 11, 4), 8, 102.0),
+               _jb("CSCO", _dtm.date(2026, 11, 5), 2, 98.0),
+               _jb("CSCO", td, 5, 95.0),
+               _jb("CSCO", td, 20, 96.0, "SELL")]
+    nb, filled = _sold_out(base, today, journal, bd, td)
+    assert [(f["ticker"], f["shares"], f["from_shares"]) for f in filled] == [("CSCO", 15, 13)]
+    res = dp.compute_positions_day_pnl([], nb, today, 1000.0)
+    assert res["qty_drift"] == [] and res["orphans"] == []
+    # 15 old shares sold at the baseline close (0) + the round trip 5 x (96 - 95).
+    assert res["day_pnl"] == pytest.approx(5.0, abs=0.01)
+
+
+def test_sold_to_zero_today_journal_does_not_explain_not_repaired():
+    bd, td = _dtm.date(2026, 11, 5), _dtm.date(2026, 11, 6)
+    base = {"CSCO": {"shares": 13, "close": 96.0}}
+    sell = {"ticker": "CSCO", "action": "SELL", "shares": 15, "price": 94.68}
+    journal = [_jb("CSCO", _dtm.date(2026, 10, 30), 5, 100.0),
+               _jb("CSCO", _dtm.date(2026, 11, 4), 8, 102.0),   # explains 13, not 15
+               _jb("CSCO", td, 15, 94.68, "SELL")]
+    nb, filled = _sold_out(base, [sell], journal, bd, td)
+    assert nb == base and filled == []
+    assert [q["ticker"] for q in dp.compute_positions_day_pnl([], nb, [sell], 1000.0)["qty_drift"]] == ["CSCO"]
+
+
+def test_sold_to_zero_today_late_partial_sell_then_full_exit():
+    bd, td = _dtm.date(2026, 11, 5), _dtm.date(2026, 11, 6)
+    base = {"AAA": {"shares": 15, "close": 50.0}}
+    sell = {"ticker": "AAA", "action": "SELL", "shares": 13, "price": 49.0}
+    journal = [_jb("AAA", _OLD, 15, 40.0), _jb("AAA", bd, 2, 50.0, "SELL"),
+               _jb("AAA", td, 13, 49.0, "SELL")]
+    nb, filled = _sold_out(base, [sell], journal, bd, td)
+    assert len(filled) == 1 and filled[0]["kind"] == "adjusted"
+    assert filled[0]["shares"] == 13 and filled[0]["from_shares"] == 15
+    assert nb["AAA"] == {"shares": 13, "close": 50.0}
+
+
+def test_sold_to_zero_today_fractional_not_int_truncated():
+    bd, td = _dtm.date(2026, 11, 5), _dtm.date(2026, 11, 6)
+    base = {"FRC": {"shares": 10, "close": 20.0}}          # int-truncated snapshot
+    sell = {"ticker": "FRC", "action": "SELL", "shares": 10.5, "price": 21.0}
+    journal = [_jb("FRC", _OLD, 10, 15.0), _jb("FRC", bd, 0.5, 20.0),
+               _jb("FRC", td, 10.5, 21.0, "SELL")]
+    nb, filled = _sold_out(base, [sell], journal, bd, td)
+    assert len(filled) == 1 and filled[0]["shares"] == pytest.approx(10.5)
+    assert filled[0]["from_shares"] == 10
+    assert nb["FRC"]["shares"] == pytest.approx(10.5)
+
+
+def test_sold_to_zero_today_weekend_late_friday_buy_repaired():
+    bd, td = _dtm.date(2026, 11, 6), _dtm.date(2026, 11, 9)   # Fri -> Mon
+    base = {"AAA": {"shares": 10, "close": 30.0}}
+    sell = {"ticker": "AAA", "action": "SELL", "shares": 12, "price": 31.0}
+    journal = [_jb("AAA", _OLD, 10, 25.0), _jb("AAA", bd, 2, 30.0),   # logged Saturday
+               _jb("AAA", td, 12, 31.0, "SELL")]
+    nb, filled = _sold_out(base, [sell], journal, bd, td)
+    assert len(filled) == 1 and filled[0]["shares"] == 12 and filled[0]["from_shares"] == 10
+    assert nb["AAA"]["shares"] == 12
+
+
+def test_sold_to_zero_today_between_dates_sell_not_repaired():
+    bd, td = _dtm.date(2026, 11, 5), _dtm.date(2026, 11, 9)
+    base = {"AAA": {"shares": 5, "close": 30.0}}
+    sell = {"ticker": "AAA", "action": "SELL", "shares": 3, "price": 31.0}
+    journal = [_jb("AAA", _OLD, 5, 25.0), _jb("AAA", _dtm.date(2026, 11, 6), 2, 30.0, "SELL"),
+               _jb("AAA", td, 3, 31.0, "SELL")]
+    nb, filled = _sold_out(base, [sell], journal, bd, td)
+    assert nb == base and filled == []
+
+
+def test_sold_to_zero_today_correct_baseline_untouched():
+    bd, td = _dtm.date(2026, 11, 5), _dtm.date(2026, 11, 6)
+    base = {"AAA": {"shares": 5, "close": 30.0}}
+    sell = {"ticker": "AAA", "action": "SELL", "shares": 5, "price": 31.0}
+    journal = [_jb("AAA", _OLD, 5, 25.0), _jb("AAA", td, 5, 31.0, "SELL")]
+    nb, filled = _sold_out(base, [sell], journal, bd, td)
+    assert nb == base and filled == []
+
+
+def test_sold_to_zero_today_with_split_today_skipped():
+    bd, td = _dtm.date(2026, 11, 5), _dtm.date(2026, 11, 6)
+    base = {"AAA": {"shares": 5, "close": 30.0}}
+    today = [{"ticker": "AAA", "action": "SPLIT 2:1", "shares": 10, "price": 0},
+             {"ticker": "AAA", "action": "SELL", "shares": 12, "price": 15.0}]
+    journal = [_jb("AAA", _OLD, 5, 25.0), _jb("AAA", bd, 2, 30.0)]
+    nb, filled = _sold_out(base, today, journal, bd, td)
+    assert nb == base and filled == []

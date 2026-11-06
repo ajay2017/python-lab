@@ -427,6 +427,13 @@ def fill_late_logged_baseline(
                    `baseline_date`; read as `qty_drift`). Row = shares at the
                    start of today; the pre-existing part is valued at the
                    baseline row's OWN stored close, any between-buys at fill.
+                   Also covers a baseline name SOLD TO ZERO today (no longer in
+                   `held`): the late-logged BUY / partial SELL is repaired, so
+                   today's sale is measured against the true share count rather
+                   than over-counting the missing shares' proceeds as gain
+                   (late log + next-day exit, seen live 2026-11-06). Its start
+                   shares come from today's trade deltas, so the journal check
+                   there is not int-truncated.
       "removed"  : a baseline name no longer held, not traded today, whose
                    journal replay to `baseline_date` is zero (a full exit logged
                    after the snapshot; read as an orphan). Row dropped.
@@ -488,9 +495,11 @@ def fill_late_logged_baseline(
     base_orig = {str(k).strip().upper(): k for k in baseline}
     traded_today = {str(t.get("ticker", "")).strip().upper() for t in today_trades}
 
-    def _blend(tk, start, rows, base_close):
+    def _blend(tk, start, rows, base_close, truncate=True):
         """(close_eff, between_shares, pre) or None when the journal can't
-        explain `start` held shares."""
+        explain `start` held shares. `truncate=False` compares the journal's raw
+        count (a name sold to zero today has no truncated `held` figure: its
+        `start` comes from today's trade deltas)."""
         between = [r for r in rows if b_date < r[0] < t_date]
         if any(r[1] != "BUY" for r in between):
             return None
@@ -504,7 +513,11 @@ def fill_late_logged_baseline(
         if net_b is None:
             return None                   # ambiguous / oversold history
         # `held` is int-truncated by build_portfolio_df, so compare truncated.
-        if abs(int(round(net_b + between_shares, 6)) - start) > BROKER_DRIFT_SHARE_TOL:
+        if truncate:
+            _expl = int(round(net_b + between_shares, 6))
+        else:
+            _expl = round(net_b + between_shares, 6)
+        if abs(_expl - start) > BROKER_DRIFT_SHARE_TOL:
             return None                   # journal doesn't account for the held shares
         pre = start - between_shares
         if pre < -BROKER_DRIFT_SHARE_TOL:
@@ -515,10 +528,13 @@ def fill_late_logged_baseline(
             return None
         return (pre * (base_close if pre > 0 else 0.0) + between_cost) / start, between_shares, pre
 
-    for tk in sorted(held_sh):
+    # A baseline name sold to zero TODAY is not in `held`, so (A) must visit it
+    # too: its start-of-today shares are the shares sold today net of today's buys.
+    sold_out = {tk for tk in base_keys if tk in traded_today and tk not in held_sh}
+    for tk in sorted(set(held_sh) | sold_out):
         if tk in split_today:
             continue
-        start = held_sh[tk] - deltas.get(tk, 0.0)
+        start = held_sh.get(tk, 0.0) - deltas.get(tk, 0.0)
         if start <= BROKER_DRIFT_SHARE_TOL:
             continue                      # bought today; the cash leg handles it
         rows = j_by_tk.get(tk, [])
@@ -534,7 +550,7 @@ def fill_late_logged_baseline(
             base_sh = None
             base_close = _num(closes.get(tk))
             kind = "missing"
-        got = _blend(tk, start, rows, base_close)
+        got = _blend(tk, start, rows, base_close, truncate=tk in held_sh)
         if got is None:
             continue
         close_eff, between_shares, pre = got
