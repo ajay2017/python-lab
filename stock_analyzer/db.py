@@ -5178,14 +5178,8 @@ def load_cron_heartbeats() -> "list[dict] | None":
         return None
 
 
-def save_watchlist(tickers: list[str]) -> bool:
-    """Atomic-ish replace via upsert + sweep — same pattern as save_holdings.
-
-    The watchlist table already has UNIQUE(ticker), so the upsert is safe.
-    Building the deduped list first means malformed input never reaches the
-    DB; the sweep at the end is idempotent.
-    """
-    if is_readonly(): return False  # read-only viewer: no-op
+def _clean_watchlist_tickers(tickers: list[str]) -> list[str]:
+    """Strip, upper-case, drop blanks, dedupe preserving order."""
     cleaned: list[str] = []
     seen: set[str] = set()
     for t in tickers:
@@ -5193,25 +5187,54 @@ def save_watchlist(tickers: list[str]) -> bool:
         if u and u not in seen:
             cleaned.append(u)
             seen.add(u)
+    return cleaned
+
+
+def add_to_watchlist(tickers: list[str]) -> bool:
+    """Upsert ONLY the named tickers into the watchlist; never touches another row.
+
+    WLWipe: a failed startup read degrades the session watchlist to `[]`. The old
+    full-replace save (upsert + sweep of every row not in the list) fed from that
+    list would delete every row and its `added_at`. Writes are therefore
+    intent-only: add upserts just the tickers named here, and
+    `remove_from_watchlist` deletes just the tickers named there. Neither ever
+    sweeps. An empty / all-blank list is a no-op that makes no DB call.
+    """
+    if is_readonly(): return False  # read-only viewer: no-op
+    cleaned = _clean_watchlist_tickers(tickers)
+    if not cleaned:
+        return False
     if not has_db():
         return False
     try:
-        client = _client()
-        if cleaned:
-            client.table("watchlist").upsert(
-                [{"ticker": t} for t in cleaned], on_conflict="ticker"
-            ).execute()
-        sweep = client.table("watchlist").delete()
-        if cleaned:
-            sweep = sweep.not_.in_("ticker", cleaned)
-        else:
-            sweep = sweep.neq("ticker", "")
-        sweep.execute()
+        _client().table("watchlist").upsert(
+            [{"ticker": t} for t in cleaned], on_conflict="ticker"
+        ).execute()
         return True
     except Exception as e:
-        from stock_analyzer import api_health as _ah
         _record_db_error(str(e)[:120])
         st.error("⛔ Failed to save watchlist — see Data Health tab for details.")
+        return False
+
+
+def remove_from_watchlist(tickers: list[str]) -> bool:
+    """Delete ONLY the named tickers from the watchlist; never touches another row.
+
+    WLWipe: see `add_to_watchlist`. An empty / all-blank list returns False with
+    no DB call, so this can never issue an unfiltered delete.
+    """
+    if is_readonly(): return False  # read-only viewer: no-op
+    cleaned = _clean_watchlist_tickers(tickers)
+    if not cleaned:
+        return False
+    if not has_db():
+        return False
+    try:
+        _client().table("watchlist").delete().in_("ticker", cleaned).execute()
+        return True
+    except Exception as e:
+        _record_db_error(str(e)[:120])
+        st.error("⛔ Failed to remove from watchlist — see Data Health tab for details.")
         return False
 
 

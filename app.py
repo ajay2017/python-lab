@@ -25243,11 +25243,11 @@ elif page == "🔍 Market Scanner":
             if st.button("➕ Add to Watchlist",
                          disabled=st.session_state.get("_readonly", False),
                          help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
-                for t in to_add:
-                    if t not in st.session_state.watchlist:
-                        st.session_state.watchlist.append(t)
-                db.save_watchlist(st.session_state.watchlist)
-                st.success(f"Added {len(to_add)} ticker(s) — watchlist saved.")
+                _sc_new_wl = [t for t in to_add if t not in st.session_state.watchlist]
+                for t in _sc_new_wl:
+                    st.session_state.watchlist.append(t)
+                if not _sc_new_wl or db.add_to_watchlist(_sc_new_wl):
+                    st.success(f"Added {len(to_add)} ticker(s) — watchlist saved.")
         st.caption(f"Current watchlist: {', '.join(st.session_state.watchlist)}")
 
 
@@ -28984,9 +28984,9 @@ elif page == "📋 Watchlist":
                     )
                 else:
                     st.session_state.watchlist.append(_t)
-                    db.save_watchlist(st.session_state.watchlist)
-                    st.success(f"Added **{_t}** (last price ${_wl_verify_px:,.2f})")
-                    st.rerun()
+                    if db.add_to_watchlist([_t]):
+                        st.success(f"Added **{_t}** (last price ${_wl_verify_px:,.2f})")
+                        st.rerun()
         if st.session_state.watchlist:
             _wl_remove = st.multiselect(
                 "Remove from watchlist",
@@ -29009,7 +29009,7 @@ elif page == "📋 Watchlist":
                         for _rt in _wl_bulk_confirm:
                             if _rt in st.session_state.watchlist:
                                 st.session_state.watchlist.remove(_rt)
-                        db.save_watchlist(st.session_state.watchlist)
+                        db.remove_from_watchlist(list(_wl_bulk_confirm))
                         st.session_state.pop("_wl_bulk_remove_confirm", None)
                         st.rerun()
                 with _wbc2:
@@ -30072,7 +30072,7 @@ elif page == "📋 Watchlist":
                                 st.session_state.pop(_del_key, None)
                                 if _ticker in st.session_state.watchlist:
                                     st.session_state.watchlist.remove(_ticker)
-                                    db.save_watchlist(st.session_state.watchlist)
+                                    db.remove_from_watchlist([_ticker])
                                 st.rerun()
                         with _dc2:
                             if st.button("Cancel", key=f"_wl_del_no_{_ticker}"):
@@ -45989,7 +45989,7 @@ elif page == "🧠 AI Insights":
                             for _ep_t in _ep_new_wl:
                                 st.session_state.watchlist.append(_ep_t)
                             if _ep_new_wl:
-                                db.save_watchlist(st.session_state.watchlist)
+                                db.add_to_watchlist(_ep_new_wl)
                             _ep_wl_note = (
                                 f" · added {', '.join(_ep_new_wl)} to watchlist"
                                 if _ep_new_wl else " · already on watchlist"
@@ -46735,9 +46735,9 @@ elif page == "🧠 AI Insights":
                         ):
                             if _ac_t not in st.session_state.watchlist:
                                 st.session_state.watchlist.append(_ac_t)
-                            _ai_db.save_watchlist(st.session_state.watchlist)
-                            st.success(f"{_ac_t} added to watchlist.")
-                            st.rerun()
+                            if _ai_db.add_to_watchlist([_ac_t]):
+                                st.success(f"{_ac_t} added to watchlist.")
+                                st.rerun()
                 with _ac_btn_c3:
                     _ac_del_key = f"_ac_del_confirm_{_ac_rowid}_{_ac_i}"
                     if not st.session_state.get(_ac_del_key):

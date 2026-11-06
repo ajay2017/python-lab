@@ -1088,8 +1088,8 @@ def compute_watchlist_entries(
             "news_status": data.get("news_status") if isinstance(data, dict) else None}
         _provider_sector = data.get("sector") if isinstance(data, dict) else None
         # Both maps keyed UPPER, per build_enter_now_rows' documented contract.
-        # Provably a no-op for sector_map today (db.save_watchlist upper-cases
-        # every ticker at write, db.py:3827), but the raw key contradicted both
+        # Provably a no-op for sector_map today (db.add_to_watchlist upper-cases
+        # every ticker at write), but the raw key contradicted both
         # the contract and the app-side sibling at app.py:23882 — aligning them
         # stops a latent cron-only divergence.
         _t_key = str(t).upper()
