@@ -107,6 +107,7 @@ from stock_analyzer.market_time import now_et as _now_et
 from stock_analyzer.pnl_display import signed_display as _signed_display
 from stock_analyzer.session_label import move_when_phrase as _move_when_phrase
 from stock_analyzer import broker_sync
+from stock_analyzer import trade_time
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
@@ -11105,14 +11106,16 @@ if page == "🏠 Home":
             for _, _row in buys.iterrows():
                 n = str(_row.get("notes") or "").strip()
                 if n and n.lower() != "nan":
-                    thesis, thesis_date = n, str(_row.get("traded_at", ""))[:10]
+                    _d = trade_time.et_trade_date(_row.get("traded_at"))
+                    thesis, thesis_date = n, (_d.isoformat() if _d else "")
                     break
             # Lessons = up to 2 most recent non-empty lesson entries
             lessons = []
             for _, _row in df.iterrows():
                 l = str(_row.get("lesson") or "").strip()
                 if l and l.lower() != "nan":
-                    lessons.append({"text": l, "date": str(_row.get("traded_at", ""))[:10]})
+                    _ld = trade_time.et_trade_date(_row.get("traded_at"))
+                    lessons.append({"text": l, "date": (_ld.isoformat() if _ld else "")})
                     if len(lessons) >= 2:
                         break
             if not thesis and not lessons:
@@ -20673,7 +20676,8 @@ elif page == "🧩 Intelligence":
                 for _, _sca_brow in _sca_buys.iterrows():
                     _sca_bt = str(_sca_brow["ticker"]).upper()
                     if _sca_bt not in _sca_trade_date:
-                        _sca_trade_date[_sca_bt] = str(_sca_brow.get("traded_at", ""))[:10]
+                        _sca_td = trade_time.et_trade_date(_sca_brow.get("traded_at"))
+                        _sca_trade_date[_sca_bt] = _sca_td.isoformat() if _sca_td else ""
 
         # Thesis erosion — latest reviewed row per ticker.
         try:
@@ -30177,10 +30181,11 @@ elif page == "🧵 Thesis":
                 )
                 _tc_buys = _tc_buys.sort_values("_sort_ts", ascending=False)
                 _tc_brow = _tc_buys.iloc[0]
+                _tc_td = trade_time.et_trade_date(_tc_brow.get("traded_at"))
                 _tc_trade_row = {
                     "user_thesis":                 _tc_brow.get("user_thesis"),
                     "thesis_source":                _tc_brow.get("thesis_source"),
-                    "trade_date":                   str(_tc_brow.get("traded_at", ""))[:10],
+                    "trade_date":                   (_tc_td.isoformat() if _tc_td else ""),
                     "premortem_case_against":       _tc_brow.get("premortem_case_against"),
                     "premortem_commitment":         _tc_brow.get("premortem_commitment"),
                     "premortem_trigger_price":      _tc_brow.get("premortem_trigger_price"),
@@ -33215,29 +33220,27 @@ elif page == "📒 Trade Journal":
                 if col in display_df.columns:
                     display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
             if "traded_at" in display_df.columns:
-                # format='ISO8601' tells pandas to accept any valid ISO 8601 input
-                # (with or without microseconds, '+00' or '+00:00' offset). Without
-                # this, pandas infers the format from the first row only — and
-                # rows that don't match (e.g. raw-SQL rebaseline BUYs lack the
-                # microsecond component that the Python-SDK inserts have) get
-                # silently coerced to NaT by errors='coerce', rendering as 'None'
-                # in the Date / Time column. utc=True normalises to UTC.
-                _at_ts = pd.to_datetime(
-                    display_df["traded_at"], errors="coerce", utc=True, format="ISO8601"
-                )
-                # traded_at_time_known=False means normalize_traded_at invented
-                # the fill time (broker CSV import re-anchored to 16:00 ET).
-                # Show "—" for the time portion rather than an invented "20:00".
+                # TJUtc: shown in ET (the column was UTC, so a 19:14 ET fill read
+                # as the next day, 00:14). trade_time.et_display parses with
+                # ISO8601 + utc=True (mixed offsets / precision never NaT a row),
+                # converts to ET, and shows "—" for the time when it is an
+                # app-invented placeholder (traded_at_time_known=False, or the
+                # 16:00 ET date-only anchor) rather than an invented "16:00".
                 _time_known = (
                     display_df["traded_at_time_known"]
                     if "traded_at_time_known" in display_df.columns
                     else pd.Series(True, index=display_df.index)
                 )
                 display_df["traded_at"] = [
-                    ("" if pd.isna(t) else
-                     t.strftime("%Y-%m-%d") + " —" if (pd.notna(k) and not k) else
-                     t.strftime("%Y-%m-%d %H:%M"))
-                    for t, k in zip(_at_ts, _time_known)
+                    trade_time.et_display(t, k)
+                    for t, k in zip(display_df["traded_at"], _time_known)
+                ]
+            if "shares" in display_df.columns:
+                # Exact shares (FracNew class): "%.0f" hid fractions. Display
+                # only: the Delete? mapping below is by index label, not shares.
+                display_df["shares"] = [
+                    "" if pd.isna(v) else _trim_sizing.fmt_shares(v)
+                    for v in display_df["shares"]
                 ]
 
             # Add delete checkbox column
@@ -33258,10 +33261,10 @@ elif page == "📒 Trade Journal":
                 display_df[show_cols],
                 column_config={
                     "Delete?":      st.column_config.CheckboxColumn("Delete?", default=False),
-                    "traded_at":    st.column_config.TextColumn("Date / Time",     disabled=True),
+                    "traded_at":    st.column_config.TextColumn("Date / Time (ET)", disabled=True),
                     "ticker":       st.column_config.TextColumn("Ticker",          disabled=True),
                     "action":       st.column_config.TextColumn("Action",          disabled=True),
-                    "shares":       st.column_config.NumberColumn("Shares",            format="%.0f",    disabled=True),
+                    "shares":       st.column_config.TextColumn("Shares",           disabled=True),
                     "price":        st.column_config.NumberColumn("Price ($)",         format="$%.2f",   disabled=True),
                     "cost_basis":   st.column_config.NumberColumn("Cost Basis ($)",    format="$%.2f",   disabled=True),
                     "realized_pnl": st.column_config.NumberColumn("Realized P&L ($)",  format="$%+,.2f", disabled=True),
@@ -50031,7 +50034,12 @@ elif page == "🎯 My Edge":
                         # Exclude rows whose fill time was invented (broker CSV
                         # import re-anchored to 16:00 ET). Treating 16:00 as a
                         # real fill time would silently pollute the "later" bucket.
-                        if r["acted_trade"].get("traded_at_time_known") is False:
+                        # Also skip the 16:00 ET date-only anchor itself, which
+                        # reads as a real fill time when the flag is absent.
+                        if trade_time.is_placeholder_time(
+                            r["acted_trade"]["traded_at"],
+                            r["acted_trade"].get("traded_at_time_known"),
+                        ):
                             continue
                         _bf_et = pd.to_datetime(
                             r["acted_trade"]["traded_at"], utc=True, format="ISO8601"

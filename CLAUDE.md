@@ -219,7 +219,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 **Owner-agreed order (2026-11-03; MacroGap step done 2026-11-04):**
 1. ~~MacroGap + MacroAff + Macro~~ **SHIPPED 2026-11-04** (F-317: `fdf3635` `e9f44c6` `212f2c5` `b6113ff`; plan `docs/plans/macro-sector-gate.md`). Brief leg verified live after NFP 2026-11-06; Macro row closed. Watchlist "sector unknown" leg still open (before CPI 11-12).
-2. **Write-safety batch:** ~~WLWipe~~ (fixed 2026-11-06, `72f35ff`), ~~RbPartial~~ (fixed 2026-11-06, F-81d), ~~TrPage~~ ~~DelIdx~~ (fixed 2026-11-06), TJDup (fold into TJDate Phase 1), TJUtc, RbAsset (re-rated latent 2026-11-06: no reader of the column) (bug register; DB-write path → reviewer).
+2. **Write-safety batch:** ~~WLWipe~~ (fixed 2026-11-06, `72f35ff`), ~~RbPartial~~ (fixed 2026-11-06, F-81d), ~~TrPage~~ ~~DelIdx~~ (fixed 2026-11-06), TJDup (fold into TJDate Phase 1), ~~TJUtc~~ (C3 shipped 2026-11-06; C3b open), RbAsset (re-rated latent 2026-11-06: no reader of the column) (bug register; DB-write path → reviewer).
 3. **TJDate Phase 1** (`docs/plans/trade-entry-guard.md`: confirming planner pass, then the P0 probe).
 4. **U7 + #21** (U7: planner + reviewer; #21: trace both budget figures first).
 5. **#34c probe:** read-only check of SnapTrade's own last-sync time before designing.

@@ -50,6 +50,7 @@ Pure / no I/O / no Streamlit.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from stock_analyzer.constants import IMPORTED_TRADE_ANCHOR_ET_HOUR
@@ -135,6 +136,69 @@ def anchored_iso(value, anchor_hour: int = IMPORTED_TRADE_ANCHOR_ET_HOUR) -> str
     if ts is None or pd.isna(ts):
         return None
     return et_anchor_iso(ts.date(), int(anchor_hour))
+
+
+def _et_ts(value) -> "pd.Timestamp | None":
+    """`value` as a tz-aware ET Timestamp, or None for NaT/None/unparseable.
+
+    Naive values are read as UTC, exactly as `normalize_traded_at` (and the
+    `timestamptz` column the DB returns) treat them. `format="ISO8601"` so
+    mixed precision / offsets never NaT a valid value.
+    """
+    if value is None or _isna(value):
+        return None
+    try:
+        ts = pd.to_datetime(value, utc=True, errors="coerce", format="ISO8601")
+    except (TypeError, ValueError):
+        return None
+    if ts is None or pd.isna(ts):
+        return None
+    return ts.tz_convert(_ET)
+
+
+def et_trade_date(value):
+    """The ET calendar date (`datetime.date`) of a stored `traded_at`, or None.
+
+    For display sites that used the UTC `str(traded_at)[:10]` slice, which
+    dates a 19:14 ET fill (next-day UTC) one day late. None for
+    NaT / None / unparseable, so a caller can tell "no date" from a date.
+    """
+    ts = _et_ts(value)
+    return None if ts is None else ts.date()
+
+
+def is_placeholder_time(value, time_known=None) -> bool:
+    """True when `value`'s time-of-day is an app-invented placeholder.
+
+    Placeholder = `time_known` is explicitly False (`normalize_traded_at`
+    invented the time), OR the ET wall clock is exactly 16:00:00.000000 (the
+    date-only anchor the importers write). Tested on the ET WALL CLOCK, never a
+    fixed UTC hour, because 16:00 ET is 20:00 UTC in EDT and 21:00 UTC in EST.
+
+    `time_known=None` / NaN is NOT a placeholder by that rule (unknown is not
+    False). Known limitation, accepted: a real fill at exactly 16:00:00.000000
+    ET (a closing-auction print) is also reported as a placeholder.
+    """
+    if isinstance(time_known, (bool, np.bool_)) and not time_known:
+        return True
+    ts = _et_ts(value)
+    if ts is None:
+        return False
+    return (ts.hour, ts.minute, ts.second, ts.microsecond) == (
+        int(IMPORTED_TRADE_ANCHOR_ET_HOUR), 0, 0, 0)
+
+
+def et_display(value, time_known=None) -> str:
+    """"YYYY-MM-DD HH:MM" in ET; "YYYY-MM-DD —" when the time is a placeholder
+    (see `is_placeholder_time`, including its 16:00:00 caveat); "" for
+    NaT / None / unparseable.
+    """
+    ts = _et_ts(value)
+    if ts is None:
+        return ""
+    if is_placeholder_time(value, time_known):
+        return ts.strftime("%Y-%m-%d") + " —"
+    return ts.strftime("%Y-%m-%d %H:%M")
 
 
 def normalize_traded_at(
