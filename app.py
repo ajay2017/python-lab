@@ -33276,7 +33276,7 @@ elif page == "📒 Trade Journal":
             rows_to_delete = edited_trades[edited_trades["Delete?"] == True]
             if not rows_to_delete.empty:
                 n = len(rows_to_delete)
-                _del_ids = trades_df.iloc[rows_to_delete.index]["id"].tolist()
+                _del_ids = trades_df.loc[rows_to_delete.index, "id"].tolist()  # DelIdx: labels, not positions
                 if not st.session_state.get("_tj_delete_confirm_pending"):
                     if st.button(
                         f"🗑️ Delete {n} selected trade{'s' if n > 1 else ''}",
@@ -33288,7 +33288,7 @@ elif page == "📒 Trade Journal":
                         # RbPartial: stash the rows the user saw next to their ids, so
                         # the confirm handler checks the rebuild against exactly these.
                         st.session_state["_tj_delete_confirm_rows"] = (
-                            trades_df.iloc[rows_to_delete.index].to_dict("records")
+                            trades_df.loc[rows_to_delete.index].to_dict("records")
                         )
                         st.rerun()
                 else:
@@ -33363,7 +33363,7 @@ elif page == "📒 Trade Journal":
                                     # Drift state left alone so the banner can still flag it.
                                     _old_tdf = st.session_state.get("trades_df")
                                     if _old_tdf is not None and "id" in _old_tdf.columns:
-                                        st.session_state.trades_df = _old_tdf[~_old_tdf["id"].isin(_ok_ids)]
+                                        st.session_state.trades_df = _old_tdf[~_old_tdf["id"].isin(_ok_ids)].reset_index(drop=True)
                                 elif _decision["action"] == "empty":
                                     _tj_notes.append({
                                         "level": "info",
