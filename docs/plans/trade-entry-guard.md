@@ -1,6 +1,6 @@
 # Trade entry guard + journal vs Robinhood reconciliation (bug register TJDate)
 
-**Status:** DESIGNED 2026-11-02 (Opus planner: PROCEED WITH CHANGES). Owner decisions 2026-11-02 (below), QUEUED behind HoldWipe and LockBreach. NEXT: a confirming planner pass on the revised scope, then the P0 probe. Nothing built.
+**Status:** CONFIRMING PASS DONE 2026-11-06 (Opus planner: PROCEED WITH CHANGES; see "Confirming pass 2026-11-06" below). New Phase 1 order: C3 (TJUtc) → D0 (TJDup) → P0 (owner, in parallel) → C4 → C1 → C2 → C3b → C5 → U9 → U8 → docs. HoldWipe (`6b3d930`) and RbPartial (`2ca2f29`) have shipped. Earlier: DESIGNED 2026-11-02 (Opus planner: PROCEED WITH CHANGES), owner decisions 2026-11-02 below. Nothing built yet.
 
 **Owner decisions 2026-11-02, after the lead's review:**
 1. **Two phases.**
@@ -80,6 +80,31 @@ The broker-vs-journal check of 11-02 (`docs/sql/readonly-pending-imports-check.s
 - **U11 — Held-stop note:** the card says when a correction moves a held position's entry date or first fill price. Text only.
 - **U12 (optional) — Duplicate check at log time:** same ticker, action and shares already on that ET date.
 - **On U7 (sizing):** rank "broker sold, journal didn't" first. TJDate doesn't change sizing math. Its `unlogged_sells` output is U7's day+1 input; U7 still needs a same-day path (drift).
+
+## Confirming pass 2026-11-06 (Opus planner, PROCEED WITH CHANGES)
+
+Re-checked against HEAD `b1dfcf7`. Nothing in Phase 1 rebuilds holdings, so RbPartial (`journal_rebuild`) is untouched; restate that if a chunk ever adds a rebuild.
+
+**Owner decision 2026-11-06 (TJDup):** a likely duplicate trade entry WARNS, not blocks: a visually prominent coloured panel naming the matching row, and one explicit tick ("this is a separate fill") to record it.
+
+**New order:** C3 → D0 → P0 (owner, in parallel) → C4 → C1 → C2 → C3b → C5 → U9 → U8 → docs.
+
+- **C3, Trade History in ET (bug TJUtc), mechanical, no review.** Goes first because D0's warning needs the ET formatter. `trade_time.et_display(value, time_known)` and `trade_time.et_trade_date(value)`; the placeholder test is "exactly 16:00:00.000000 ET wall clock, or `traded_at_time_known is False`" (never a fixed UTC hour: DST). Column "Date / Time (ET)", date with "—" for a placeholder time, exact shares. `display_df` keeps `trades_df`'s index (DelIdx). Sibling sites: already correct app.py ~5971, ~10307, ~41852, ~47034, ~39669; UTC `[:10]` date slice, fix here (display): ~11099→11108/11115, ~30176→30183, ~20670→20676; ~50037 counts 16:00 anchors as real fill times in the opening-window pattern (use the placeholder helper). Named only: `decision_journal.py` ~126/140/150, `portfolio_qa.py` ~455.
+- **C3b (DB write → reviewer):** app.py ~44839→44845 feeds `thesis_reviews.trade_date` (writes ~45277 / ~45351) and the Red Team thesis age (~47533) with the UTC `[:10]` slice; it must change together with cron_runner.py ~2628 (gate file, same slice).
+- **D0, TJDup entry guard (decision-bearing → reviewer + screenshots).** New `stock_analyzer/trade_confirm.py` (→ `_GATE_FILES`, reason in `docs/review-policy.md`).
+  - Paths: every Log Trade submit (incl. the recommendation-card prefill) and the broker-prefill path. On the broker path a staged `broker_txn_id` already on a trades row is a HARD block (exact identity, points to "Already logged"); otherwise only unlinked rows are compared. Not the CSV / paste imports: they already pre-untick content matches (app.py ~33715-33736).
+  - Match: same ticker (upper/strip) and action; shares within `BROKER_DRIFT_SHARE_TOL` (rounded to 9 dp); each row's ET date via `trade_time.normalize_traded_at` (idempotent); `sessions_apart` = trading days in (earlier, later]. `sessions_apart == 0`: always a match ("same price" within `JOURNAL_MATCH_PRICE_TOL_USD`, else "same size, different price"); `1 ≤ sessions_apart ≤ TRADE_LOG_DUP_WINDOW_SESSIONS`: a match only within the price tolerance.
+  - One strict read at staging (`db.load_trades_or_none()`; session `trades_df` in no-DB mode): `None` → a visible "couldn't check for a duplicate" line, no tick; `[]` → clean.
+  - One confirm card, not stacked tick boxes: `confirm_gate(findings)` → `{hard, needs_tick, tick_label, blocks}`; red-bordered panel per matching row ("#id · Wed Nov 4, 19:14 ET · BUY 3 @ $102.00 · Recommendation", "linked to Robinhood" when it is); ONE checkbox keyed `_tj_ack_{idempotency_key}`; Confirm disabled until ticked, always on a hard finding; C2 later adds its findings to the same list. `safe_html`; `$` as `&#36;`.
+  - Constants: `JOURNAL_MATCH_PRICE_TOL_USD` = 0.01 (U4, agreed; lands here instead of C1); `TRADE_LOG_DUP_WINDOW_SESSIONS` (new, owner call: 1 recommended or 0). Both into the architecture constants table. `TRADE_DUP_SUBMIT_WINDOW_SEC` and the idempotency key unchanged.
+  - Needs `data.previous_trading_day` / `trading_sessions_between` (only `data.is_trading_day` exists, data.py ~165).
+- **P0:** owner runs `docs/sql/readonly-tjdate-p0-probe.sql` (Q1–Q7; Q6 counts HoldDup triggers, Q7 calibrates D0 and surfaces any other live duplicate).
+- **C4 additions:** `broker_import.classify_against_existing` uses the UTC `edt.date()` (broker_import.py ~300-302; fails safe, wrong label); cron_runner.py ~3685 feeds `classify_transactions` from the lenient `db.load_trades()` (switch to `load_trades_or_none()`, skip with `failures.append` / rc=1 on None); stale "pending" rows already linked (HoldDup). Recommend `broker_import.py` → `_GATE_FILES`.
+- **C1 corrections:** `NYSE_EARLY_CLOSES` holds float hours (constants.py ~1570); fills are regular-hours when 09:30 ≤ t ≤ close, close inclusive (closing-auction prints at 16:00:00); `data.market_status`'s `< 16.0` is a different question, leave it.
+- **C2 corrections:** line numbers moved (omit-key → now() ~32445-32493; SELL card ~30831-30974, BUY card ~30976-31244); the "bare 0.5 / 2.0" hint at ~31907 and the submit gate ~32051-32067 move into a pure `price_sanity()` in the C1 module (retire baseline keys 164/165/189). New gap: the replay orders by `traded_at`, `id` (db.py ~3028), so a same-day SELL logged with a 14:00 time lands before a past-dated BUY on the 16:00 placeholder and reads "SELL with no prior BUY"; the existing guard (~32131) checks total shares only. Add an as-of-time replay hard block ("delete the BUY in Trade History and re-log it with its time"). `db.load_snaptrade_unlinked_fills_or_none` pages via `_read_all_pages` and drops pending rows whose txn id is already on a trade.
+- **C5:** add a CSCO 11-04 fixture (two journal rows, one fill → one LINK + one JOURNAL_ONLY). **U9:** Pending Imports now ~41252-41386 ("Already logged" ~41377). **U8:** register any published matcher key in `coord_freshness.py`, three-state.
+- **Review-required:** D0 (`constants.py`, `trade_confirm.py`, `pre_tool_checks.py`, `data.py`, app.py wiring); C3b; C4 (`broker_sync.py`, `cron_runner.py`, `broker_import.py`); C1 (`trade_entry_checks.py`); C2; C5 (`journal_broker_match.py`); U8/U9 (`coord_freshness.py`). C3 none.
+- **Named, not in scope:** the split-apply `save_trade` (app.py ~5713); FracNew `int(_pb_shares)` (~31089); Trade History Delete is invisible to N1, so the account rows for Nov 4–6 may still count 16 CSCO after the duplicate was deleted (check in N1 C7); the SELL-without-holding block names the wrong override checkbox (~32105 / ~32115) and the help hardcodes "±50%" (~31408) (wording).
 
 ## Chunks (order: P0 → C4 → C1 → C2 → C3 → C5 → C6 → C7 → C8 → C9)
 
