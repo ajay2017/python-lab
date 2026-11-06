@@ -192,7 +192,8 @@ def test_each_rebuild_site_calls_decide_with_the_right_inserted_flag():
             assert isinstance(kw["rows_just_inserted"], ast.Constant)
             flags.append((node.args[0].id, kw["rows_just_inserted"].value))
     assert sorted(flags) == sorted([
-        ("fresh_trades", False), ("fresh", False), ("_bi_fresh", True), ("_ss_fresh", True),
+        ("fresh_trades", False), ("fresh", False), ("fresh2", False),
+        ("_bi_fresh", True), ("_ss_fresh", True),
     ])
 
 
