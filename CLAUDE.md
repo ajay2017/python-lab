@@ -87,7 +87,7 @@ The deterministic gates are the safety net; **the paid agents are for judgment o
 - **Never pass a per-call `model:` alias to `reviewer` / `planner`;** it overrides the exact pin. Precedence: per-call → frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → the lead's model.
 - `availableModels` gates only the `/model` picker, not agent frontmatter.
 - **Fable 5.1 was evaluated and rejected for every lane:** Opus 5.5 leads it at 2.5× less cost. Don't re-propose it without a new benchmark.
-- **Prices per million tokens, input / output:** Opus 5.5 $4/$20; Sonnet 5.5 $2/$10; Haiku 5.5 $0.10/$0.50. Weekly budget: $250 API-equivalent (memory `project_weekly_token_budget`).
+- **Prices per million tokens, input / output:** Opus 5.5 $4/$20; Sonnet 5.5 $2/$10; Haiku 5.5 $0.10/$0.50. Limit (owner 2026-11-07): the $190/month enterprise plan's usage meter, which resets about every 5 hours; only usage above 100% of it costs extra. `scripts/session_cost.py`'s API-equivalent $ is a yardstick, not a budget (memory `project_weekly_token_budget`).
 
 **When the `reviewer` is required:** `constants.py`, any gate, a scoring/recommendation formula, cross-feature coordination, DB-write / data-integrity, or a new user-facing decision surface.
 - **Mechanically enforced through `_GATE_FILES` in `.claude/hooks/pre_tool_checks.py`, which is the authoritative list** (81 files on 2026-11-07, after `broker_import.py` joined). Print it:
