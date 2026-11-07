@@ -1,5 +1,7 @@
 # Account snapshot repair (bug register N1)
 
+**Status (2026-11-07):** C7 now also closes the weekly data-quality alert. The Saturday 2026-11-07 run showed impossible-states C7 (account `gross_book` vs `SUM(daily_snapshots shares × close)`, > $5) at 16 rows against a baseline of 3, most likely because C3 and C5 repair the account row but not that day's per-ticker rows (bug register DQ-C7). Confirm with Q1 + Q2 of `docs/sql/data-quality-triage-2026-11-07.sql` before building; build C7 inside the C5 auto-repair; leave the C7 baseline at 3.
+
 **Status:** designed 2026-11-01 (planner, Opus 5.5: PROCEED WITH CHANGES). **Owner accepted every recommendation 2026-11-01:**
 - **U1:** yes, journal repair plus fail-closed readers.
 - **U2:** 35 days.

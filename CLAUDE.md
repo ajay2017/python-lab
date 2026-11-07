@@ -223,7 +223,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 3. **TJDate Phase 1** (`docs/plans/trade-entry-guard.md`): confirming pass, P0 probe, C3 and D0 done 2026-11-06; NEXT C4, then C1, C2, C3b, C5, U9, U8.
 4. **U7 + #21** (U7: planner + reviewer; #21: trace both budget figures first).
 5. **#34c probe:** read-only check of SnapTrade's own last-sync time before designing.
-- **Dated:** N1 C6b–C8 before the November report (`docs/plans/account-snapshot-repair.md`: C6b review follow-ups, C7 per-ticker `daily_snapshots` repair, C8 docs); #26 C3c persisted stop floor by 2026-12-07 (`docs/plans/held-trailing-stop.md`).
+- **Dated:** N1 C6b–C8 before the November report (`docs/plans/account-snapshot-repair.md`: C6b review follow-ups, C7 per-ticker `daily_snapshots` repair, C8 docs; C7 also clears the 11-07 data-quality alert DQ-C7); #26 C3c persisted stop floor by 2026-12-07 (`docs/plans/held-trailing-stop.md`).
 - **LockBreach:** owner decided 2026-11-03 to RETIRE Lock Setup (option A); queued, don't start unless asked (closes #20 f/u).
 - **Owner calls open:** keep the 6.0 Financials earnings fallback for uncurated financial names or restore 7.0 (C3 `212f2c5`); EW2; Fund; #25; Zone (planned-level zone parked until the ENTER_NOW base-rate readout).
 
@@ -238,13 +238,17 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 - **#33 macro calendar automation** (FRED release dates → DB table, `_STATIC` fallback, moved dates shown on 🩺 System Trust; FOMC stays manual); open before design: FRED's 2027 coverage + release IDs, GDP advance vs later estimates, owner call on auto-applying a moved date; fold in the System Trust ⑤ caption fix. Not urgent (2027 rows are in).
 - **#34a:** Haiku 4.5 is past its deprecation date; retirement comes with ≥ 60 days' notice to the owner's email; closing it = `filter` off Haiku 4.5 plus the `CODE_DEFAULTS` catch-up (the code default for `score` / `filter` / `extract_trigger` is still Haiku 4.5).
 
+**Saturday data-quality email 2026-11-07 (queued, not yet ordered; owner will rank it against the register):** DQ-C7 (impossible-states C7 16 vs baseline 3; likely the N1 repairs leaving per-ticker `daily_snapshots` stale; fix = N1 C7, never raise the baseline), DQ-TSLA (duplicate thesis review, flag-only), DQ-Orphan (INTL / DELL cache rows, never served; Phase 2 targets). First step for all three: the owner runs `docs/sql/data-quality-triage-2026-11-07.sql` (read-only). Rows in `docs/bug-register.md`.
+
+**🏠 Home top zone (owner asked 2026-11-06; display only):** AlertsGhost (four faded "⚠️ Alerts" bars on every page; the key experiment `0b0137c` was ruled out; next lead: full runs ending in `st.rerun()` / `st.stop()` before Streamlit clears stale elements) and HomeLayout (merge the Act Today pointer, "Needs a look" and the Alerts expander into one zone; options A / B / C, mockup first). One track: diagnose the ghosts, then mockup, owner picks, then build. Rows in `docs/bug-register.md`.
+
 **Smaller open items (full text in the docs/queue.md snapshot):**
 - #20 f/u (Watchlist / Analysis banners ignore Lock Setup; moot if Lock Setup is retired), #20 (a) Signals live-tone fallback when Home's tone read failed (`entry_posture.py`, owner/planner call).
 - #22 follow-ups: the read-only retro study (U5) not started; owner sets the re-enable margin before the readout.
 - #29 f/u (ET buy date on lots; `peak_since_date` coercion; tests), #30 (parked until it recurs: pull the web log BEFORE pushing), #31 f/u (gate-file `~` sites).
 - Earnings-week trims: EW (Home 🔧 Tune-up and the Rebalancer still size to 15%); record earnings trims as `rec_events` (own design + review); `macro_playbook` "a 0-share position"; `daily_briefing` `is_critical = gap <= 3.0` bare literal; int-`Shares` readers (`forward_sim.py` ~301 / ~473, `portfolio_qa.py` ~760 / ~838, app.py Q&A price map) and the int baseline's float-noise truncation (planner + reviewer); owner option: a sub-share macro trim falls through to the next affected name.
 - R:R / Watchlist: captions format `RR_ENTRY_MIN` as `:.0f`; an unsized trim still hides "✅ Portfolio is well-balanced" on Signals; readiness point weights and the 70 / 40 bar colours are bare (display, low); owner option: "Underweight: {sector}" wording; Watchlist Remove/Wait "No size yet …" line.
-- Rebalancer: the trim expander title still branches in app.py; `daily_briefing.py` ~961 bare `+ 5.0` (= `TOLERANCE_WATCH`, gate file); the drift-chart legend hardcodes "2–5pp" / ">5pp" / "±2pp"; a two-`$` headline in its news box could render as LaTeX.
+- Rebalancer: the trim expander title still branches in app.py; `daily_briefing.py` ~971 bare `+ 5.0` (= `TOLERANCE_WATCH`, gate file); the drift-chart legend hardcodes "2–5pp" / ">5pp" / "±2pp". (The two-`$` news headline was fixed in `4964c1f`, 2026-11-03.)
 - ETF negative-news Skip never fires: PAUSED (owner 2026-10-28), don't start unless re-asked.
 - N-C: no macro (G-07) check on Grow Today adds (planner + reviewer to reopen).
 - F-304 follow-ups (3)–(7); `self_track_record` UTC dating; the report's "Book side" label; SPCX item B (measure before designing); Market Scanner's score breakdown hardcodes stock weights (gate on `asset_type`); owner observation: Valuation consensus vs Smart Money can disagree on one screen.
@@ -272,7 +276,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 ### Waiting for a date or data (don't build early)
 
 - **Gate Suppression Ledger:** next look ~2026-10-26. G-20 counterfactual still unobserved. Retirement review ~2027-08-27 (retiring is the success condition).
-- **~11-10:** Anthropic console usage, 2 weeks after the Phase 3 switch vs the 30 days before; `SP500_SECTOR_WEIGHTS` shelf-life tripwire. **~11-23:** data-maintenance Phase 2's 8-week window ends.
+- **~11-10:** Anthropic console usage, 2 weeks after the Phase 3 switch vs the 30 days before; `SP500_SECTOR_WEIGHTS` shelf-life tripwire. **~11-23:** data-maintenance Phase 2's 8-week window ends (then the owner-invoked F1 delete with confirmation; DQ-Orphan's INTL / DELL rows are its first targets).
 - **Earnings rating-change shadow readout (finding #22):** at 20 flagged + 20 unflagged matured earnings events in `earnings_revision_shadow`, or ~May 2027, whichever first (pre-registered in `docs/plans/earnings-revision-shadow.md`). Before it: the owner sets the re-enable margin, and the read-only retro study (U5) runs. The flag sizes nothing until then, and re-enabling needs planner + reviewer + fresh approval, tightening-only.
 - **#26 C3c persisted stop floor: build by 2026-12-07** or on the first day a data-caused degraded-basis banner appears (plan `docs/plans/held-trailing-stop.md`; C3 live since 2026-10-31, `d4ecd73`).
 - **Watchlist ENTER_NOW measured base rate,** ~Nov 2026. A single headline, never per composite band. **No confidence/probability figure on any surface without a new measurement that overturns A2.**
