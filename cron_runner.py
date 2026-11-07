@@ -3682,19 +3682,51 @@ def _run_broker(now_et, force: bool) -> int:
         raw_txns = snaptrade_client.get_account_activities(
             account_id, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS
         )
-        existing_trades = db.load_trades()
-        existing_income_events = db.load_snaptrade_income_events()
-        classified = broker_sync.classify_transactions(
-            raw_txns, existing_trades, existing_income_events=existing_income_events
-        )
-        if classified is None:
+        # STRICT read: the lenient db.load_trades() returns an EMPTY frame on a
+        # read failure, so every fill in the window would look unlogged and be
+        # re-queued as a pending import. None = could not read -> skip ②.
+        existing_trades = db.load_trades_or_none()
+        if existing_trades is None:
+            _log("broker/transactions: trades table unreadable — skipped (no classify, no writes)")
+            failures.append(
+                "transactions: trades table unreadable — skipped so already-logged "
+                "fills aren't re-queued as pending"
+            )
+            rc = 1
+            classified = None
+        else:
+            existing_income_events = db.load_snaptrade_income_events()
+            classified = broker_sync.classify_transactions(
+                raw_txns, existing_trades, existing_income_events=existing_income_events
+            )
+        if existing_trades is None:
+            pass  # already reported above
+        elif classified is None:
             failures.append("transactions: SnapTrade activities unavailable")
             rc = 1
         else:
             n_pending = db.save_snaptrade_pending_imports(classified["new_pending"])
             n_income = db.save_snaptrade_income_events(classified["income_events"])
+            _backfilled_ids: list[str] = []
             for bf in classified["backfill_broker_txn_id"]:
-                db.backfill_trade_broker_txn_id(bf["trade_id"], bf["broker_txn_id"])
+                if db.backfill_trade_broker_txn_id(bf["trade_id"], bf["broker_txn_id"]):
+                    _backfilled_ids.append(str(bf["broker_txn_id"]))
+            # Close pending rows whose fill is already linked to a journal row
+            # (Tier 1 this fetch, or just backfilled by Tier 2) — a stale
+            # "pending" row logged later would double-count holdings (HoldDup).
+            _link_ids = list(dict.fromkeys(
+                [str(t) for t in classified["linked_txn_ids"]] + _backfilled_ids
+            ))
+            n_closed = 0
+            if _link_ids:
+                _closed = db.close_linked_pending_imports(_link_ids)
+                if _closed is None:
+                    failures.append(
+                        "transactions: couldn't close pending imports already in the journal"
+                    )
+                    rc = 1
+                else:
+                    n_closed = _closed
             # Batched, deduped upsert (2026-08-24 review) — the prior per-item
             # db.add_account_flow() loop had no dedup key, so re-scanning this
             # same 90-day window twice daily re-inserted every real deposit/
@@ -3703,7 +3735,7 @@ def _run_broker(now_et, force: bool) -> int:
             _log(
                 f"broker: transactions synced — {n_pending} pending, "
                 f"{n_income} income events, {len(classified['backfill_broker_txn_id'])} "
-                f"backfilled, {n_flows} flows, "
+                f"backfilled, closed {n_closed} linked pending, {n_flows} flows, "
                 f"ignored={classified['ignored']}"
             )
     except Exception as exc:

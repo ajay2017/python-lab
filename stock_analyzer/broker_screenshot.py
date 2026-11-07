@@ -24,6 +24,7 @@ from typing import Optional
 import pandas as pd
 
 from stock_analyzer import llm
+from stock_analyzer import trade_time
 
 _COLS_TRADE   = ["ticker", "action", "shares", "price", "activity_date", "company"]
 _COLS_INVALID = _COLS_TRADE + ["reason"]
@@ -461,16 +462,16 @@ def find_app_only_in_range(
     app_in_range = []
     matched_counts: collections.Counter = collections.Counter()
 
-    for _, row in trades_df.iterrows():
+    # Idempotent re-anchor of legacy midnight-UTC imports, then the ET date.
+    for _, row in trade_time.normalize_traded_at(trades_df).iterrows():
         row_action = str(row.get("action", "")).upper().strip()
         if row_action not in _TRADE_ACTIONS:
             continue
 
         try:
-            traded_at = pd.to_datetime(row.get("traded_at"), utc=True, errors="coerce", format="ISO8601")
-            if pd.isnull(traded_at):
+            row_date = trade_time.et_trade_date(row.get("traded_at"))
+            if row_date is None:
                 continue
-            row_date = traded_at.date()
         except Exception:
             continue
 
@@ -519,7 +520,10 @@ def last_screenshot_sync_date(trades_df) -> Optional[datetime.date]:
     if subset.empty:
         return None
 
+    # Normalize first (legacy midnight-UTC imports re-anchor to 16:00 ET), then
+    # take the ET calendar date of the latest timestamp.
+    subset = trade_time.normalize_traded_at(subset)
     dates = pd.to_datetime(subset["traded_at"], utc=True, errors="coerce", format="ISO8601").dropna()
     if dates.empty:
         return None
-    return dates.max().date()
+    return trade_time.et_trade_date(dates.max())

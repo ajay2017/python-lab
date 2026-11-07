@@ -2161,6 +2161,7 @@ BROKER_DRIFT_SHARE_TOL = 0.001
 # 2026-11-06 on the P0 probe's Q7 calibration (docs/plans/trade-entry-guard.md).
 JOURNAL_MATCH_PRICE_TOL_USD   = 0.01  # two prices within this ($/share) are "the same price" (absorbs the 2-dp rounding of a stored broker price)
 TRADE_LOG_DUP_WINDOW_SESSIONS = 1     # a new entry is compared with rows up to this many trading sessions away (same price only beyond the same day)
+JOURNAL_MATCH_WINDOW_SESSIONS = 3     # a pending broker fill and an unlinked journal row this many trading sessions apart (or fewer) can be suggested as the same trade (Pending Imports hint)
 
 # Truncation-ambiguity bound for daily_pnl.reconcile_baseline()'s qty_drift
 # unit guard. A DIFFERENT question from BROKER_DRIFT_SHARE_TOL above: that one

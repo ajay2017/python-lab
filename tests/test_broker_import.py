@@ -270,3 +270,59 @@ def test_classify_against_existing_exact_match_consumes_agnostic_budget_too():
     assert "existing trade on this date" in result.iloc[0]["match_reason"]
     # The second candidate has no remaining agnostic budget -- genuinely new.
     assert bool(result.iloc[1]["is_new"]) is True
+
+
+# ─── TJDate C4: the journal side of the exact key is the ET date ─────────────
+
+def _one_candidate(activity_date):
+    return _candidates([
+        {"ticker": "AAPL", "action": "BUY", "shares": 10.0, "price": 150.0,
+         "activity_date": activity_date, "company": "Apple Inc"},
+    ])
+
+
+def test_classify_against_existing_after_hours_row_matches_its_et_statement_day():
+    """A fill logged Fri 2026-10-30 20:30 EDT is stored 10-31T00:30Z. Its
+    statement date is Fri 10-30 (ET), so it must exact-match, not read as a
+    different-date duplicate or as new."""
+    existing = _existing_trades([
+        {"ticker": "AAPL", "action": "BUY", "shares": 10.0, "price": 150.0,
+         "traded_at": "2026-10-31T00:30:00+00:00"},
+    ])
+    result = bi.classify_against_existing(_one_candidate(datetime.date(2026, 10, 30)), existing)
+    assert bool(result.iloc[0]["is_new"]) is False
+    assert "matches an existing trade on this date" in result.iloc[0]["match_reason"]
+
+
+def test_classify_against_existing_after_hours_row_not_matched_to_next_utc_day():
+    existing = _existing_trades([
+        {"ticker": "AAPL", "action": "BUY", "shares": 10.0, "price": 150.0,
+         "traded_at": "2026-10-31T00:30:00+00:00"},
+    ])
+    result = bi.classify_against_existing(_one_candidate(datetime.date(2026, 10, 31)), existing)
+    # Same content, different (ET) date: the date-agnostic budget flags it, it is
+    # NOT an exact same-day match.
+    assert "matches an existing trade on this date" not in result.iloc[0]["match_reason"]
+    assert bool(result.iloc[0]["is_new"]) is False
+
+
+def test_classify_against_existing_est_evening_row_matches_its_et_day():
+    # 19:30 EST Mon 2026-11-02 = Tue 11-03T00:30Z.
+    existing = _existing_trades([
+        {"ticker": "AAPL", "action": "BUY", "shares": 10.0, "price": 150.0,
+         "traded_at": "2026-11-03T00:30:00Z"},
+    ])
+    result = bi.classify_against_existing(_one_candidate(datetime.date(2026, 11, 2)), existing)
+    assert "matches an existing trade on this date" in result.iloc[0]["match_reason"]
+
+
+def test_classify_against_existing_legacy_midnight_utc_import_row_matches_its_day():
+    """Legacy imported row (midnight UTC + provenance note) re-anchors to 16:00
+    ET the same day, so it exact-matches that statement date."""
+    existing = pd.DataFrame([
+        {"ticker": "AAPL", "action": "BUY", "shares": 10.0, "price": 150.0,
+         "traded_at": "2026-10-28T00:00:00Z", "notes": "Robinhood import"},
+    ])
+    result = bi.classify_against_existing(_one_candidate(datetime.date(2026, 10, 28)), existing)
+    assert bool(result.iloc[0]["is_new"]) is False
+    assert "matches an existing trade on this date" in result.iloc[0]["match_reason"]

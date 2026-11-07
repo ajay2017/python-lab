@@ -517,22 +517,23 @@ def _trade_row(trade_id, ticker, action, shares, price, traded_at, broker_txn_id
             "price": price, "traded_at": traded_at, "broker_txn_id": broker_txn_id}
 
 
-def test_exact_day_match_is_found_with_zero_days_off():
+def test_exact_day_match_is_found_with_zero_sessions_off():
     trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-20T10:00:00Z")])
     out = bs.find_pending_match_candidates([_pending_row("AAA", trade_date="2026-08-20")], trades)
-    assert out[1] == {"trade_id": 1, "traded_at": "2026-08-20", "days_off": 0}
+    assert out[1] == {"trade_id": 1, "traded_at": "2026-08-20", "sessions_off": 0}
 
 
-def test_a_one_day_off_match_is_found_within_the_default_window():
+def test_a_one_session_off_match_is_found_within_the_default_window():
     trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-21T10:00:00Z")])
     out = bs.find_pending_match_candidates([_pending_row("AAA", trade_date="2026-08-20")], trades)
-    assert out[1]["days_off"] == 1
+    assert out[1]["sessions_off"] == 1
 
 
 def test_a_match_outside_the_window_is_not_returned():
-    trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-25T10:00:00Z")])
+    # Thu 08-20 -> Wed 08-26 = Fri, Mon, Tue, Wed = 4 sessions (> the 3-session window).
+    trades = pd.DataFrame([_trade_row(1, "AAA", "BUY", 1.0, 100.0, "2026-08-26T10:00:00Z")])
     out = bs.find_pending_match_candidates(
-        [_pending_row("AAA", trade_date="2026-08-20")], trades, window_days=3
+        [_pending_row("AAA", trade_date="2026-08-20")], trades
     )
     assert out == {}
 
@@ -550,7 +551,7 @@ def test_multiple_candidates_picks_the_closest_by_date():
         _trade_row(2, "AAA", "BUY", 1.0, 100.0, "2026-08-20T10:00:00Z"),
     ])
     out = bs.find_pending_match_candidates([_pending_row("AAA", trade_date="2026-08-20")], trades)
-    assert out[1] == {"trade_id": 2, "traded_at": "2026-08-20", "days_off": 0}
+    assert out[1] == {"trade_id": 2, "traded_at": "2026-08-20", "sessions_off": 0}
 
 
 def test_no_trades_df_returns_empty_dict_without_raising():
@@ -1379,3 +1380,240 @@ def test_freshness_counts_a_gold_fee_twin_as_reconciled():
 def test_freshness_counts_split_matched_live_row_as_reconciled():
     out = bs.reconciliation_freshness([_nvda_live(), _nvda_cdiv(), _nvda_mdiv()])
     assert out["unreconciled_live_count"] == 0
+
+
+# ─── TJDate C4: broker-sync dedup dates trades in ET ────────────────────────
+# HoldDup: the Tier-2 key used the UTC calendar date on BOTH sides, so a fill
+# placed after 20:00 EDT (00:00 UTC) was keyed a day late and a content-match
+# against its own journal row missed, queueing a duplicate pending import.
+
+def _bs_txn(txn_id, trade_date, ttype="BUY", ticker="AAA", units=2.0, price=50.0):
+    return {"id": txn_id, "type": ttype, "symbol": ticker, "units": units,
+            "price": price, "trade_date": trade_date}
+
+
+def _journal(*rows):
+    """rows: (id, traded_at, extra-dict). BUY 2 AAA @ 50 unless overridden."""
+    out = []
+    for rid, traded_at, extra in rows:
+        r = {"id": rid, "ticker": "AAA", "action": "BUY", "shares": 2.0, "price": 50.0,
+             "traded_at": traded_at, "broker_txn_id": None, "notes": None}
+        r.update(extra)
+        out.append(r)
+    return pd.DataFrame(out)
+
+
+def test_trade_activity_et_date_conversions():
+    f = bs._trade_activity_et_date
+    # exactly midnight UTC = a bare date SnapTrade meant: keeps the UTC date
+    assert str(f({"trade_date": "2026-10-28T00:00:00Z"})) == "2026-10-28"
+    assert str(f({"trade_date": "2026-10-28"})) == "2026-10-28"
+    # after 20:00 EDT: next UTC day, but the ET day is the fill day
+    assert str(f({"trade_date": "2026-10-31T00:30:00Z"})) == "2026-10-30"
+    # EST (after DST end): 00:30Z = 19:30 EST the previous day
+    assert str(f({"trade_date": "2026-11-03T00:30:00Z"})) == "2026-11-02"
+    # ordinary daytime fill
+    assert str(f({"trade_date": "2026-10-30T19:00:00Z"})) == "2026-10-30"
+    assert f({"trade_date": None}) is None
+    assert f({"trade_date": "garbage"}) is None
+    assert f({}) is None
+
+
+def test_tier2_after_hours_journal_row_matches_broker_fill_the_bug():
+    """THE BUG. Journal row Fri 10-30 20:30 EDT (stored 10-31T00:30Z) vs the
+    broker fill at 15:00 EDT the same ET day: used to key 10-31 vs 10-30."""
+    journal = _journal((7, "2026-10-31T00:30:00+00:00", {}))
+    out = bs.classify_transactions([_bs_txn("t1", "2026-10-30T19:00:00Z")], journal)
+    assert out["backfill_broker_txn_id"] == [{"trade_id": 7, "broker_txn_id": "t1"}]
+    assert out["new_pending"] == []
+
+
+def test_tier2_after_hours_broker_fill_matches_afternoon_journal_row():
+    """Mirror direction: the broker fill is the after-hours one (00:30Z next
+    day) and the journal row is an ordinary same-ET-day entry."""
+    journal = _journal((7, "2026-10-30T18:00:00+00:00", {}))
+    out = bs.classify_transactions([_bs_txn("t1", "2026-10-31T00:30:00Z")], journal)
+    assert out["backfill_broker_txn_id"] == [{"trade_id": 7, "broker_txn_id": "t1"}]
+    assert out["new_pending"] == []
+
+
+def test_tier2_sixteen_hundred_anchor_matches_morning_broker_fill():
+    journal = _journal((7, "2026-10-28T16:00:00-04:00", {}))
+    out = bs.classify_transactions([_bs_txn("t1", "2026-10-28T14:00:00Z")], journal)  # 10:00 EDT
+    assert [b["trade_id"] for b in out["backfill_broker_txn_id"]] == [7]
+
+
+def test_tier2_est_after_dst_end_matches_evening_fill():
+    """After DST ends (2026-11-01) 16:00 EST = 21:00Z; a 19:30 EST Mon fill is
+    Tue 00:30Z. Both are ET Mon 11-02."""
+    journal = _journal((7, "2026-11-02T21:00:00Z", {}))
+    out = bs.classify_transactions([_bs_txn("t1", "2026-11-03T00:30:00Z")], journal)
+    assert [b["trade_id"] for b in out["backfill_broker_txn_id"]] == [7]
+
+
+def test_tier2_legacy_midnight_utc_import_row_reanchors_and_matches():
+    """A legacy imported row stored as midnight UTC (import provenance in
+    notes) is the day the import meant, not the previous ET evening."""
+    journal = _journal((7, "2026-10-28T00:00:00Z", {"notes": "Robinhood import"}))
+    out = bs.classify_transactions([_bs_txn("t1", "2026-10-28T15:00:00Z")], journal)
+    assert [b["trade_id"] for b in out["backfill_broker_txn_id"]] == [7]
+
+
+def test_tier2_midnight_utc_row_without_provenance_is_a_real_evening_fill():
+    """Same value, no import marker: a genuine 20:00 EDT fill on 10-27, so it
+    must NOT match a 10-28 broker fill (normalize is provenance-gated)."""
+    journal = _journal((7, "2026-10-28T00:00:00Z", {}))
+    out = bs.classify_transactions([_bs_txn("t1", "2026-10-28T15:00:00Z")], journal)
+    assert out["backfill_broker_txn_id"] == []
+    assert len(out["new_pending"]) == 1
+
+
+def test_tier2_still_requires_the_same_et_day():
+    journal = _journal((7, "2026-10-29T15:00:00Z", {}))
+    out = bs.classify_transactions([_bs_txn("t1", "2026-10-30T15:00:00Z")], journal)
+    assert out["backfill_broker_txn_id"] == []
+    assert len(out["new_pending"]) == 1
+
+
+def test_new_pending_trade_date_is_the_et_date():
+    out = bs.classify_transactions([_bs_txn("t1", "2026-10-31T00:30:00Z")], pd.DataFrame())
+    assert out["new_pending"][0]["trade_date"] == "2026-10-30"
+
+
+def test_new_pending_midnight_utc_keeps_the_utc_date():
+    out = bs.classify_transactions([_bs_txn("t1", "2026-10-28T00:00:00Z")], pd.DataFrame())
+    assert out["new_pending"][0]["trade_date"] == "2026-10-28"
+
+
+def test_income_and_flow_dates_stay_on_the_utc_calendar_date():
+    """Pins that `_activity_date` was deliberately left UTC: a dividend stamped
+    2026-10-31T00:30:00Z keeps 10-31 (only BUY/SELL moved to ET)."""
+    out = bs.classify_transactions(
+        [
+            {"id": "d1", "type": "DIVIDEND", "symbol": "AAPL", "amount": 5.0,
+             "trade_date": "2026-10-31T00:30:00Z"},
+            {"id": "f1", "type": "CONTRIBUTION", "amount": 100.0,
+             "trade_date": "2026-10-31T00:30:00Z"},
+        ],
+        pd.DataFrame(),
+    )
+    assert out["income_events"][0]["event_date"] == "2026-10-31"
+    assert out["flows"][0]["flow_date"] == "2026-10-31"
+
+
+def test_linked_txn_ids_lists_tier1_matches_only():
+    journal = _journal(
+        (1, "2026-10-28T15:00:00Z", {"broker_txn_id": "linked-1"}),
+        (2, "2026-10-29T15:00:00Z", {}),
+    )
+    out = bs.classify_transactions(
+        [
+            _bs_txn("linked-1", "2026-10-28T15:00:00Z"),   # Tier 1
+            _bs_txn("t2", "2026-10-29T15:00:00Z"),          # Tier 2 -> backfill
+            _bs_txn("t3", "2026-10-30T15:00:00Z", units=9.0),  # new pending
+        ],
+        journal,
+    )
+    assert out["linked_txn_ids"] == ["linked-1"]
+    assert [b["broker_txn_id"] for b in out["backfill_broker_txn_id"]] == ["t2"]
+    assert [p["snaptrade_txn_id"] for p in out["new_pending"]] == ["t3"]
+
+
+def test_linked_txn_ids_empty_when_nothing_is_linked():
+    out = bs.classify_transactions([_bs_txn("t1", "2026-10-28T15:00:00Z")], pd.DataFrame())
+    assert out["linked_txn_ids"] == []
+
+
+# find_pending_match_candidates: trading-session window (TJDate C4)
+
+def _pm_pending(trade_date, pid=1):
+    return {"id": pid, "ticker": "AAA", "action": "BUY", "shares": 2.0,
+            "price": 50.0, "trade_date": trade_date}
+
+
+def _pm_trades(*dates):
+    return pd.DataFrame([
+        {"id": i + 1, "ticker": "AAA", "action": "BUY", "shares": 2.0, "price": 50.0,
+         "traded_at": d, "broker_txn_id": None, "notes": None}
+        for i, d in enumerate(dates)
+    ])
+
+
+def test_window_default_comes_from_constants():
+    from stock_analyzer.constants import JOURNAL_MATCH_WINDOW_SESSIONS
+    assert JOURNAL_MATCH_WINDOW_SESSIONS == 3
+
+
+def test_match_exactly_at_the_window_boundary_three_sessions():
+    # Fri 2026-10-30 pending vs Tue 10-27 journal: Wed, Thu, Fri = 3 sessions.
+    out = bs.find_pending_match_candidates(
+        [_pm_pending("2026-10-30")], _pm_trades("2026-10-27T15:00:00Z"))
+    assert out[1]["sessions_off"] == 3
+    assert out[1]["traded_at"] == "2026-10-27"
+
+
+def test_no_match_one_session_beyond_the_window():
+    # Fri 10-30 vs Mon 10-26 = Tue, Wed, Thu, Fri = 4 sessions.
+    out = bs.find_pending_match_candidates(
+        [_pm_pending("2026-10-30")], _pm_trades("2026-10-26T15:00:00Z"))
+    assert out == {}
+
+
+def test_weekend_adds_no_distance_mon_vs_wed_is_three_sessions():
+    # Mon 11-02 vs Wed 10-28: Thu, Fri, Mon = 3 sessions (5 calendar days).
+    out = bs.find_pending_match_candidates(
+        [_pm_pending("2026-11-02")], _pm_trades("2026-10-28T15:00:00Z"))
+    assert out[1]["sessions_off"] == 3
+
+
+def test_weekend_pending_date_vs_friday_journal_is_zero_sessions():
+    out = bs.find_pending_match_candidates(
+        [_pm_pending("2026-10-31")], _pm_trades("2026-10-30T15:00:00Z"))  # Sat vs Fri
+    assert out[1]["sessions_off"] == 0
+
+
+def test_thanksgiving_holiday_adds_no_distance():
+    # Wed 11-25 vs Mon 11-30: Thu 11-26 is closed, so Fri + Mon = 2 sessions.
+    out = bs.find_pending_match_candidates(
+        [_pm_pending("2026-11-30")], _pm_trades("2026-11-25T15:00:00Z"))
+    assert out[1]["sessions_off"] == 2
+
+
+def test_after_hours_journal_row_is_dated_in_et_for_the_hint():
+    # Journal 10-31T00:30Z = Fri 10-30 20:30 EDT; pending Fri 10-30 -> 0 sessions.
+    out = bs.find_pending_match_candidates(
+        [_pm_pending("2026-10-30")], _pm_trades("2026-10-31T00:30:00+00:00"))
+    assert out[1]["sessions_off"] == 0
+    assert out[1]["traded_at"] == "2026-10-30"
+
+
+def test_legacy_midnight_utc_import_row_is_reanchored_for_the_hint():
+    trades = pd.DataFrame([{"id": 1, "ticker": "AAA", "action": "BUY", "shares": 2.0,
+                            "price": 50.0, "traded_at": "2026-10-28T00:00:00Z",
+                            "broker_txn_id": None, "notes": "RH text import"}])
+    out = bs.find_pending_match_candidates([_pm_pending("2026-10-28")], trades)
+    assert out[1]["sessions_off"] == 0
+    assert out[1]["traded_at"] == "2026-10-28"
+
+
+def test_explicit_window_sessions_overrides_the_default():
+    trades = _pm_trades("2026-10-28T15:00:00Z")  # Wed; pending Fri = 2 sessions
+    assert bs.find_pending_match_candidates(
+        [_pm_pending("2026-10-30")], trades, window_sessions=1) == {}
+    assert bs.find_pending_match_candidates(
+        [_pm_pending("2026-10-30")], trades, window_sessions=2)[1]["sessions_off"] == 2
+
+
+def test_closest_session_wins_and_tie_keeps_first_found():
+    trades = _pm_trades("2026-10-28T15:00:00Z", "2026-10-29T15:00:00Z", "2026-10-29T16:00:00Z")
+    out = bs.find_pending_match_candidates([_pm_pending("2026-10-30")], trades)
+    assert out[1]["trade_id"] == 2          # Thu (1 session), first of the two Thu rows
+    assert out[1]["sessions_off"] == 1
+
+
+def test_consume_on_match_two_pending_one_journal_row_gives_one_hint():
+    out = bs.find_pending_match_candidates(
+        [_pm_pending("2026-10-30", pid=10), _pm_pending("2026-10-29", pid=11)],
+        _pm_trades("2026-10-29T15:00:00Z"),
+    )
+    assert len(out) == 1

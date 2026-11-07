@@ -60,8 +60,13 @@ import math
 
 import pandas as pd
 
-from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL, INCOME_EVENT_DEDUP_DATE_TOL_DAYS
+from stock_analyzer.constants import (
+    BROKER_DRIFT_SHARE_TOL,
+    INCOME_EVENT_DEDUP_DATE_TOL_DAYS,
+    JOURNAL_MATCH_WINDOW_SESSIONS,
+)
 from stock_analyzer import asset_type
+from stock_analyzer import trade_time
 
 # SnapTrade `type` values that add/remove cash-basis capital — the ONLY types
 # allowed to become an account_flows row. Everything else that touches cash
@@ -361,8 +366,28 @@ def _activity_ticker(txn: dict) -> str:
 
 
 def _activity_date(txn: dict):
+    # UTC calendar date. Stays UTC for income events and cash flows (their date
+    # format was never probed; a date-only midnight-UTC dividend would shift a
+    # day early under ET). BUY/SELL activities use `_trade_activity_et_date`.
     ts = pd.to_datetime(txn.get("trade_date"), utc=True, errors="coerce")
     return None if pd.isnull(ts) else ts.date()
+
+
+def _trade_activity_et_date(txn: dict):
+    """The trade date of a BUY/SELL activity: the ET calendar date of the fill.
+
+    A fill after 20:00 EDT (00:00 UTC) carries the NEXT day's UTC date, which
+    broke the Tier-2 content match against a journal row dated in ET (HoldDup).
+    A value that is exactly 00:00:00.000000 UTC is a bare date SnapTrade meant
+    as that calendar day (same rule as `trade_time.is_midnight_utc`), so it
+    keeps its UTC date. None when unparseable.
+    """
+    ts = pd.to_datetime(txn.get("trade_date"), utc=True, errors="coerce", format="ISO8601")
+    if pd.isnull(ts):
+        return None
+    if (ts.hour, ts.minute, ts.second, ts.microsecond) == (0, 0, 0, 0):
+        return ts.date()
+    return ts.tz_convert(trade_time._ET).date()
 
 
 def classify_transactions(
@@ -426,6 +451,16 @@ def classify_transactions(
                                    above (OPTIONEXPIRATION, TRANSFER, SPLIT,
                                    etc.), surfaced for transparency rather than
                                    silently dropped.
+        linked_txn_ids          : [str, ...] BUY/SELL activities whose id is
+                                   already on a trades row (Tier 1) in this
+                                   fetch — the caller closes any still-"pending"
+                                   import row for them. Tier-2 backfills are in
+                                   `backfill_broker_txn_id`.
+
+    BUY/SELL dates are the ET calendar date of the fill
+    (`_trade_activity_et_date`) and the journal side of the Tier-2 key is
+    `trade_time.et_trade_date` of the normalized `traded_at`, so a fill logged
+    after 20:00 EDT matches its journal row.
     """
     if rh_txns is None:
         return None
@@ -460,7 +495,10 @@ def classify_transactions(
     content_counts: collections.Counter = collections.Counter()
     content_trade_ids: dict[tuple, list] = collections.defaultdict(list)
     if existing_trades is not None and isinstance(existing_trades, pd.DataFrame) and not existing_trades.empty:
-        for _, erow in existing_trades.iterrows():
+        # Idempotent: re-anchors legacy midnight-UTC imported rows to 16:00 ET so
+        # their ET date is the day the import meant (same as trade_confirm).
+        _norm_trades = trade_time.normalize_traded_at(existing_trades)
+        for _, erow in _norm_trades.iterrows():
             if has_broker_col and pd.notna(erow.get("broker_txn_id")):
                 continue
             eaction = str(erow.get("action", "")).upper().strip()
@@ -472,10 +510,10 @@ def classify_transactions(
                 eprice = round(float(erow.get("price") or 0), 2)
             except (TypeError, ValueError):
                 continue
-            edt = pd.to_datetime(erow.get("traded_at"), utc=True, errors="coerce", format="ISO8601")
-            if pd.isnull(edt):
+            edate = trade_time.et_trade_date(erow.get("traded_at"))
+            if edate is None:
                 continue
-            key = (edt.date(), eticker, eaction, eshares, eprice)
+            key = (edate, eticker, eaction, eshares, eprice)
             content_counts[key] += 1
             content_trade_ids[key].append(erow.get("id"))
 
@@ -487,6 +525,7 @@ def classify_transactions(
     flows: list[dict] = []
     ignored: dict[str, int] = {}
     seen_txn_ids: set[str] = set()
+    linked_txn_ids: list[str] = []
 
     for txn in rh_txns:
         ttype = str(txn.get("type", "")).upper().strip()
@@ -494,10 +533,12 @@ def classify_transactions(
 
         if ttype in _TRADE_TYPES:
             if txn_id is not None and str(txn_id) in existing_broker_ids:
+                if str(txn_id) not in linked_txn_ids:
+                    linked_txn_ids.append(str(txn_id))
                 continue  # Tier 1: exact match already logged
 
             ticker = _activity_ticker(txn)
-            trade_date = _activity_date(txn)
+            trade_date = _trade_activity_et_date(txn)
             units = txn.get("units")
             price = txn.get("price")
             if not ticker or trade_date is None or units is None or price is None:
@@ -607,6 +648,7 @@ def classify_transactions(
         "income_events": income_events,
         "flows": flows,
         "ignored": ignored,
+        "linked_txn_ids": linked_txn_ids,
     }
 
 
@@ -685,12 +727,16 @@ def annotate_pending_reconciliation(
 
 
 def find_pending_match_candidates(
-    pending: list[dict], existing_trades: pd.DataFrame | None, window_days: int = 3
+    pending: list[dict], existing_trades: pd.DataFrame | None,
+    window_sessions: int | None = None,
 ) -> dict:
     """For each pending-import row, look for the closest EXISTING trade that
-    content-matches on (ticker, action, shares, price) within `window_days`
-    of the pending row's trade_date, among trades not already linked via
-    `broker_txn_id`.
+    content-matches on (ticker, action, shares, price) within `window_sessions`
+    NYSE trading sessions of the pending row's trade_date (None ->
+    `constants.JOURNAL_MATCH_WINDOW_SESSIONS`), among trades not already linked
+    via `broker_txn_id`. The journal side is the ET date of the normalized
+    `traded_at`; distance is `data.trading_sessions_between`, so a weekend or
+    holiday adds no distance.
 
     This is a wider, date-TOLERANT sibling of `classify_transactions`' own
     Tier-2 dedup (which requires an exact date match) — read-only and
@@ -701,7 +747,7 @@ def find_pending_match_candidates(
 
     Returns
     -------
-    {pending_row_id: {"trade_id", "traded_at", "days_off"}} — a pending id
+    {pending_row_id: {"trade_id", "traded_at", "sessions_off"}} — a pending id
     with no candidate within the window is simply ABSENT from the dict (never
     mapped to None), so callers can use a plain `.get(id)`.
     """
@@ -709,7 +755,12 @@ def find_pending_match_candidates(
     if not pending or not isinstance(existing_trades, pd.DataFrame) or existing_trades.empty:
         return out
 
-    candidates = existing_trades
+    if window_sessions is None:
+        window_sessions = JOURNAL_MATCH_WINDOW_SESSIONS
+    # Lazy: data pulls in yfinance and the provider stack; this module stays light.
+    from stock_analyzer.data import trading_sessions_between
+
+    candidates = trade_time.normalize_traded_at(existing_trades)
     if "broker_txn_id" in candidates.columns:
         candidates = candidates[candidates["broker_txn_id"].isna()]
     if candidates.empty:
@@ -726,11 +777,11 @@ def find_pending_match_candidates(
             price = round(float(row.get("price") or 0), 2)
         except (TypeError, ValueError):
             continue
-        traded_at = pd.to_datetime(row.get("traded_at"), utc=True, errors="coerce", format="ISO8601")
-        if pd.isnull(traded_at):
+        traded_date = trade_time.et_trade_date(row.get("traded_at"))
+        if traded_date is None:
             continue
         by_key[(ticker, action, shares, price)].append(
-            {"trade_id": row.get("id"), "date": traded_at.date()}
+            {"trade_id": row.get("id"), "date": traded_date}
         )
 
     for p in pending:
@@ -759,12 +810,12 @@ def find_pending_match_candidates(
         best = None
         best_idx = None
         for idx, cand in enumerate(bucket):
-            days_off = abs((cand["date"] - p_date).days)
-            if days_off > window_days:
+            sessions_off = trading_sessions_between(cand["date"], p_date)
+            if sessions_off > window_sessions:
                 continue
-            if best is None or days_off < best["days_off"]:
+            if best is None or sessions_off < best["sessions_off"]:
                 best = {"trade_id": cand["trade_id"], "traded_at": cand["date"].isoformat(),
-                        "days_off": days_off}
+                        "sessions_off": sessions_off}
                 best_idx = idx
         if best is not None:
             out[p["id"]] = best

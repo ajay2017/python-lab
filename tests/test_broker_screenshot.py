@@ -403,3 +403,44 @@ def test_last_screenshot_sync_date_returns_max_matching_row_date():
     ])
     result = bs.last_screenshot_sync_date(trades_df)
     assert result == date(2026, 1, 20)
+
+
+# ─── TJDate C4: journal dates are ET (same bug class as broker_sync) ─────────
+
+def test_find_app_only_in_range_after_hours_row_dated_in_et():
+    """Stored 2026-02-01T00:30Z is 2026-01-31 19:30 EST. It belongs
+    to Jan 31 (inside the range), not Feb 1 (outside it)."""
+    trades_df = pd.DataFrame([
+        {"ticker": "AAPL", "action": "BUY", "shares": 10.0, "price": 150.0,
+         "traded_at": "2026-02-01T00:30:00+00:00"},
+    ])
+    result = bs.find_app_only_in_range(_screenshot_trades([]), trades_df, date(2026, 1, 1), date(2026, 1, 31))
+    assert len(result) == 1
+    assert result.iloc[0]["traded_at"] == "2026-01-31"
+
+
+def test_find_app_only_in_range_legacy_midnight_utc_import_row_keeps_its_day():
+    """Midnight UTC + import provenance = the day the import meant (Feb 1),
+    re-anchored to 16:00 ET, so it is OUTSIDE a range ending Jan 31."""
+    trades_df = pd.DataFrame([
+        {"ticker": "AAPL", "action": "BUY", "shares": 10.0, "price": 150.0,
+         "traded_at": "2026-02-01T00:00:00Z", "notes": "RH screenshot import"},
+    ])
+    result = bs.find_app_only_in_range(_screenshot_trades([]), trades_df, date(2026, 1, 1), date(2026, 1, 31))
+    assert result.empty
+
+
+def test_last_screenshot_sync_date_returns_the_et_date_of_the_latest_row():
+    # 2026-10-31T00:30Z is Fri 10-30 20:30 EDT.
+    trades_df = pd.DataFrame([
+        {"notes": "RH screenshot import", "traded_at": "2026-10-29T15:00:00Z"},
+        {"notes": "RH text import batch", "traded_at": "2026-10-31T00:30:00+00:00"},
+    ])
+    assert bs.last_screenshot_sync_date(trades_df) == date(2026, 10, 30)
+
+
+def test_last_screenshot_sync_date_legacy_midnight_utc_import_row_keeps_its_day():
+    trades_df = pd.DataFrame([
+        {"notes": "RH screenshot import", "traded_at": "2026-10-28T00:00:00Z"},
+    ])
+    assert bs.last_screenshot_sync_date(trades_df) == date(2026, 10, 28)

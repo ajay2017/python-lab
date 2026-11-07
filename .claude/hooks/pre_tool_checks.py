@@ -1114,6 +1114,10 @@ _GATE_FILES = {
     # db.py's writers -- squarely "DB-write / data-integrity" per CLAUDE.md's
     # prose policy, which the mechanical list had never actually caught.
     "stock_analyzer/broker_sync.py",
+    # Added 2026-11-07 (TJDate C4): the CSV-import dedup (classify_against_existing)
+    # decides which statement lines are written as new trades -- a DB-write /
+    # data-integrity path, same class as broker_sync.
+    "stock_analyzer/broker_import.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per

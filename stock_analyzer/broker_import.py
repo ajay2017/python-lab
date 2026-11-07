@@ -31,6 +31,8 @@ import datetime
 
 import pandas as pd
 
+from stock_analyzer import trade_time
+
 # Columns that must be present in a valid Robinhood activity CSV
 _REQUIRED_COLS = {"Activity Date", "Instrument", "Trans Code", "Quantity", "Price"}
 
@@ -251,8 +253,11 @@ def classify_against_existing(
         Output of parse_robinhood_csv["trades"].
     trades_df : pd.DataFrame | None
         The app's current trades_df from db.load_trades(), or None / empty.
-        Parsed with utc=True on traded_at (mixed-tz convention per the project
-        note in feedback_pandas_mixed_tz_parsing.md).
+        `traded_at` is normalized (`trade_time.normalize_traded_at`, idempotent:
+        legacy midnight-UTC imports re-anchor to 16:00 ET) and dated with
+        `trade_time.et_trade_date`, so a fill logged after 20:00 EDT keeps its
+        ET calendar day. The candidate side (`activity_date`) is a statement
+        calendar date and is used as-is.
 
     Returns
     -------
@@ -284,7 +289,7 @@ def classify_against_existing(
         and isinstance(trades_df, pd.DataFrame)
         and not trades_df.empty
     ):
-        for _, erow in trades_df.iterrows():
+        for _, erow in trade_time.normalize_traded_at(trades_df).iterrows():
             eaction = str(erow.get("action", "")).upper().strip()
             if eaction not in _TRADE_CODES:
                 continue
@@ -296,10 +301,10 @@ def classify_against_existing(
                 continue
             agkey = (eticker, eaction, eshares, eprice)
             existing_agnos[agkey] += 1
-            # utc=True handles mixed ISO 8601 offset formats in traded_at
-            edt = pd.to_datetime(erow.get("traded_at"), utc=True, errors="coerce", format="ISO8601")
-            if not pd.isnull(edt):
-                existing_exact[(edt.date(), *agkey)] += 1
+            # ET calendar date (handles mixed ISO 8601 offsets in traded_at)
+            edate = trade_time.et_trade_date(erow.get("traded_at"))
+            if edate is not None:
+                existing_exact[(edate, *agkey)] += 1
 
     # ── Walk candidates in stable order ───────────────────────────────────────
     # An exact (same-day) match consumes one slot from BOTH counters so the

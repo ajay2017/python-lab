@@ -6595,6 +6595,44 @@ def mark_snaptrade_pending_import_logged(pending_id) -> bool:
         return False
 
 
+def close_linked_pending_imports(txn_ids) -> "int | None":
+    """Flip still-'pending' import rows to 'logged' for broker fills that are
+    ALREADY linked to a journal row (the sync saw their id on a `trades` row, or
+    just backfilled it by Tier-2 content match).
+
+    Why (HoldDup): a pending row whose fill is already in the journal stays
+    "pending" forever, and logging it from Pending Imports would add the same
+    fill again and double-count holdings. Only rows with `status = 'pending'`
+    are touched, so a dismissed or already-logged row is never rewritten.
+
+    Returns the number of rows updated (0 for no ids / read-only viewer), or
+    None when the write could not be made (no DB, or any chunk raised) so the
+    caller can report it rather than read it as "nothing to close". Chunks of
+    100 ids keep each `in_` filter URL short.
+    """
+    if is_readonly(): return 0  # read-only viewer: no-op
+    if not has_db():
+        return None
+    ids = [str(t) for t in (txn_ids or []) if t is not None and str(t).strip()]
+    if not ids:
+        return 0
+    closed = 0
+    try:
+        for i in range(0, len(ids), 100):
+            chunk = ids[i:i + 100]
+            res = (
+                _client().table("snaptrade_pending_imports")
+                .update({"status": "logged"})
+                .eq("status", "pending")
+                .in_("snaptrade_txn_id", chunk)
+                .execute()
+            )
+            closed += len(res.data or [])
+    except Exception:
+        return None
+    return closed
+
+
 def dismiss_snaptrade_pending_import(pending_id) -> bool:
     """Flip one pending-import row to status='dismissed' — the user's manual
     escape hatch for a broker activity that's already logged in `trades` but

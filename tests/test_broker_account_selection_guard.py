@@ -20,6 +20,8 @@ account's positions were confirmed (the legitimate main-account-selected
 case) or when every account genuinely responded with 0 positions (a real
 all-cash book, which should still sync).
 """
+import pandas as pd
+
 import cron_runner as cr
 
 
@@ -56,7 +58,7 @@ def _run_lane(monkeypatch, positions_by_id):
     monkeypatch.setattr(cr.broker_sync, "map_balances_to_cash",
                         lambda raw: {"cash_balance": 1000.0, "note": "test"})
     monkeypatch.setattr(cr.db, "save_account_cash", lambda *_a, **_k: True)
-    monkeypatch.setattr(cr.db, "load_trades", lambda: None)
+    monkeypatch.setattr(cr.db, "load_trades_or_none", lambda: pd.DataFrame())
     monkeypatch.setattr(cr.db, "save_account_flows", lambda *_a, **_k: 0)
     monkeypatch.setattr(cr.db, "save_snaptrade_pending_imports", lambda *_a, **_k: 0)
     monkeypatch.setattr(cr.db, "save_snaptrade_income_events", lambda *_a, **_k: 0)
