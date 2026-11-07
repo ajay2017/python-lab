@@ -244,3 +244,81 @@ def test_range_call_only_inside_read_all_pages():
     helper = _DB_SRC[_DB_SRC.index("def _read_all_pages"):]
     helper = helper[: helper.index("\n\n\n")]
     assert re.search(r"\.range\(\s*\w", helper)
+
+
+# ── composite dedupe key (N1 C7 / TrPage f/u 4) ──────────────────────────────
+
+class _Pages:
+    def __init__(self, pages):
+        self.pages, self.i = pages, 0
+
+    def build(self):
+        return self
+
+    def _self(self, *a, **k):
+        return self
+
+    select = gte = lte = order = _self
+
+    def range(self, a, b):
+        return self
+
+    def execute(self):
+        p = self.pages[self.i]
+        self.i += 1
+        return _Resp(p)
+
+
+def _snap(d, t, **kw):
+    return {"snapshot_date": d, "ticker": t, **kw}
+
+
+def test_composite_dedupe_drops_a_repeated_pair_and_keeps_distinct_ones():
+    p = _Pages([
+        [_snap("2026-11-05", "AAA"), _snap("2026-11-05", "BBB")],
+        [_snap("2026-11-05", "BBB"), _snap("2026-11-05", "CCC"), _snap("2026-11-06", "AAA")],
+        [],
+    ])
+    out = db._read_all_pages(p.build, 2, dedupe_key=("snapshot_date", "ticker"))
+    assert [(r["snapshot_date"], r["ticker"]) for r in out] == [
+        ("2026-11-05", "AAA"), ("2026-11-05", "BBB"), ("2026-11-05", "CCC"),
+        ("2026-11-06", "AAA")]
+
+
+def test_composite_dedupe_keeps_first_seen_and_ignores_rows_with_a_none_part():
+    p = _Pages([
+        [_snap("2026-11-05", "AAA", shares=1), _snap("2026-11-05", "AAA", shares=2),
+         _snap("2026-11-05", None, v=1), _snap("2026-11-05", None, v=1),
+         {"v": 3}, {"v": 3}],
+        [],
+    ])
+    out = db._read_all_pages(p.build, 10, dedupe_key=("snapshot_date", "ticker"))
+    assert [r.get("shares") for r in out if r.get("ticker") == "AAA"] == [1]
+    assert len(out) == 5          # the None-part and no-key rows are all kept
+
+
+def test_str_dedupe_key_unchanged_by_the_tuple_support():
+    p = _Pages([[{"id": 1}, {"id": 1}, {"id": 2}], []])
+    assert [r["id"] for r in db._read_all_pages(p.build, 10)] == [1, 2]
+    assert [r["id"] for r in db._read_all_pages(_Pages([[{"id": 1}, {"id": 1}], []]).build, 10,
+                                                dedupe_key=None)] == [1, 1]
+
+
+def test_daily_snapshots_reader_dedupes_on_the_composite_pk(monkeypatch):
+    rows = [{"snapshot_date": "2026-11-05", "ticker": "AAA", "shares": 1, "close_price": 5.0},
+            {"snapshot_date": "2026-11-05", "ticker": "BBB", "shares": 1, "close_price": 5.0}]
+    # a past-dated row inserted mid-read shifts the offsets: page 2 repeats the
+    # last row of page 1 before the new one
+    seen = _Pages([rows[:2], [rows[1], {"snapshot_date": "2026-11-05", "ticker": "CCC",
+                                        "shares": 2, "close_price": 5.0}], []])
+
+    class _C:
+        def table(self, name):
+            assert name == "daily_snapshots"
+            return seen
+
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: _C())
+    monkeypatch.setattr(db, "_DAILY_SNAPSHOTS_PAGE_SIZE", 2)
+    out = db._load_daily_snapshots_all_pages("2026-11-01")
+    assert [r["ticker"] for r in out] == ["AAA", "BBB", "CCC"]

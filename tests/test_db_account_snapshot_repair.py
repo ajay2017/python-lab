@@ -128,3 +128,112 @@ def test_apply_update_matching_no_row_is_a_failure(monkeypatch):
     c.update_data = []
     monkeypatch.setattr(db, "_client", lambda: c)
     assert db.apply_account_snapshot_repair("2026-10-30", FIELDS) is False
+
+
+# -- N1 C7: repair_daily_snapshot_rows ---------------------------------------------
+
+class _SnapBuilder:
+    def __init__(self, c, table):
+        self.c, self.table_name, self.op, self.payload, self.filters = c, table, None, None, []
+
+    def upsert(self, records, on_conflict=None):
+        self.op, self.payload, self.on_conflict = "upsert", records, on_conflict
+        return self
+
+    def delete(self):
+        self.op = "delete"
+        return self
+
+    def eq(self, k, v):
+        self.filters.append(("eq", k, v))
+        return self
+
+    def in_(self, k, v):
+        self.filters.append(("in", k, list(v)))
+        return self
+
+    def execute(self):
+        self.c.calls.append((self.table_name, self.op, self.payload,
+                             getattr(self, "on_conflict", None), list(self.filters)))
+        if self.c.fail_on == self.op:
+            raise RuntimeError("boom")
+        return _Res([])
+
+
+class _SnapClient:
+    def __init__(self, fail_on=None):
+        self.calls, self.fail_on = [], fail_on
+
+    def table(self, name):
+        return _SnapBuilder(self, name)
+
+
+UPS = [{"ticker": "crwd", "shares": 3, "close_price": 480.5},
+       {"ticker": "CSCO", "shares": 15, "close_price": 75.5}]
+
+
+@pytest.fixture
+def snap_client(monkeypatch):
+    from datetime import date
+    c = _SnapClient()
+    monkeypatch.setattr(db, "_client", lambda: c)
+    import stock_analyzer.market_time as mt
+    monkeypatch.setattr(mt, "today_et", lambda: date(2026, 11, 7))
+    return c
+
+
+def test_repair_rows_upserts_on_the_pk_then_deletes_exactly_the_listed_tickers(snap_client):
+    assert db.repair_daily_snapshot_rows("2026-11-05", UPS, ["gone", "ALSO"]) is True
+    up, de = snap_client.calls
+    assert up[:4] == ("daily_snapshots", "upsert", [
+        {"snapshot_date": "2026-11-05", "ticker": "CRWD", "shares": 3.0, "close_price": 480.5},
+        {"snapshot_date": "2026-11-05", "ticker": "CSCO", "shares": 15.0, "close_price": 75.5}],
+        "snapshot_date,ticker")
+    assert de[:2] == ("daily_snapshots", "delete")
+    # exactly the listed tickers for that date: an `.eq` + a plain `.in_`, never `not_`
+    assert de[4] == [("eq", "snapshot_date", "2026-11-05"), ("in", "ticker", ["ALSO", "GONE"])]
+
+
+@pytest.mark.parametrize("d", ["2026-11-07", "2026-11-08", "2027-01-01"])
+def test_repair_rows_refuses_today_and_future(snap_client, d):
+    assert db.repair_daily_snapshot_rows(d, UPS, ["X"]) is False
+    assert snap_client.calls == []
+
+
+def test_repair_rows_day_before_today_is_allowed_and_weekend_dates_are_not_special(snap_client):
+    assert db.repair_daily_snapshot_rows("2026-11-06", UPS, []) is True
+    assert db.repair_daily_snapshot_rows("2026-11-01", UPS, []) is True      # a Sunday
+    assert [c[1] for c in snap_client.calls] == ["upsert", "upsert"]
+
+
+def test_repair_rows_readonly_no_db_and_bad_input(snap_client, monkeypatch):
+    assert db.repair_daily_snapshot_rows("", UPS, []) is False
+    assert db.repair_daily_snapshot_rows("not-a-date", UPS, []) is False
+    for bad in ([{"ticker": "A", "shares": 0, "close_price": 5}],
+                [{"ticker": "A", "shares": 3, "close_price": float("nan")}],
+                [{"ticker": "", "shares": 3, "close_price": 5}],
+                [{"ticker": "A", "shares": None, "close_price": 5}]):
+        assert db.repair_daily_snapshot_rows("2026-11-05", bad, []) is False
+    assert snap_client.calls == []
+    monkeypatch.setattr(db, "is_readonly", lambda: True)
+    assert db.repair_daily_snapshot_rows("2026-11-05", UPS, []) is False
+    monkeypatch.setattr(db, "is_readonly", lambda: False)
+    monkeypatch.setattr(db, "has_db", lambda: False)
+    assert db.repair_daily_snapshot_rows("2026-11-05", UPS, []) is None
+    assert snap_client.calls == []
+
+
+def test_repair_rows_nothing_to_write_is_true_without_a_call(snap_client):
+    assert db.repair_daily_snapshot_rows("2026-11-05", [], []) is True
+    assert snap_client.calls == []
+
+
+def test_repair_rows_exception_is_none_and_a_failed_upsert_never_deletes(snap_client):
+    snap_client.fail_on = "upsert"
+    with pytest.warns(UserWarning):
+        assert db.repair_daily_snapshot_rows("2026-11-05", UPS, ["GONE"]) is None
+    assert [c[1] for c in snap_client.calls] == ["upsert"]
+    snap_client.calls.clear()
+    snap_client.fail_on = "delete"
+    with pytest.warns(UserWarning):
+        assert db.repair_daily_snapshot_rows("2026-11-05", [], ["GONE"]) is None

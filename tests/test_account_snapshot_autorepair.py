@@ -65,6 +65,8 @@ class FakeDB:
         self.snap = pd.DataFrame() if snap_df is None else snap_df
         self.acct_start = self.snap_start = "unset"
         self.writes = []
+        self.snap_writes = []                  # N1 C7: (date, upserts, deletes) per call
+        self.snap_ok = True                    # True / False / None (the writer's contract)
         self.raise_in = None
 
     def load_account_daily_snapshots(self, start_date=None, end_date=None):
@@ -81,6 +83,19 @@ class FakeDB:
     def load_daily_snapshots_or_none(self, start_date=None, end_date=None):
         self.snap_start = start_date
         return self.snap
+
+    def repair_daily_snapshot_rows(self, snapshot_date, upserts, deletes):
+        self.snap_writes.append((snapshot_date, upserts, deletes))
+        if not self.snap_ok:
+            return self.snap_ok
+        touched = set(deletes) | {u["ticker"] for u in upserts}
+        keep = self.snap[~((self.snap["snapshot_date"] == snapshot_date)
+                           & self.snap["ticker"].isin(touched))]
+        add = pd.DataFrame([{"snapshot_date": snapshot_date, "ticker": u["ticker"],
+                             "shares": u["shares"], "close_price": u["close_price"]}
+                            for u in upserts])
+        self.snap = pd.concat([keep, add], ignore_index=True)
+        return True
 
     def apply_account_snapshot_repair(self, snapshot_date, fields):
         self.writes.append(snapshot_date)
@@ -226,7 +241,9 @@ def test_each_unreadable_input_is_an_error_result(which, err):
     res = go(db)
     assert res["ok"] is False and res["error"] == err and db.writes == []
     assert AR.failure_lines(res) == [f"account_snapshot_repair: {err}"]
-    assert set(res) == {"ok", "since", "checked", "applied", "failed", "refusals", "error", "details"}
+    assert set(res) == {"ok", "since", "checked", "applied", "failed", "refusals", "error", "details",
+                        "snapshot_rows_applied", "snapshot_rows_failed", "snapshot_rows_refused",
+                        "snapshot_rows_summary"}
 
 
 @pytest.mark.parametrize("which", ["acct", "trades"])
@@ -469,3 +486,133 @@ def test_debrief_earlier_failure_return_appends_the_repair_lines(monkeypatch):
                       repair=lambda *a, **k: bad) == 1
     assert notified[0][1].startswith("weekly_debriefs: save failed")
     assert notified[0][1].endswith("; account_snapshot_repair: write failed for 2026-10-30")
+
+
+# -- N1 C7: per-ticker daily_snapshots rows of repaired account rows ------------------
+
+def snap_sh(*rows):
+    """rows: (date_iso, ticker, shares, close)"""
+    return pd.DataFrame([{"snapshot_date": d, "ticker": t, "shares": n, "close_price": px}
+                         for d, t, n, px in rows])
+
+
+REPAIRED = {"repaired_at": ANCHOR_30, "original_gross_book": 900.0}
+BOOK_A10 = {"AAA": {"shares": 10.0, "close": 100.0}}
+
+
+def test_loaded_repaired_row_with_stale_snapshots_is_reconciled():
+    book = {"AAA": {"shares": 10.0, "close": 100.0}, "BBB": {"shares": 2.0, "close": 50.0}}
+    db = FakeDB([row(book=book, **REPAIRED)], trades(BASE, LATE_BBB),
+                snap_sh(("2026-10-30", "AAA", 7, 100.0), ("2026-10-30", "GONE", 3, 5.0)))
+    res = go(db)
+    assert res["ok"] and res["applied"] == [] and db.writes == []       # the account row is not stale
+    assert db.snap_writes == [("2026-10-30",
+                               [{"ticker": "AAA", "shares": 10, "close_price": 100.0},
+                                {"ticker": "BBB", "shares": 2, "close_price": 50.0}],
+                               ["GONE"])]
+    assert res["snapshot_rows_applied"] == ["2026-10-30"] and res["snapshot_rows_failed"] == []
+    assert res["snapshot_rows_refused"] == []
+    assert res["snapshot_rows_summary"] == "snapshot rows: 2026-10-30 AAA 7→10, +BBB 2, -GONE"
+    assert "snapshot rows applied 2026-10-30" in AR.summary_line(res)
+
+
+def test_row_repaired_in_this_run_uses_the_new_book_not_the_stale_loaded_one():
+    db = FakeDB([row()], trades(BASE, LATE_BBB), snap(("2026-10-30", "BBB", 50.0)))
+    res = go(db)
+    assert res["applied"] == ["2026-10-30"] and res["snapshot_rows_applied"] == ["2026-10-30"]
+    (d, ups, dels), = db.snap_writes
+    assert d == "2026-10-30" and dels == []
+    assert {u["ticker"]: u["shares"] for u in ups} == {"AAA": 10, "BBB": 2}   # BBB only in the NEW book
+
+
+def test_a_failed_account_write_does_not_reconcile_with_the_unwritten_book():
+    db = FakeDB([row()], trades(BASE, LATE_BBB), snap(("2026-10-30", "BBB", 50.0)), apply_ok=False)
+    res = go(db)
+    assert res["failed"] == ["2026-10-30"] and db.snap_writes == []
+    assert res["snapshot_rows_applied"] == [] and res["snapshot_rows_failed"] == []
+
+
+def test_row_without_repaired_at_is_left_alone_even_when_snapshots_differ():
+    db = FakeDB([row()], trades(BASE), snap_sh(("2026-10-30", "AAA", 7, 100.0)))
+    res = go(db)
+    assert res["ok"] and db.snap_writes == [] and res["snapshot_rows_applied"] == []
+    assert res["snapshot_rows_summary"] == "snapshot rows: no change"
+
+
+def test_todays_row_is_never_reconciled_even_if_marked_repaired():
+    db = FakeDB([row(d="2026-11-01", cash_as_of=_ts(2026, 11, 1, 16, 15), **REPAIRED)],
+                trades(BASE), snap_sh(("2026-11-01", "AAA", 7, 100.0)))
+    res = go(db, today=date(2026, 11, 1))
+    assert res["checked"] == 0 and db.snap_writes == []
+
+
+@pytest.mark.parametrize("bad", [None, False])
+def test_snapshot_row_write_failure_is_reported_and_a_failure_line(bad):
+    db = FakeDB([row(book=BOOK_A10, **REPAIRED)], trades(BASE), snap_sh(("2026-10-30", "AAA", 7, 100.0)))
+    db.snap_ok = bad
+    res = go(db)
+    assert res["ok"] and res["snapshot_rows_failed"] == ["2026-10-30"]
+    assert res["snapshot_rows_applied"] == []
+    assert AR.failure_lines(res) == ["account_snapshot_repair: snapshot-row write failed for 2026-10-30"]
+    assert "snapshot rows write failed 2026-10-30" in AR.summary_line(res)
+
+
+def test_a_writer_that_raises_is_a_failed_date_not_a_crash():
+    db = FakeDB([row(book=BOOK_A10, **REPAIRED)], trades(BASE), snap_sh(("2026-10-30", "AAA", 7, 100.0)))
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+    db.repair_daily_snapshot_rows = boom
+    res = go(db)
+    assert res["ok"] and res["snapshot_rows_failed"] == ["2026-10-30"]
+
+
+def test_second_run_after_reconcile_makes_no_snapshot_writes():
+    db = FakeDB([row(book=BOOK_A10, **REPAIRED)], trades(BASE), snap_sh(("2026-10-30", "AAA", 7, 100.0)))
+    assert go(db)["snapshot_rows_applied"] == ["2026-10-30"]
+    again = go(db)
+    assert again["snapshot_rows_applied"] == [] and len(db.snap_writes) == 1
+    assert AR.failure_lines(again) == []
+
+
+def test_repaired_row_without_a_book_is_a_no_book_refusal_and_a_failure_line():
+    db = FakeDB([row(**REPAIRED)], trades(BASE), snap_sh(("2026-10-30", "AAA", 7, 100.0)))
+    db.acct[0]["book_positions"] = None
+    res = go(db)
+    assert db.snap_writes == []
+    assert [x["kind"] for x in res["snapshot_rows_refused"]] == ["no_book"]
+    (line,) = AR.failure_lines(res)
+    assert line.startswith("account_snapshot_repair: snapshot rows refused 2026-10-30:")
+
+
+def test_repaired_row_on_a_non_trading_day_is_refused_and_alarmed():
+    sat = row(d="2026-10-31", book=BOOK_A10, cash_as_of=_ts(2026, 10, 31, 16, 15), **REPAIRED)
+    db = FakeDB([sat], trades(BASE), snap_sh(("2026-10-31", "AAA", 7, 100.0)))
+    res = go(db)
+    assert db.snap_writes == []
+    assert [x["kind"] for x in res["snapshot_rows_refused"]] == ["non_trading_day"]
+    (line,) = AR.failure_lines(res)
+    assert line.startswith("account_snapshot_repair: snapshot rows refused 2026-10-31:")
+
+
+def test_repaired_book_implying_no_rows_is_refused_empty_book_and_alarmed():
+    tiny = {"AAA": {"shares": 0.5, "close": 100.0}}
+    db = FakeDB([row(book=tiny, **REPAIRED)], trades(BASE), snap_sh(("2026-10-30", "AAA", 1, 100.0)))
+    res = go(db)
+    assert db.snap_writes == []
+    assert [x["kind"] for x in res["snapshot_rows_refused"]] == ["empty_book"]
+    assert len(AR.failure_lines(res)) == 1
+
+
+def test_snapshot_row_refusal_lines_are_capped_at_five():
+    res = {"ok": True, "since": "x", "checked": 7, "applied": [], "failed": [], "error": None,
+           "refusals": [], "snapshot_rows_refused": [
+               {"snapshot_date": f"2026-10-{i:02d}", "kind": "no_book", "reason": "r"}
+               for i in range(1, 8)]}
+    lines = AR.failure_lines(res)
+    assert len(lines) == 6 and lines[-1] == "account_snapshot_repair: … +2 more snapshot-row refusals"
+
+
+def test_results_without_snapshot_row_keys_still_format():
+    assert AR.failure_lines(CLEAN) == []
+    assert "snapshot rows" not in AR.summary_line(CLEAN)

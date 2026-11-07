@@ -1412,7 +1412,8 @@ def load_watchlist_or_none() -> "list[str] | None":
         return None
 
 
-def _read_all_pages(build, page_size: int, *, dedupe_key: "str | None" = "id") -> list:
+def _read_all_pages(build, page_size: int, *,
+                    dedupe_key: "str | tuple | None" = "id") -> list:
     """Every row of a paged PostgREST read. `build()` returns a FRESH ordered
     select builder each call (no .range applied). Advances by the number of rows
     actually returned and stops only on an EMPTY page, so a server-side
@@ -1420,6 +1421,8 @@ def _read_all_pages(build, page_size: int, *, dedupe_key: "str | None" = "id") -
     any page failure (callers keep their own except contracts). When
     `dedupe_key` is set and present on a row, a repeated key (another writer
     inserted between pages and shifted the offsets) is kept once, first seen.
+    A TUPLE of column names is a composite key (the tuple of the row's values),
+    used only when every column is present and not None.
 
     Cost: one extra (empty) request per read. A short page can't be told apart
     from a server-side cap, so the only safe end-of-table signal is an empty
@@ -1433,8 +1436,14 @@ def _read_all_pages(build, page_size: int, *, dedupe_key: "str | None" = "id") -
         if not page:
             return rows
         for row in page:
-            if dedupe_key and isinstance(row, dict) and row.get(dedupe_key) is not None:
-                key = row[dedupe_key]
+            key = None
+            if dedupe_key and isinstance(row, dict):
+                if isinstance(dedupe_key, tuple):
+                    vals = tuple(row.get(c) for c in dedupe_key)
+                    key = vals if all(v is not None for v in vals) else None
+                else:
+                    key = row.get(dedupe_key)
+            if key is not None:
                 if key in seen:
                     continue
                 seen.add(key)
@@ -1804,8 +1813,11 @@ def _load_daily_snapshots_all_pages(start_date=None, end_date=None) -> list:
             q = q.lte("snapshot_date", str(end_date)[:10])
         return q.order("snapshot_date", desc=False).order("ticker")
 
-    # PK is (snapshot_date, ticker): no `id` column, so no dedupe key.
-    return _read_all_pages(_build, _DAILY_SNAPSHOTS_PAGE_SIZE, dedupe_key=None)
+    # PK is (snapshot_date, ticker): no `id` column, so the composite PK is the
+    # dedupe key. A past-dated row written mid-read (the N1 C7 repair does exactly
+    # that) shifts the offsets and could otherwise be returned twice (TrPage f/u 4).
+    return _read_all_pages(_build, _DAILY_SNAPSHOTS_PAGE_SIZE,
+                           dedupe_key=("snapshot_date", "ticker"))
 
 
 def load_daily_snapshots(start_date=None, end_date=None) -> "pd.DataFrame":
@@ -6046,6 +6058,60 @@ def apply_account_snapshot_repair(snapshot_date, fields: dict) -> bool:
         import warnings
         warnings.warn(f"apply_account_snapshot_repair: {e}")
         return False
+
+
+def repair_daily_snapshot_rows(snapshot_date, upserts, deletes) -> "bool | None":
+    """Reconcile one past date's per-ticker `daily_snapshots` rows with a
+    repaired account row's book (N1 C7, `snapshot_row_repair.plan_snapshot_rows`).
+    The N1 repairs fix `account_daily_snapshots` but never touched these rows, so
+    they kept the pre-repair book (wrong per-stock breakdown and Today's-P&L
+    baseline, and the weekly impossible-states check C7).
+
+    Upserts `upserts` ([{ticker, shares, close_price}], on (snapshot_date,
+    ticker)) and deletes EXACTLY the tickers in `deletes` for that date, never a
+    sweep. Refuses (False) a date that is not strictly before today ET: the EOD
+    lane writes today's rows. Also False for a read-only viewer, an unreadable
+    date or a malformed record (shares / close not > 0, as in
+    `save_daily_snapshot`); None when there is no DB or any call raised (the
+    upsert runs first, so a failure never deletes); True on success."""
+    if is_readonly():
+        return False
+    if not has_db():
+        return None
+    from datetime import date as _date
+    from stock_analyzer.market_time import today_et
+    key = str(snapshot_date)[:10]
+    try:
+        if _date.fromisoformat(key) >= today_et():
+            return False
+    except ValueError:
+        return False
+    records = []
+    for r in (upserts or []):
+        try:
+            tk = str(r.get("ticker", "")).strip().upper()
+            sh, px = float(r.get("shares")), float(r.get("close_price"))
+        except (AttributeError, TypeError, ValueError):
+            return False
+        if not tk or not sh > 0 or not px > 0:     # also rejects NaN
+            return False
+        records.append({"snapshot_date": key, "ticker": tk, "shares": sh, "close_price": px})
+    gone = sorted({str(t).strip().upper() for t in (deletes or []) if str(t).strip()})
+    if not records and not gone:
+        return True
+    try:
+        client = _client()
+        if records:
+            client.table("daily_snapshots").upsert(
+                records, on_conflict="snapshot_date,ticker").execute()
+        if gone:
+            client.table("daily_snapshots").delete().eq(
+                "snapshot_date", key).in_("ticker", gone).execute()
+        return True
+    except Exception as e:
+        import warnings
+        warnings.warn(f"repair_daily_snapshot_rows: {e}")
+        return None
 
 
 def load_max_trade_id_or_none() -> "int | None":

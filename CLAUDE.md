@@ -223,7 +223,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 3. **TJDate Phase 1** (`docs/plans/trade-entry-guard.md`): confirming pass, P0 probe, C3 and D0 done 2026-11-06; C4 done 2026-11-07 (broker-sync ET date; live check: the next broker sync log reads "closed N linked pending", no duplicate Pending Imports); NEXT C1, then C2, C3b, C5, U9, U8.
 4. **U7 + #21** (U7: planner + reviewer; #21: trace both budget figures first).
 5. **#34c probe:** read-only check of SnapTrade's own last-sync time before designing.
-- **Dated:** N1 C6b–C8 before the November report (`docs/plans/account-snapshot-repair.md`: C6b review follow-ups, C7 per-ticker `daily_snapshots` repair, C8 docs; C7 also clears the 11-07 data-quality alert DQ-C7); #26 C3c persisted stop floor by 2026-12-07 (`docs/plans/held-trailing-stop.md`).
+- **Dated:** N1 C6b–C8 before the November report (`docs/plans/account-snapshot-repair.md`: C6b review follow-ups, ~~C7 per-ticker `daily_snapshots` repair~~ BUILT 2026-11-07 (owner: run `scripts/daily_snapshot_row_repair.py` dry run, then `--apply`), C8 docs); **N1-LogTime** (8 hand-logged fills timed at log time; fix `docs/sql/journal-fix-2026-11-07-fill-times.sql` after Opus review, then the C3 backfill dry run for the legacy days); #26 C3c persisted stop floor by 2026-12-07 (`docs/plans/held-trailing-stop.md`).
 - **LockBreach:** owner decided 2026-11-03 to RETIRE Lock Setup (option A); queued, don't start unless asked (closes #20 f/u).
 - **Owner calls open:** keep the 6.0 Financials earnings fallback for uncurated financial names or restore 7.0 (C3 `212f2c5`); EW2; Fund; #25; Zone (planned-level zone parked until the ENTER_NOW base-rate readout).
 

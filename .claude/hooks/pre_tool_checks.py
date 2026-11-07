@@ -1118,6 +1118,10 @@ _GATE_FILES = {
     # decides which statement lines are written as new trades -- a DB-write /
     # data-integrity path, same class as broker_sync.
     "stock_analyzer/broker_import.py",
+    # Added 2026-11-07 (N1 C7): the pure planner for which per-ticker
+    # daily_snapshots rows a repaired account row's book implies (upsert / delete /
+    # refuse) -- a DB-write / data-integrity path, the Today's-P&L baseline.
+    "stock_analyzer/snapshot_row_repair.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per
