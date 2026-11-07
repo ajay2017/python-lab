@@ -77,7 +77,8 @@ def test_app_debrief_block_uses_the_same_helper_and_passes_the_signal_frames(app
             "spy_closes_by_date"} <= names
     build = next(c for n, c in calls if n == "build_debrief_package")
     kws = {k.arg for k in build.keywords}
-    assert {"core", "exit_signals_df", "all_recs_df", "trades_df", "recs_df"} <= kws
+    assert {"core", "exit_signals_df", "exit_signals_unavailable", "all_recs_df",
+            "trades_df", "recs_df"} <= kws
     assert "snapshots_df" not in kws and "spy_week_pct" not in kws
     # the legacy outage-vs-insufficient classifier is gone from the page
     assert "classify_snapshot_read" not in names and "load_daily_snapshots_or_none" not in names
@@ -108,7 +109,8 @@ def test_cron_debrief_uses_the_shared_engine_path():
     assert "load_exit_signals_or_none" in names and "load_exit_signals" not in names
     build = next(c for n, c in calls if n == "build_debrief_package")
     kws = {k.arg for k in build.keywords}
-    assert {"core", "exit_signals_df", "all_recs_df", "trades_df", "recs_df"} <= kws
+    assert {"core", "exit_signals_df", "exit_signals_unavailable", "all_recs_df",
+            "trades_df", "recs_df"} <= kws
     email = next(c for n, c in calls if n == "render_debrief_email")
     ekw = {k.arg for k in email.keywords}
     assert "period" in ekw and "week_had_trades" not in ekw

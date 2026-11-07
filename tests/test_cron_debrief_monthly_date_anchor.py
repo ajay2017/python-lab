@@ -343,6 +343,84 @@ def test_run_debrief_holdings_read_failure_keeps_list_unfiltered(monkeypatch):
     assert any("holdings lookup failed" in m for m in logs)
 
 
+# ── Deb: an unreadable exit_signals read is disclosed and fails the heartbeat ──
+
+_EXIT_LINE = "debrief: exit_signals unreadable — protective section disclosed as unavailable"
+
+
+def _lane_with_exit_read(monkeypatch, exit_read, *, generate=None, saved=True):
+    """Run the fully-mocked lane once, then re-run it with `exit_read` as the
+    load_exit_signals_or_none result, capturing the build kwargs and the calls."""
+    from stock_analyzer import debrief_advisor as da
+    notified, calls, kws = [], [], []
+    _full_lane(monkeypatch, generate=dict(_RESULT) if generate is None else generate,
+               saved=saved, notified=notified, calls=calls)
+    monkeypatch.setattr(cr.db, "load_exit_signals_or_none", lambda days_back=10: exit_read)
+    monkeypatch.setattr(da, "build_debrief_package",
+                        lambda **k: kws.append(k) or
+                        {"narratable": True, "result_status": "ok", "week_ending": "2026-08-09"})
+    notified.clear()
+    calls.clear()
+    monkeypatch.setattr(cr, "_LAST_LANE_FAILURE_DETAIL", None)
+    rc = cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
+    return rc, notified, calls, kws
+
+
+def test_run_debrief_unreadable_exit_signals_is_disclosed_and_fails_the_heartbeat(monkeypatch):
+    rc, notified, calls, kws = _lane_with_exit_read(monkeypatch, None)
+    assert len(kws) == 1 and kws[0]["exit_signals_unavailable"] is True
+    assert kws[0]["exit_signals_df"] is None
+    assert calls == ["generate", "save"]                  # still generated AND saved, never blocked
+    assert rc == 1
+    assert notified == [("debrief", "debrief saved; " + _EXIT_LINE)]
+    assert cr._LAST_LANE_FAILURE_DETAIL == "debrief saved; " + _EXIT_LINE
+
+
+def test_run_debrief_readable_exit_signals_passes_not_unavailable_and_stays_green(monkeypatch):
+    for frame in (pd.DataFrame(), pd.DataFrame([{"ticker": "AAA"}])):
+        rc, notified, calls, kws = _lane_with_exit_read(monkeypatch, frame)
+        assert kws[0]["exit_signals_unavailable"] is False
+        assert rc == 0 and notified == [] and cr._LAST_LANE_FAILURE_DETAIL is None
+        assert calls == ["generate", "save"]
+
+
+def test_run_debrief_unreadable_exit_signals_rides_every_later_failure_path(monkeypatch):
+    from stock_analyzer import debrief_advisor as da
+    notified = []
+    _full_lane(monkeypatch, generate=dict(_RESULT), saved=True, notified=notified)
+    monkeypatch.setattr(cr.db, "load_exit_signals_or_none", lambda days_back=10: None)
+    now = cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0))
+    # LLM failure: the one notification names both problems
+    monkeypatch.setattr(da, "generate_debrief", lambda pkg, key: None)
+    notified.clear()
+    assert cr._run_debrief(now, force=False) == 1 and len(notified) == 1
+    assert notified[0][1].startswith("debrief_blind:") and notified[0][1].endswith(_EXIT_LINE)
+    # save failure
+    monkeypatch.setattr(da, "generate_debrief", lambda pkg, key: dict(_RESULT))
+    monkeypatch.setattr(cr.db, "save_weekly_debrief", lambda rec: False)
+    notified.clear()
+    assert cr._run_debrief(now, force=False) == 1 and len(notified) == 1
+    assert "weekly_debriefs: save failed" in notified[0][1] and notified[0][1].endswith(_EXIT_LINE)
+
+
+def test_run_debrief_unreadable_exit_signals_keeps_the_repair_fingerprint_commit(monkeypatch):
+    # the extra line must not break commit-after-delivery of the repair fingerprint
+    committed = []
+    monkeypatch.setattr(cr, "_repair_failure_lines",
+                        lambda res, now: (["account_snapshot_repair: refused"], "fp-1"))
+    monkeypatch.setattr(cr, "_commit_repair_fingerprint", lambda fp, now: committed.append(fp))
+    notified = []
+    _full_lane(monkeypatch, generate=dict(_RESULT), saved=True, notified=notified)
+    monkeypatch.setattr(cr, "_notify_failure", lambda mode, detail: notified.append((mode, detail)) or True)
+    monkeypatch.setattr(cr.db, "load_exit_signals_or_none", lambda days_back=10: None)
+    notified.clear()
+    committed.clear()
+    rc = cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
+    assert rc == 1 and len(notified) == 1
+    assert "account_snapshot_repair: refused" in notified[0][1] and _EXIT_LINE in notified[0][1]
+    assert committed == ["fp-1"]
+
+
 # ── _run_monthly_report: same anchor, same guarantee ──────────────────────────
 
 def _capture_load_recommendations(monkeypatch, captured):

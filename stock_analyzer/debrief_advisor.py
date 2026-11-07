@@ -160,6 +160,37 @@ def signal_days_back(today, week_start) -> int:
     return max(1, (today - week_start).days + 1)
 
 
+# The protective-signal read (exit_signals) can fail while the debrief is still
+# worth writing.  A failed read is not a quiet week: both the model prompt and
+# the saved/emailed/in-app text must say so.  Wording only -- no policy value.
+PROTECTIVE_UNAVAILABLE_PROMPT_LINE = (
+    "Protective signals (WATCH/TRIM/EXIT) couldn't be loaded for this week; "
+    "do not say there were none.")
+PROTECTIVE_UNAVAILABLE_NOTE = (
+    "Protective signals couldn't be loaded for this week, so this section is "
+    "missing (not a quiet week).")
+
+
+def protective_signals_status(exit_signals_df, unavailable: bool = False) -> str:
+    """How the protective-signal input stands: "unavailable" (the caller's read
+    failed -- the debrief must disclose it), "ok" (a frame was supplied, possibly
+    empty = a genuinely quiet week), "not_supplied" (no frame, no failure flag --
+    the legacy optional path)."""
+    if unavailable:
+        return "unavailable"
+    return "ok" if exit_signals_df is not None else "not_supplied"
+
+
+def protective_unavailable_note(package) -> "str | None":
+    """The visible line for a package whose protective-signal read failed, else
+    None.  Appended to the saved Decisions text so the stored debrief, its email
+    and the in-app view all carry it (the narrative is where protective signals
+    are discussed)."""
+    if isinstance(package, dict) and package.get("protective_signals_status") == "unavailable":
+        return PROTECTIVE_UNAVAILABLE_NOTE
+    return None
+
+
 def unknown_result_reason(recon, account_return, excluded=None) -> str:
     """Why the account result is unknown, branching on the stage that failed:
     the deposit/withdrawal read (account_return offline), an unmeasurable
@@ -273,6 +304,7 @@ def build_debrief_package(
     broken_theses: list[str] | None = None,
     all_recs_df=None,
     exit_signals_df=None,
+    exit_signals_unavailable: bool = False,
 ) -> dict:
     """
     Assemble the structured data package for the LLM.
@@ -287,6 +319,11 @@ def build_debrief_package(
     exit_signals_df: DataFrame from db.load_exit_signals() — WATCH/TRIM/EXIT
                   protective signals, the symmetric counterpart to recs_df's
                   entry signals. Optional; omitted gracefully when absent.
+    exit_signals_unavailable: True when the caller's protective-signal read
+                  FAILED (as opposed to exit_signals_df=None = not supplied).
+                  The frame is then ignored, the package records
+                  protective_signals_status="unavailable", and the prompt and
+                  the generated text say the section is missing, never "none".
 
     Returns a dict consumed by generate_debrief().  `narratable` is False when
     the engine is offline -- generate_debrief() then writes nothing.
@@ -340,6 +377,8 @@ def build_debrief_package(
         "recs_surfaced":          [],
         "signals_ignored":        [],
         "protective_signals":     [],
+        "protective_signals_status": protective_signals_status(
+            exit_signals_df, exit_signals_unavailable),
         "broken_theses":          broken_theses or [],
         "behavioral":             {},
         "decision_quality_month": None,
@@ -523,7 +562,8 @@ def build_debrief_package(
     # captured daily since 2026-07-21. Tickers closed this week are excluded
     # here — closed_positions above already narrates them as "position closed"
     # and a second bullet from this block would conflict with that wording.
-    if exit_signals_df is not None and not (hasattr(exit_signals_df, "empty") and exit_signals_df.empty):
+    if (not exit_signals_unavailable and exit_signals_df is not None
+            and not (hasattr(exit_signals_df, "empty") and exit_signals_df.empty)):
         _week_sig = exit_signals_df[
             (exit_signals_df["signal_date"].astype(str).str[:10] >= str(week_start)) &
             (exit_signals_df["signal_date"].astype(str).str[:10] <= str(week_ending)) &
@@ -751,7 +791,10 @@ def _format_prompt(package: dict) -> str:
     else:
         lines.append("No actionable signals were surfaced this week.")
 
-    if package.get("protective_signals"):
+    if package.get("protective_signals_status") == "unavailable":
+        lines.append("")
+        lines.append(PROTECTIVE_UNAVAILABLE_PROMPT_LINE)
+    elif package.get("protective_signals"):
         lines.append("")
         lines.append(
             f"Protective signals fired this week ({len(package['protective_signals'])} name(s),"
@@ -890,6 +933,12 @@ def generate_debrief(
             _last = next((k for k in reversed(list(sections)) if sections.get(k)), None)
             if _last is not None:
                 sections[_last] = sections[_last].rstrip() + " … (cut off — the debrief hit its length limit)"
+        _note = protective_unavailable_note(package)
+        if _note:
+            # deterministic disclosure, not left to the model: a stored debrief
+            # that silently lacks its protective section reads as a quiet week
+            sections["section_decisions"] = (
+                (sections.get("section_decisions") or "").rstrip() + "\n\n" + _note).strip()
         return {
             "week_ending":      package["week_ending"],
             "metrics_version":  package["metrics_version"],

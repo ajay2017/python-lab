@@ -2880,13 +2880,21 @@ def _run_debrief(now_et, force: bool) -> int:
     # stakes than A1/J1 (a retrospective review, not a deploy-capital rec),
     # so the fix is scoped to correctness + observability, not a deeper
     # narrative-disclosure change to build_debrief_package itself.
+    # Deb: a None read is now also passed on as exit_signals_unavailable, so the
+    # saved / emailed debrief SAYS its protective section is missing, and the lane
+    # reports a failure (heartbeat + notification). The debrief itself still saves
+    # and sends, degraded and disclosed -- never blocked.
     exit_signals_df = db.load_exit_signals_or_none(
         days_back=_da.signal_days_back(now_et.date(), week_start))
-    if exit_signals_df is None:
+    exit_signals_unavailable = exit_signals_df is None
+    if exit_signals_unavailable:
         _log("debrief: exit_signals lookup failed — this week's debrief will "
-             "omit the protective-signal section (same as a genuinely quiet "
-             "week would render, but this is NOT a genuinely quiet week; "
-             "check DB connectivity).")
+             "disclose its protective-signal section as unavailable (this is "
+             "NOT a genuinely quiet week; check DB connectivity).")
+        # rides the same failure list every later return path already appends,
+        # so the heartbeat flips and the one failure email names it
+        _repair_failures = list(_repair_failures) + [
+            "debrief: exit_signals unreadable — protective section disclosed as unavailable"]
 
     # SPY closes by date -- same provider path as Reports' _cached_spy("2y")
     # (data.fetch_spy); None on any failure so the account result stays
@@ -2912,6 +2920,7 @@ def _run_debrief(now_et, force: bool) -> int:
         broken_theses = broken_theses,
         all_recs_df   = all_recs_df,
         exit_signals_df = exit_signals_df,
+        exit_signals_unavailable = exit_signals_unavailable,
     )
     _log(f"debrief: result_status={package.get('result_status')} · "
          f"{len(recs_df) if not recs_df.empty else 0} rec(s) · "

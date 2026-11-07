@@ -45580,6 +45580,7 @@ elif page == "🧠 AI Insights":
                         broken_theses = _wd_broken,
                         all_recs_df   = _wd_all_recs,
                         exit_signals_df = _wd_exit_sigs,
+                        exit_signals_unavailable = (_wd_exit_sigs is None),
                     )
                     _wd_result = _dba.generate_debrief(_wd_pkg, _ai_api_key)
                     if _wd_result is None:
