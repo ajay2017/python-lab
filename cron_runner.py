@@ -305,7 +305,7 @@ def _send_email(label: str, subject: str, html: str) -> bool:
     return ok
 
 
-def _notify_failure(mode: str, detail: str) -> None:
+def _notify_failure(mode: str, detail: str) -> bool:
     """In-script dead-man's-switch — GitHub Actions had a workflow-level
     `if: failure()` step for this; Railway's native Cron Jobs have no
     equivalent, so a lane that raises or returns non-zero would otherwise
@@ -314,7 +314,11 @@ def _notify_failure(mode: str, detail: str) -> None:
     RESEND_API_KEY, and this function itself must NEVER raise, since it's
     always called from inside an except block right before the original
     failure is re-raised; a second exception here would clobber that
-    traceback instead of just failing to notify."""
+    traceback instead of just failing to notify.
+
+    Returns True only when the email was actually sent (False when inert or on
+    any error), so a caller can defer bookkeeping that must follow delivery
+    (N1 C6b: the refusal-alarm fingerprint)."""
     try:
         subject = f"⚠️ DRISHTA cron FAILED — {mode}"
         html = (
@@ -323,9 +327,10 @@ def _notify_failure(mode: str, detail: str) -> None:
             f"<p>Check the <code>cron-{mode}</code> Railway service's Deploy Logs "
             f"for details.</p>"
         )
-        _send_email("cron-failure", subject, html)
+        return bool(_send_email("cron-failure", subject, html))
     except Exception as exc:
         _log(f"cron-failure notify: UNCAUGHT — {str(exc)[:160]} (original failure still propagates)")
+        return False
 
 
 def _notify_broker_failure(now_et, detail: str) -> None:
@@ -351,8 +356,9 @@ def _notify_broker_failure(now_et, detail: str) -> None:
     except Exception as exc:
         _log(f"broker: failure dedup read failed ({str(exc)[:80]}) — sending anyway")
 
+    delivered = False
     try:
-        _notify_failure("broker", detail)
+        delivered = bool(_notify_failure("broker", detail))
     except Exception as exc:
         # _notify_failure's own contract is "never raises" (it wraps its body
         # in try/except) — this is belt-and-suspenders so a future change to
@@ -360,6 +366,11 @@ def _notify_broker_failure(now_et, detail: str) -> None:
         # to blow up.
         _log(f"broker: failure notify UNCAUGHT — {str(exc)[:120]}")
 
+    if not delivered:
+        # N1 C6b: marking an undelivered alarm as sent would swallow it for the
+        # rest of the day. Not recorded, so the next run alarms again.
+        _log("broker: failure email not delivered — dedup not recorded")
+        return
     try:
         db.save_alert_state(
             emailed_date=today_str, fingerprint="broker", row_id=_BROKER_FAILURE_ROW,
@@ -371,8 +382,9 @@ def _notify_broker_failure(now_et, detail: str) -> None:
 _NEWS_FAILURE_ROW = 8   # alert_state lane: news-only failure-email dedup, once per ET day across lanes (self-creates on upsert)
 
 
-def _repair_failure_lines(result, now_et) -> list:
-    """Heartbeat failure lines for an N1 auto-repair result, with the daily
+def _repair_failure_lines(result, now_et) -> tuple:
+    """`(lines, pending_fingerprint)`. Heartbeat failure lines for an N1
+    auto-repair result, with the daily
     alarm deduped for STRUCTURAL refusals (split, oversell, unexplained book,
     no book, no rate: they won't fix themselves). Errors, failed writes and
     transient refusals (missing close) flip the heartbeat every run; a
@@ -381,7 +393,15 @@ def _repair_failure_lines(result, now_et) -> list:
     excluded day persistently (account_row_trust). The saved fingerprint is the
     CURRENT structural set, so a refusal that clears and later recurs alarms
     again. An unreadable alert_state fails OPEN (alarm), like
-    `_notify_broker_failure`. Never raises."""
+    `_notify_broker_failure`.
+
+    The fingerprint is saved only once the alarm for it was DELIVERED (C6b): when
+    a structural key outside `prior` is alarming now, the set is returned as
+    `pending_fingerprint` and the caller passes it to `_commit_repair_fingerprint`
+    after `_notify_failure` returned True; if the email failed, nothing was saved
+    and the next run alarms again. When nothing new needs alarming (no structural
+    key outside `prior`) the set is saved immediately and `pending_fingerprint`
+    is None. Never raises."""
     try:
         current = set(_acct_autorepair.structural_refusal_keys(result))
         prior: set = set()
@@ -397,17 +417,31 @@ def _repair_failure_lines(result, now_et) -> list:
         for line in _acct_autorepair.standing_lines(result, suppress):
             _log(line)
         lines = _acct_autorepair.failure_lines(result, suppress_keys=suppress)
+        pending = None
         if result.get("ok"):
-            try:
-                db.save_alert_state(
-                    emailed_date=now_et.date().isoformat(),
-                    fingerprint=";".join(sorted(current)),
-                    row_id=_ACCT_REPAIR_REFUSAL_ROW)
-            except Exception:  # noqa: BLE001
-                pass   # best-effort: a failed save only means the next run alarms again
-        return lines
+            fingerprint = ";".join(sorted(current))
+            if current - prior:
+                pending = fingerprint    # a new (date, kind) is alarming: save after delivery
+            else:
+                _commit_repair_fingerprint(fingerprint, now_et)
+        return lines, pending
     except Exception as exc:  # noqa: BLE001 -- never blocks the lane
-        return [f"account_snapshot_repair: {str(exc)[:120]}"]
+        return [f"account_snapshot_repair: {str(exc)[:120]}"], None
+
+
+def _commit_repair_fingerprint(fingerprint, now_et) -> None:
+    """Save the refusal-alarm fingerprint (alert_state row 9). A None fingerprint
+    is a no-op. Best-effort: a failed save only means the next run alarms again.
+    Never raises."""
+    if fingerprint is None:
+        return
+    try:
+        db.save_alert_state(
+            emailed_date=now_et.date().isoformat(),
+            fingerprint=fingerprint,
+            row_id=_ACCT_REPAIR_REFUSAL_ROW)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _news_feed_check(*feeds) -> "str | None":
@@ -445,7 +479,10 @@ def _notify_lane_failure(lane: str, now_et, failures) -> None:
             return
     except Exception as exc:
         _log(f"{lane}: news failure dedup read failed ({str(exc)[:80]}) -- sending anyway")
-    _notify_failure(lane, detail)
+    if not _notify_failure(lane, detail):
+        # N1 C6b: an undelivered email must not mark the day as alarmed.
+        _log(f"{lane}: news-feed failure email not delivered -- dedup not recorded")
+        return
     try:
         db.save_alert_state(emailed_date=today_str, fingerprint="news_feed",
                             row_id=_NEWS_FAILURE_ROW)
@@ -853,12 +890,14 @@ def _run_eod(now_et, force: bool) -> int:
     # historical closes, so it is independent of today's book or price outage;
     # never touches today's row; a problem flips the heartbeat but never blocks
     # the day's writes below (docs/plans/account-snapshot-repair.md C5).
+    _repair_pending = None     # fingerprint to save once the failure email is delivered (C6b)
     try:
         _repair_res = _acct_autorepair.run_auto_repair(
             db, now_et.date(), now_et,
             lookback_days=ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS)
         _log(_acct_autorepair.summary_line(_repair_res))
-        failures.extend(_repair_failure_lines(_repair_res, now_et))
+        _repair_lines, _repair_pending = _repair_failure_lines(_repair_res, now_et)
+        failures.extend(_repair_lines)
     except Exception as e:  # noqa: BLE001
         _log(f"account_snapshot_repair FAILED — {str(e)[:120]} — continuing.")
         failures.append(f"account_snapshot_repair: {str(e)[:120]}")
@@ -1284,7 +1323,8 @@ def _run_eod(now_et, force: bool) -> int:
         # above actually failed). `global` already declared at the top of
         # this function.
         _LAST_LANE_FAILURE_DETAIL = "; ".join(failures)
-        _notify_failure("eod", _LAST_LANE_FAILURE_DETAIL)
+        if _notify_failure("eod", _LAST_LANE_FAILURE_DETAIL):
+            _commit_repair_fingerprint(_repair_pending, now_et)
 
     _log(f"eod done · snapshot={bool(rows)} · sentiment={bool(_snap_sentiment_rows)} · pullback_sent={sent}"
          + (f" · FAILURES={len(failures)}" if failures else ""))
@@ -2743,15 +2783,22 @@ def _run_debrief(now_et, force: bool) -> int:
     # N1 pre-step: repair stale PAST account_daily_snapshots rows (a Friday fill
     # confirmed on Saturday) before the engine reads them. Never stops the
     # debrief: a problem only flips the heartbeat at the final return.
+    _repair_pending = None     # fingerprint to save once a failure email is delivered (C6b)
     try:
         _repair_res = _acct_autorepair.run_auto_repair(
             db, now_et.date(), now_et,
             lookback_days=ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS)
         _log(_acct_autorepair.summary_line(_repair_res))
-        _repair_failures = _repair_failure_lines(_repair_res, now_et)
+        _repair_failures, _repair_pending = _repair_failure_lines(_repair_res, now_et)
     except Exception as e:  # noqa: BLE001
         _log(f"account_snapshot_repair FAILED — {str(e)[:120]} — continuing.")
         _repair_failures = [f"account_snapshot_repair: {str(e)[:120]}"]
+
+    def _notify_debrief_failure(detail):
+        """Every failure detail below carries `_repair_failures`, so a delivered
+        email is also the delivered refusal alarm: only then save its fingerprint."""
+        if _notify_failure("debrief", detail):
+            _commit_repair_fingerprint(_repair_pending, now_et)
 
     # The last completed Mon-Sun week; a `force` retry on a different calendar day
     # must land on the SAME week_ending as the original run (resolve_period's
@@ -2772,7 +2819,7 @@ def _run_debrief(now_et, force: bool) -> int:
         _log(f"debrief: engine inputs unreadable ({', '.join(_offline)}) — no debrief written.")
         if _repair_failures:     # N1 C5: keep the repair problem visible too
             _LAST_LANE_FAILURE_DETAIL += "; " + "; ".join(_repair_failures)
-        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        _notify_debrief_failure(_LAST_LANE_FAILURE_DETAIL)
         return 1
 
     # Thesis reviews feed the "BROKEN thesis" line. A failed read (None) must
@@ -2789,7 +2836,7 @@ def _run_debrief(now_et, force: bool) -> int:
         _log("debrief: thesis reviews unreadable — no debrief written.")
         if _repair_failures:     # N1 C5: keep the repair problem visible too
             _LAST_LANE_FAILURE_DETAIL += "; " + "; ".join(_repair_failures)
-        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        _notify_debrief_failure(_LAST_LANE_FAILURE_DETAIL)
         return 1
     held = None
     try:
@@ -2809,7 +2856,7 @@ def _run_debrief(now_et, force: bool) -> int:
         _log("debrief: thesis reviews unusable (missing columns) — no debrief written.")
         if _repair_failures:     # N1 C5: keep the repair problem visible too
             _LAST_LANE_FAILURE_DETAIL += "; " + "; ".join(_repair_failures)
-        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        _notify_debrief_failure(_LAST_LANE_FAILURE_DETAIL)
         return 1
 
     # Load recommendations for the week
@@ -2881,7 +2928,7 @@ def _run_debrief(now_et, force: bool) -> int:
         _log(f"debrief: {_LAST_LANE_FAILURE_DETAIL}")
         if _repair_failures:     # N1 C5: keep the repair problem visible too
             _LAST_LANE_FAILURE_DETAIL += "; " + "; ".join(_repair_failures)
-        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        _notify_debrief_failure(_LAST_LANE_FAILURE_DETAIL)
         return 1
 
     # Prior week's debrief, for the email's week-over-week alpha trend — loaded
@@ -2933,12 +2980,12 @@ def _run_debrief(now_et, force: bool) -> int:
                                      "(metrics_version column missing? apply the DDL)")
         if _repair_failures:     # N1 C5: keep the repair problem visible too
             _LAST_LANE_FAILURE_DETAIL += "; " + "; ".join(_repair_failures)
-        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        _notify_debrief_failure(_LAST_LANE_FAILURE_DETAIL)
         return 1
     if _repair_failures:
         _LAST_LANE_FAILURE_DETAIL = ("debrief saved; "
                                      + "; ".join(_repair_failures))
-        _notify_failure("debrief", _LAST_LANE_FAILURE_DETAIL)
+        _notify_debrief_failure(_LAST_LANE_FAILURE_DETAIL)
         return 1
     return 0
 

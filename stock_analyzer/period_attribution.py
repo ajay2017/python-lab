@@ -47,6 +47,7 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
+from stock_analyzer import account_row_trust
 from stock_analyzer.broker_sync import canonical_income_events
 from stock_analyzer.capital_vs_margin import (
     holdings_by_date,
@@ -684,8 +685,8 @@ def trust_strip(recon, lev, *, trades_truncated=None, flows_last_date=None,
             "no_start_record": "No valid account record before the period: holdings-only",
             "no_end_record_yet": f"No valid account record after {rec.get('d0')} in this period -- the end-of-day "
                                  "record may not have landed yet",
-            "no_valid_end_record": f"Account records exist after {rec.get('d0')} but none passed the after-close "
-                                   "cash check",
+            "no_valid_end_record": f"Account records exist after {rec.get('d0')} but none was usable "
+                                   "(it failed the after-close cash check or was left out)",
             "no_sessions": "No trading sessions in this range",
         }.get(why, "Account records not available for this period: holdings-only")
         chips.append(_chip("coverage", txt, "warn"))
@@ -806,14 +807,21 @@ def format_period_markdown(report: dict) -> str:
     report = report or {}
     rec = _dict(report.get("recon"))
     lev = _dict(report.get("leverage"))
+    # N1 C6b: account rows masked as stale (account_row_trust); None / absent = none.
+    excluded = report.get("account_rows_excluded")
+    _ps, _pe = _to_date(report.get("period_start")), _to_date(report.get("period_end"))
+    excl_line = (account_row_trust.excluded_line(excluded, _ps, _pe)
+                 if excluded and _ps is not None and _pe is not None else None)
     lines = [
         f"# Period report -- {report.get('period_start')} to {report.get('period_end')}",
         "",
         "**Informational only -- not investment advice.** A look-back; changes no gate, "
         "no recommendation.",
         "",
-        "## 1. Period result",
     ]
+    if excl_line:
+        lines += [excl_line, ""]
+    lines.append("## 1. Period result")
     st = rec.get("status")
     if st == "offline":
         lines.append("_Offline -- trades, account or price history could not be loaded._")
@@ -822,9 +830,12 @@ def format_period_markdown(report: dict) -> str:
             lines.append("_" + {
                 "no_start_record": "No valid account record before the period: holdings-only, no net-equity reconciliation.",
                 "no_end_record_yet": f"No valid account record after {rec.get('d0')} in this period (the end-of-day record may not have landed yet): holdings-only.",
-                "no_valid_end_record": f"Account records exist after {rec.get('d0')} but none passed the after-close cash check: holdings-only.",
+                "no_valid_end_record": f"Account records exist after {rec.get('d0')} but none was usable (it failed the after-close cash check or was left out): holdings-only.",
                 "no_sessions": "No trading sessions in this range.",
             }.get(rec.get("pre_coverage_reason"), "Account records not available: holdings-only.") + "_")
+            _pc_note = account_row_trust.pre_coverage_left_out_note(rec, excluded)
+            if _pc_note:
+                lines.append(_pc_note)
         else:
             pct = rec.get("equity_pct")
             lines.append(f"- Net equity change ({rec.get('d0')} to {rec.get('d1')}): "
@@ -866,8 +877,16 @@ def format_period_markdown(report: dict) -> str:
             lines.append(f"- Unpriced (excluded, not zero): {len(rec['unpriced'])}")
         lines.append(f"- Close-to-close on names held at both ends: {_usd(rec.get('legacy_close_to_close'))}")
     lines += ["", "## 3. Leverage & margin"]
-    if lev.get("status") != "ok":
+    _gap_note = (account_row_trust.leverage_gap_text(lev, excluded, _ps, _pe)
+                 if _ps is not None and _pe is not None else None)
+    if lev.get("status") == "empty":
+        lines.append("_" + account_row_trust.leverage_empty_text(lev) + "_")
+        if _gap_note:
+            lines.append(_gap_note)
+    elif lev.get("status") != "ok":
         lines.append("_No leverage records for this period._")
+        if _gap_note:
+            lines.append(_gap_note)
     else:
         lines.append(f"- Leverage range: {lev['min']['leverage']:.2f}x to {lev['max']['leverage']:.2f}x "
                      f"(start {lev['start']['leverage']:.2f}x, end {lev['end']['leverage']:.2f}x)")
@@ -878,6 +897,8 @@ def format_period_markdown(report: dict) -> str:
         lines.append(f"- Days in call: {lev['days_in_call']}; days above reference leverage: "
                      f"{lev['days_above_reference']} of {lev['n_days_recorded']} recorded")
         lines.append("- The maintenance rate is an estimate; a real call is likely closer than shown.")
+        if _gap_note:
+            lines.append("- " + _gap_note)
     chips = _list(report.get("trust"))
     if chips:
         lines += ["", "## Data trust"] + [f"- {c['label']} ({c['state']})" for c in chips]
@@ -915,8 +936,8 @@ def pre_coverage_reason_text(recon) -> str:
                            "change in your account can't be measured.",
         "no_end_record_yet": f"There is no valid account record after {rec.get('d0')} in this period (the "
                              "end-of-day record may not have landed yet).",
-        "no_valid_end_record": f"Account records exist after {rec.get('d0')} but none passed the after-close "
-                               "cash check.",
+        "no_valid_end_record": f"Account records exist after {rec.get('d0')} but none was usable "
+                               "(it failed the after-close cash check or was left out).",
         "no_sessions": "There are no trading sessions in this range.",
     }.get(rec.get("pre_coverage_reason"), "Account records are not available for this period.")
 

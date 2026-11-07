@@ -286,7 +286,11 @@ def failure_lines(result: dict, *, suppress_keys=frozenset()) -> list:
     A STRUCTURAL refusal whose key (`structural_refusal_keys`) is in
     `suppress_keys` was already alarmed on an earlier run, so it is omitted
     (`standing_lines` logs it instead). Errors, failed writes and transient
-    refusals (`no_close`, `journal_unreadable`) are never suppressed."""
+    refusals (`no_close`, `journal_unreadable`) are never suppressed.
+
+    Known and accepted: a NEW structural key past `_MAX_REFUSAL_LINES` reaches the
+    email only as "+N more" yet is committed to the dedup fingerprint with the
+    rest; the Reports / Debrief excluded line still names that day."""
     pre = "account_snapshot_repair:"
     if not result.get("ok"):
         return [f"{pre} {result.get('error')}"]

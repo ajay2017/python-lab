@@ -674,7 +674,8 @@ def test_records_present_but_failing_cash_check_reason():
     r = recon(t, a2, dl, flows=flows, income=income)
     assert r["status"] == "pre_coverage" and r["pre_coverage_reason"] == "no_valid_end_record"
     c = {x["key"]: x for x in pa.trust_strip(r, None)}["coverage"]
-    assert "none passed the after-close cash check" in c["label"] and "landed" not in c["label"]
+    assert "none was usable" in c["label"] and "after-close cash check" in c["label"]
+    assert "left out" in c["label"] and "landed" not in c["label"]
 
 
 def test_phantom_shares_later_intervals_are_journal_flagged_not_unpriced():

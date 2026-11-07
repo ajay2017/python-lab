@@ -42119,6 +42119,7 @@ elif page == "💰 Account":
                             _pr_report = {
                                 "period_start": _perf_start, "period_end": _perf_end,
                                 "recon": _pr_recon, "leverage": _pr_lev, "trust": _pr_chips,
+                                "account_rows_excluded": _perf_acct_excluded,
                             }
                         except Exception as _pr_exc:
                             _pr_err = type(_pr_exc).__name__
@@ -42207,7 +42208,10 @@ elif page == "💰 Account":
                                            "loaded right now, so the period result can't be built.")
                             else:
                                 if _pr_recon["status"] == "pre_coverage":
+                                    _pr_pc_note = _art_mod.pre_coverage_left_out_note(
+                                        _pr_recon, _perf_acct_excluded)
                                     st.info(_pa_mod.pre_coverage_reason_text(_pr_recon)
+                                            + (" " + _pr_pc_note if _pr_pc_note else "")
                                             + " Holdings only — can't reconcile to your account this period.")
                                 _pr_wf = _pa_mod.waterfall_rows(_pr_recon)
                                 if _pr_wf:
@@ -42285,7 +42289,11 @@ elif page == "💰 Account":
                             if _pr_lev["status"] == "offline":
                                 st.warning("⚪ Could not read account snapshot history right now.")
                             elif _pr_lev["status"] == "empty":
-                                st.info("No account snapshots recorded in this period.")
+                                st.info(_art_mod.leverage_empty_text(_pr_lev))
+                                _pr_lev_gap0 = _art_mod.leverage_gap_text(
+                                    _pr_lev, _perf_acct_excluded, _perf_start, _perf_end)
+                                if _pr_lev_gap0 is not None:
+                                    st.caption(_pr_lev_gap0)
                             else:
                                 _pl_t = _pa_mod.leverage_tiles(_pr_lev)
                                 _pl_c1, _pl_c2, _pl_c3 = st.columns(3)
@@ -42322,7 +42330,13 @@ elif page == "💰 Account":
                                 # Merged from the old "Leverage & Margin Cushion Drift" section
                                 # (owner decision #10): the end-of-period readings it carried.
                                 _pld = _perf_review["leverage_drift"]
-                                if _pld["status"] == "ok":
+                                # N1 C6b: a period-end row masked as stale reads "left out", not "—".
+                                _pld_left = (_art_mod.left_out_reading(_pld["end_date"], _perf_acct_excluded)
+                                             if _pld["status"] == "ok" else None)
+                                if _pld_left is not None:
+                                    st.caption(f"At the period end ({_pld['end_date']}): "
+                                               f"cushion and call distance {_pld_left}.")
+                                elif _pld["status"] == "ok":
                                     _pld_cd = _pld["call_distance_pct_end"]
                                     _pld_cu = _pld["cushion_end"]
                                     st.caption(
@@ -42335,15 +42349,16 @@ elif page == "💰 Account":
                                         + (f"{_pld_cd:.1f}%" if _pld_cd is not None else "—")
                                         + (f" ({_pld['call_distance_pct_delta']:+.1f}pp)"
                                            if _pld["call_distance_pct_delta"] is not None else "")
+                                        # a masked START row drops the deltas above: say so
+                                        + _art_mod.start_left_out_suffix(
+                                            _pld["start_date"], _perf_acct_excluded)
                                     )
                                 if _pr_lev["days_in_call"]:
                                     st.warning(f"🔴 {_pr_lev['days_in_call']} recorded day(s) in a margin call this period.")
-                                if _pr_lev["n_null_rows"] or _pr_lev["n_null_call_rows"]:
-                                    st.caption(
-                                        f"{_pr_lev['n_null_rows']} day(s) had no leverage recorded and "
-                                        f"{_pr_lev['n_null_call_rows']} had no margin-call distance — left "
-                                        "out of the figures above."
-                                    )
+                                _pr_lev_gap = _art_mod.leverage_gap_text(
+                                    _pr_lev, _perf_acct_excluded, _perf_start, _perf_end)
+                                if _pr_lev_gap is not None:
+                                    st.caption(_pr_lev_gap)
                                 st.caption(
                                     f"The {MARGIN_MAINTENANCE_RATE * 100:.0f}% maintenance rate is an "
                                     "estimate — your broker's real rate per stock can be higher, so a "
@@ -44499,6 +44514,8 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 **Performance Review:** pick a period (Last week — the last completed Mon–Sun — Last month, This quarter, Last quarter, This tax year, Since tracking once your account history covers enough, or a custom date range) for a point-in-time, downloadable snapshot. **At the top: a data-trust strip, then "1 · Period result" and "3 · Leverage & margin"** (see the paragraph below). Everything described next sits under a **"More from this period"** expander: **Account Return vs SPY** (your real account return, read from your recorded account value just before the period started and at its end, adjusted for any deposits/withdrawals in between, next to SPY's return over those SAME dates — a "Month by month" expander breaks it down by calendar month; shown only when your daily account history covers the start of the period, otherwise withheld with a note on what sub-range IS covered); **Return on Capital Cycled Through Closed Trades** (realized P&L divided by the summed cost basis of every closed lot that period — capital reused across several round trips is counted once per trade, so this reads closer to an average per-trade return than a period return, and it's **not your account's own return**; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎖️ Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); **Risk Discipline** (R-Multiple — closed trades' realized P&L measured against the planned risk at entry, reconstructed from the app's ATR-baseline or your own saved risk plan; per-trade detail always shown, plus mean/median/worst-loss stats once enough matured episodes exist); and **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing risk-snapshot history; the old leverage-cushion drift now lives in section 3). Downloads as CSV or Markdown, same as the Tax Report.
 
 **Period result and the data-trust chips:** "1 · Period result" shows how much your net account value changed over the period and where the change came from — price moves on positions you held through and the last-day moves on names you sold (together, the moves on positions held at the prior close, split into borrowed vs your own money), the first-day moves on names you bought, same-day round trips, deposits/withdrawals, dividends, margin interest and fees. **"Unexplained" is whatever those lines don't account for** — expand it to see its cash side and book side; a missing trade, an unrecorded deposit or a price the app couldn't find lands there rather than being hidden. A missing figure reads "unknown", never zero. The chips above it are the checks behind the numbers: green = checked and fine, amber = look at this, grey = can't be told from stored data (they describe the stored records, not whether a data feed was down during the period — except the System Trust chip, when shown, which is today's live state). "3 · Leverage & margin" shows the leverage range, the closest the account came to a margin call (at an ESTIMATED maintenance rate, so a real call is likely closer) and the days above the reference leverage. A separate pair of downloads exports this section and the chips.
+
+**Days left out of the account figures:** if a day's recorded account value no longer matches your trade journal (a trade reached the journal after that day was recorded), or couldn't be checked, Reports and the Weekly Debrief leave that day out rather than use a figure built from two different books, and a line names it: "Left out of this period's account figures:" with the dates and the reason (days with the same reason are listed together). Where that leaves a figure without a start or end record, the report says the record was left out instead of calling it missing, and "3 · Leverage & margin" counts left-out days separately from days with no leverage recorded. The app repairs such days automatically each evening when the journal explains the difference; a repaired day drops off the list.
 """
             )
 

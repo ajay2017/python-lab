@@ -160,21 +160,29 @@ def signal_days_back(today, week_start) -> int:
     return max(1, (today - week_start).days + 1)
 
 
-def unknown_result_reason(recon, account_return) -> str:
+def unknown_result_reason(recon, account_return, excluded=None) -> str:
     """Why the account result is unknown, branching on the stage that failed:
     the deposit/withdrawal read (account_return offline), an unmeasurable
     reconciliation (pre_coverage reason), an account return the engine could not
-    compute while the reconciliation could, else a generic line."""
+    compute while the reconciliation could, else a generic line.
+
+    `excluded` (`account_row_trust.exclude_stale_rows`' list, N1 C6b) lets a
+    pre_coverage reason say that a record in the window was LEFT OUT rather than
+    leave it reading as if no record existed."""
     from stock_analyzer import period_attribution as pa
+    from stock_analyzer import account_row_trust
     ar_status = account_return.get("status") if isinstance(account_return, dict) else None
     recon_status = recon.get("status") if isinstance(recon, dict) else None
     if ar_status == "offline":
         return "the deposit/withdrawal history couldn't be read, so the account's return can't be measured."
     if recon_status == "pre_coverage":
-        return pa.pre_coverage_reason_text(recon)
+        note = account_row_trust.pre_coverage_left_out_note(recon, excluded, see_note=False)
+        return pa.pre_coverage_reason_text(recon) + (" " + note if note else "")
     if ar_status == "pre_coverage":
-        return ("the account's return couldn't be computed over this week's dates "
+        text = ("the account's return couldn't be computed over this week's dates "
                 "(no usable account records at both ends).")
+        note = account_row_trust.period_left_out_note(recon, excluded, see_note=False)
+        return text + (" " + note if note else "")
     return "the account result couldn't be measured for this period."
 
 
@@ -376,7 +384,7 @@ def build_debrief_package(
                 package["equity_end"] = None
 
         if package["performance_pct"] is None:
-            package["result_reason"] = unknown_result_reason(recon, ar)
+            package["result_reason"] = unknown_result_reason(recon, ar, excluded)
 
         if lev is not None and lev.get("status") == "ok":
             package["leverage"] = {
@@ -677,6 +685,12 @@ def _format_prompt(package: dict) -> str:
         reason = package.get("result_reason") or "the account result couldn't be measured for this period."
         lines.append(f"Account result: unknown — {reason}")
         lines.append("  Do not estimate it; say only that it is unknown and why.")
+    if package.get("excluded_account_line"):
+        # N1 C6b: stale account records were masked out of the figures above; the
+        # narrative must not state or imply a figure for those days.
+        lines.append("  Note: " + package["excluded_account_line"]
+                     + " The account change above already leaves these days out; do not "
+                       "state an account value for those dates.")
     ml = _fnum(package.get("max_leverage"))
     if package.get("performance_pct") is not None and ml is not None and ml > 1:
         lines.append(f"  Leverage: up to {ml:.1f}x at the week's endpoints")

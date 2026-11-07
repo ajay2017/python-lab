@@ -432,7 +432,7 @@ def test_premarket_no_partial_line_for_a_healthy_feed(monkeypatch, capsys):
 
 
 # -- failure-email dedup for news-only failures ----------------------------------
-def _run_pm_dedup(monkeypatch, feed, *, row8_date=None, exit_ok=True):
+def _run_pm_dedup(monkeypatch, feed, *, row8_date=None, exit_ok=True, notify_ok=True):
     payload = {"alerts": [], "built_at": "2026-10-13T08:00:00", "errors": [],
                "all_deterioration_signals": [
                    {"ticker": "AAPL", "tier": "WATCH", "composite_score": 60, "price": 200.0,
@@ -454,7 +454,8 @@ def _run_pm_dedup(monkeypatch, feed, *, row8_date=None, exit_ok=True):
                         lambda *a, **k: saves.append(k.get("row_id")) or True)
     monkeypatch.setattr(cr.db, "save_exit_signals_batch", lambda *_a, **_k: exit_ok)
     monkeypatch.setattr(cr, "_send_email", lambda *a, **_k: True)
-    monkeypatch.setattr(cr, "_notify_failure", lambda lane, d: notified.append((lane, d)))
+    monkeypatch.setattr(cr, "_notify_failure",
+                        lambda lane, d: notified.append((lane, d)) or notify_ok)
     rc = cr._run_premarket(NOW_PM, force=True)
     return rc, notified, saves
 

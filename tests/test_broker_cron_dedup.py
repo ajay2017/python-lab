@@ -34,7 +34,7 @@ def test_reads_and_writes_its_own_dedicated_row_not_the_db_outage_row(monkeypatc
     every other test in this file."""
     read_row_ids = []
     written = {}
-    monkeypatch.setattr(cr, "_notify_failure", lambda *_a, **_k: None)
+    monkeypatch.setattr(cr, "_notify_failure", lambda *_a, **_k: True)   # delivered
 
     def _load(row_id):
         read_row_ids.append(row_id)
