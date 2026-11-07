@@ -141,3 +141,27 @@ select t.id, t.ticker, t.traded_at at time zone 'America/New_York' as traded_et,
    and t.traded_at > a.cash_as_of
    and (t.traded_at at time zone 'America/New_York')::time <> time '16:00:00'
  order by t.traded_at, t.id;
+
+-- =====================================================================
+-- APPLIED 2026-11-07 by the owner. Verify 1: all 8 at the Robinhood fill
+-- times, same ET dates, shares / price / links unchanged. Verify 2: 0 rows.
+-- (A second run of the DO block refused on #370, the re-run guard.)
+--
+-- UNDO RECORD (the owner's STEP 0 output before the fix):
+--   370 ENVA  2026-09-15 21:11:01.23574+00   371 CRM  2026-09-15 21:14:48.895015+00
+--   388 ON    2026-09-22 22:19:32.008053+00  396 META 2026-09-30 00:27:09.812874+00
+--   398 MU    2026-09-30 23:52:29.366548+00  434 CRM  2026-10-19 21:07:54.19154+00
+--   470 CSCO  2026-11-05 00:12:59.917966+00  471 CSCO 2026-11-05 00:14:02.453334+00
+-- To undo (only if ever needed; check with a review first, since a repair
+-- may have been applied on top of the corrected times):
+-- update public.trades set traded_at = v.ts
+--   from (values (370::bigint, timestamptz '2026-09-15 21:11:01.23574+00'),
+--                (371, timestamptz '2026-09-15 21:14:48.895015+00'),
+--                (388, timestamptz '2026-09-22 22:19:32.008053+00'),
+--                (396, timestamptz '2026-09-30 00:27:09.812874+00'),
+--                (398, timestamptz '2026-09-30 23:52:29.366548+00'),
+--                (434, timestamptz '2026-10-19 21:07:54.19154+00'),
+--                (470, timestamptz '2026-11-05 00:12:59.917966+00'),
+--                (471, timestamptz '2026-11-05 00:14:02.453334+00')) as v(id, ts)
+--  where trades.id = v.id;
+-- =====================================================================
