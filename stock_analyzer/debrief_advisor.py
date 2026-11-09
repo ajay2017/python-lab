@@ -32,7 +32,7 @@ Example (entry): "• NVDA: Strong Buy new position signal (confirmed, surfaced 
 Example (protective): "• TSLA: TRIM signal (surfaced 2×). You held — not acted on. When it fired on 2026-07-22 the position was 9.2% below its peak, P&L −4.1%."
 A protective signal's drawdown and P&L are a snapshot from the day it fired — always say that day, and never present them as the week-end figure or as a distance "from peak" with a plus sign.
 If a ticker appears under "Positions fully closed this week", write ONLY: "• TICKER: Position closed this week." — do NOT describe it as a price loss or wipeout; closing a position on a signal is correct behaviour.
-If no signals of either kind were surfaced, write "• No actionable signals were surfaced this week."
+If no signals of either kind were surfaced, write "• No actionable signals were surfaced this week." — but only when the data says signals were checked and none fired; if the data says a kind of signal couldn't be loaded, never write that none were surfaced for it.
 
 Section 3 — PATTERNS THIS WEEK (1–3 bullets, or "No clear pattern this week." if none):
 What behavioural pattern, if any, showed up? Combine this week's signals with any "Behavioral pattern" and "Decision quality" blocks in the data package:
@@ -42,7 +42,7 @@ What behavioural pattern, if any, showed up? Combine this week's signals with an
 Other named patterns (use only when applicable to this week):
 - Signal follower: acted on ≥80% of actionable signals this week
 - Concentration creep: added to a name already above single-name ceiling
-- Calm week: no signals fired or all signals acted on cleanly
+- Calm week: no signals fired or all signals acted on cleanly (only when every signal kind was loaded; never when the data says a kind couldn't be loaded)
 Note: a low raw action rate alone is NOT a named pattern — only flag it if it tracks a specific dimension like conviction tier or momentum.
 
 Section 4 — ONE THING TO WATCH (1–2 sentences):
@@ -181,13 +181,48 @@ def protective_signals_status(exit_signals_df, unavailable: bool = False) -> str
     return "ok" if exit_signals_df is not None else "not_supplied"
 
 
+# Statuses that mean "we have no verified read of the protective signals": a
+# failed read, or no frame supplied at all (the legacy path).  Neither may ever
+# be narrated as "no signals fired".
+_PROTECTIVE_UNVERIFIED = ("unavailable", "not_supplied")
+
+
 def protective_unavailable_note(package) -> "str | None":
-    """The visible line for a package whose protective-signal read failed, else
-    None.  Appended to the saved Decisions text so the stored debrief, its email
-    and the in-app view all carry it (the narrative is where protective signals
-    are discussed)."""
-    if isinstance(package, dict) and package.get("protective_signals_status") == "unavailable":
+    """The visible line for a package whose protective-signal read failed (or was
+    never supplied), else None.  Appended to the saved Decisions text so the
+    stored debrief, its email and the in-app view all carry it (the narrative is
+    where protective signals are discussed)."""
+    if isinstance(package, dict) and package.get("protective_signals_status") in _PROTECTIVE_UNVERIFIED:
         return PROTECTIVE_UNAVAILABLE_NOTE
+    return None
+
+
+# The recommendations read can fail the same way.  An empty frame is a genuinely
+# quiet week; a failed read (None) is not, and must never print "No actionable
+# signals were surfaced this week."  Wording only -- no policy value.
+RECS_UNAVAILABLE_PROMPT_LINE = (
+    "Entry signals (new positions / adds to winners) couldn't be loaded for this "
+    "week; do not say there were none.")
+RECS_UNAVAILABLE_NOTE = (
+    "Entry signals couldn't be loaded for this week, so this section is missing "
+    "(not a quiet week).")
+
+
+def recs_status(recs_df, unavailable: bool = False) -> str:
+    """How the entry-signal (recommendations) input stands: "unavailable" (the
+    caller's read failed, or no frame at all -- a None frame never reads as zero
+    signals) or "ok" (a frame was supplied, possibly empty = a genuinely quiet
+    week)."""
+    if unavailable or recs_df is None:
+        return "unavailable"
+    return "ok"
+
+
+def recs_unavailable_note(package) -> "str | None":
+    """The visible line for a package whose recommendations read failed, else
+    None.  Appended to the saved Decisions text alongside the protective note."""
+    if isinstance(package, dict) and package.get("recs_status") == "unavailable":
+        return RECS_UNAVAILABLE_NOTE
     return None
 
 
@@ -305,6 +340,7 @@ def build_debrief_package(
     all_recs_df=None,
     exit_signals_df=None,
     exit_signals_unavailable: bool = False,
+    recs_unavailable: bool = False,
 ) -> dict:
     """
     Assemble the structured data package for the LLM.
@@ -324,6 +360,13 @@ def build_debrief_package(
                   The frame is then ignored, the package records
                   protective_signals_status="unavailable", and the prompt and
                   the generated text say the section is missing, never "none".
+                  A legacy call with no frame and no flag ("not_supplied") is
+                  disclosed the same way -- it can never read as "none fired".
+    recs_unavailable: True when the caller's recommendations read FAILED.
+                  recs_df is then ignored (the recs-derived lists stay empty),
+                  the package records recs_status="unavailable", and the prompt
+                  and the generated text say the entry signals are missing.
+                  recs_df=None is treated as unavailable too.
 
     Returns a dict consumed by generate_debrief().  `narratable` is False when
     the engine is offline -- generate_debrief() then writes nothing.
@@ -379,6 +422,7 @@ def build_debrief_package(
         "protective_signals":     [],
         "protective_signals_status": protective_signals_status(
             exit_signals_df, exit_signals_unavailable),
+        "recs_status":            recs_status(recs_df, recs_unavailable),
         "broken_theses":          broken_theses or [],
         "behavioral":             {},
         "decision_quality_month": None,
@@ -493,6 +537,10 @@ def build_debrief_package(
     # Recommendations surfaced this week — actionable types only.
     # buy_candidate is an awareness-only feed; including it inflates the signal
     # count and makes action-rate comparisons misleading.
+    if recs_unavailable:
+        # a frame flagged unavailable is never read: no recs-derived list, and no
+        # fall-back to it in the behavioural block below
+        recs_df = None
     if recs_df is not None and not (hasattr(recs_df, "empty") and recs_df.empty):
         date_col = "rec_date" if "rec_date" in recs_df.columns else (
             "surfaced_at" if "surfaced_at" in recs_df.columns else None
@@ -788,10 +836,12 @@ def _format_prompt(package: dict) -> str:
             conviction  = r.get("conviction", "")
             conv_str    = f" ({conviction})" if conviction else ""
             lines.append(f"  {r['ticker']}: {label}{conv_str}{verdict_str}{times_str} — {acted_str}{end_str}")
+    elif package.get("recs_status") == "unavailable":
+        lines.append(RECS_UNAVAILABLE_PROMPT_LINE)
     else:
         lines.append("No actionable signals were surfaced this week.")
 
-    if package.get("protective_signals_status") == "unavailable":
+    if package.get("protective_signals_status") in _PROTECTIVE_UNVERIFIED:
         lines.append("")
         lines.append(PROTECTIVE_UNAVAILABLE_PROMPT_LINE)
     elif package.get("protective_signals"):
@@ -933,12 +983,13 @@ def generate_debrief(
             _last = next((k for k in reversed(list(sections)) if sections.get(k)), None)
             if _last is not None:
                 sections[_last] = sections[_last].rstrip() + " … (cut off — the debrief hit its length limit)"
-        _note = protective_unavailable_note(package)
-        if _note:
-            # deterministic disclosure, not left to the model: a stored debrief
-            # that silently lacks its protective section reads as a quiet week
-            sections["section_decisions"] = (
-                (sections.get("section_decisions") or "").rstrip() + "\n\n" + _note).strip()
+        for _note in (protective_unavailable_note(package),
+                      recs_unavailable_note(package)):
+            if _note:
+                # deterministic disclosure, not left to the model: a stored debrief
+                # that silently lacks a signal section reads as a quiet week
+                sections["section_decisions"] = (
+                    (sections.get("section_decisions") or "").rstrip() + "\n\n" + _note).strip()
         return {
             "week_ending":      package["week_ending"],
             "metrics_version":  package["metrics_version"],

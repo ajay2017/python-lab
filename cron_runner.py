@@ -2859,31 +2859,36 @@ def _run_debrief(now_et, force: bool) -> int:
         _notify_debrief_failure(_LAST_LANE_FAILURE_DETAIL)
         return 1
 
-    # Load recommendations for the week
-    recs_df   = db.load_recommendations(start_date=week_start, end_date=week_ending)
+    # Load recommendations for the week. DebRecs: the _or_none read, because the
+    # lenient db.load_recommendations() returns an EMPTY frame on a failed read and
+    # the saved debrief then said "No actionable signals were surfaced this week."
+    # None is passed on as recs_unavailable (disclosed in the debrief, lane failure).
+    recs_df   = db.load_recommendations_or_none(start_date=week_start, end_date=week_ending)
+    recs_unavailable = recs_df is None
+    if recs_unavailable:
+        _log("debrief: recommendations lookup failed — this week's debrief will "
+             "disclose its entry-signal section as unavailable (this is NOT a "
+             "genuinely quiet week; check DB connectivity).")
+        _repair_failures = list(_repair_failures) + [
+            "debrief: recommendations unreadable — entry signals disclosed as unavailable"]
     trades_df = inputs["trades_df"]
     # Full recommendation history for behavioral fingerprint patterns (all-time).
-    all_recs_df = db.load_recommendations()
+    # Optional enrichment (build_debrief_package handles None), so a failed read
+    # is logged but is not a lane failure.
+    all_recs_df = db.load_recommendations_or_none()
+    if all_recs_df is None:
+        _log("debrief: full recommendation history lookup failed — the "
+             "behavioural-pattern block falls back to this week's "
+             "recommendations only (or is skipped if those failed too).")
     # Protective (WATCH/TRIM/EXIT) signals for the week — the symmetric
     # counterpart to recs_df above. days_back=10 comfortably covers the
     # 7-day window; build_debrief_package does the exact date filtering.
-    # 2026-09-24 app review, J2: was db.load_exit_signals(), whose own
-    # docstring says its except branch "returns the same empty DataFrame
-    # either way" on a failed read or a genuine zero-signal week --
-    # build_debrief_package already has its own correct None-vs-empty
-    # contract (exit_signals_df=None is documented "optional; omitted
-    # gracefully"), but a failed read collapsing to an empty frame meant a
-    # DB hiccup silently persisted this week's debrief with NO protective-
-    # signal section, indistinguishable from a genuinely quiet week, into a
-    # frozen historical artifact. Now uses load_exit_signals_or_none() so a
-    # failure is at least visible in the cron log (see below) -- lower
-    # stakes than A1/J1 (a retrospective review, not a deploy-capital rec),
-    # so the fix is scoped to correctness + observability, not a deeper
-    # narrative-disclosure change to build_debrief_package itself.
-    # Deb: a None read is now also passed on as exit_signals_unavailable, so the
-    # saved / emailed debrief SAYS its protective section is missing, and the lane
-    # reports a failure (heartbeat + notification). The debrief itself still saves
-    # and sends, degraded and disclosed -- never blocked.
+    # Uses load_exit_signals_or_none() (the lenient load_exit_signals() returns an
+    # empty frame on a failed read, which would read as a quiet week). Deb: a None
+    # read is passed on as exit_signals_unavailable, so the saved / emailed debrief
+    # SAYS its protective section is missing, and the lane reports a failure
+    # (heartbeat + notification). The debrief itself still saves and sends,
+    # degraded and disclosed -- never blocked.
     exit_signals_df = db.load_exit_signals_or_none(
         days_back=_da.signal_days_back(now_et.date(), week_start))
     exit_signals_unavailable = exit_signals_df is None
@@ -2921,9 +2926,10 @@ def _run_debrief(now_et, force: bool) -> int:
         all_recs_df   = all_recs_df,
         exit_signals_df = exit_signals_df,
         exit_signals_unavailable = exit_signals_unavailable,
+        recs_unavailable = recs_unavailable,
     )
     _log(f"debrief: result_status={package.get('result_status')} · "
-         f"{len(recs_df) if not recs_df.empty else 0} rec(s) · "
+         f"recs={'unreadable' if recs_unavailable else len(recs_df)} · "
          f"account={package.get('performance_pct')} · SPY={package.get('spy_pct')}")
 
     result = _da.generate_debrief(package, api_key)

@@ -45545,10 +45545,14 @@ elif page == "🧠 AI Insights":
                         "unreachable. Try again in a moment."
                     )
                 else:
-                    _wd_recs = _ai_db.load_recommendations(
+                    _wd_recs = _ai_db.load_recommendations_or_none(
                         start_date=_wd_start, end_date=_wd_today
                     )
-                    _wd_all_recs = _ai_db.load_recommendations()
+                    _wd_all_recs = _ai_db.load_recommendations_or_none()
+                    if _wd_recs is None:
+                        st.warning(
+                            "Recommendations couldn't be read, so this debrief will say "
+                            "its entry signals are missing.")
                     _wd_exit_sigs = _ai_db.load_exit_signals_or_none(
                         days_back=_dba.signal_days_back(_today_et(), _wd_start))
                     # Latest review per ticker, current holdings only (a thesis
@@ -45581,6 +45585,7 @@ elif page == "🧠 AI Insights":
                         all_recs_df   = _wd_all_recs,
                         exit_signals_df = _wd_exit_sigs,
                         exit_signals_unavailable = (_wd_exit_sigs is None),
+                        recs_unavailable = (_wd_recs is None),
                     )
                     _wd_result = _dba.generate_debrief(_wd_pkg, _ai_api_key)
                     if _wd_result is None:

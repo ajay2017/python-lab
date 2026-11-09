@@ -505,7 +505,14 @@ def _generic_core(flows=(), income=()):
     return core, t
 
 
-def _generic_pkg(recs_df=None, trades_extra=None, **kw):
+_MISSING = object()
+
+
+def _generic_pkg(recs_df=_MISSING, trades_extra=None, **kw):
+    # default = a SUPPLIED empty frame (a genuinely quiet week); pass recs_df=None
+    # explicitly for the unreadable case (DebRecs)
+    if recs_df is _MISSING:
+        recs_df = pd.DataFrame()
     core, t = _generic_core()
     tr = t if trades_extra is None else pd.concat([t, pd.DataFrame(trades_extra)], ignore_index=True)
     return da.build_debrief_package(WEEK_ENDING, core, recs_df, tr, **kw)
@@ -738,13 +745,15 @@ def test_empty_frame_is_a_genuine_quiet_week_with_no_disclosure_line():
     assert da.protective_unavailable_note(pkg) is None
 
 
-def test_default_call_is_unchanged_not_supplied_reads_as_before():
+def test_not_supplied_protective_input_is_disclosed_never_a_quiet_week():
+    # Deb review follow-up: no frame and no flag used to print "none fired"
     pkg = _generic_pkg()                                  # no exit-signal kwargs at all
-    assert pkg["protective_signals_status"] == "not_supplied"
+    assert pkg["protective_signals_status"] == "not_supplied"   # status value stays distinct
     assert pkg["protective_signals"] == []
     prompt = da._format_prompt(pkg)
-    assert _QUIET_LINE in prompt and "couldn't be loaded" not in prompt
-    assert da.protective_unavailable_note(pkg) is None
+    assert _QUIET_LINE not in prompt
+    assert da.PROTECTIVE_UNAVAILABLE_PROMPT_LINE in prompt
+    assert da.protective_unavailable_note(pkg) == da.PROTECTIVE_UNAVAILABLE_NOTE
     assert da.protective_unavailable_note({}) is None     # a handwritten package, no key
     assert da.protective_unavailable_note(None) is None
 
@@ -759,7 +768,7 @@ def test_populated_frame_still_lists_signals_and_status_ok():
 
 def test_generated_debrief_carries_the_note_in_the_saved_decisions_text():
     core, (t, _a, _dl) = _week_core()
-    pkg = da.build_debrief_package(SUN, core, None, t, exit_signals_unavailable=True)
+    pkg = da.build_debrief_package(SUN, core, pd.DataFrame(), t, exit_signals_unavailable=True)
     _install_fake_anthropic(_RAW)
     result = da.generate_debrief(pkg, api_key="fake-key")
     assert result["section_decisions"] == "Decisions text.\n\n" + da.PROTECTIVE_UNAVAILABLE_NOTE
@@ -773,8 +782,8 @@ def test_generated_debrief_carries_the_note_in_the_saved_decisions_text():
 
 def test_generated_debrief_without_failure_has_no_note():
     core, (t, _a, _dl) = _week_core()
-    for kw in ({}, {"exit_signals_df": pd.DataFrame()}):
-        pkg = da.build_debrief_package(SUN, core, None, t, **kw)
+    for kw in ({"exit_signals_df": pd.DataFrame()},):
+        pkg = da.build_debrief_package(SUN, core, pd.DataFrame(), t, **kw)
         _install_fake_anthropic(_RAW)
         result = da.generate_debrief(pkg, api_key="fake-key")
         assert result["section_decisions"] == "Decisions text."
@@ -783,15 +792,105 @@ def test_generated_debrief_without_failure_has_no_note():
 def test_email_body_shows_the_unavailable_line():
     from stock_analyzer import notify
     core, (t, _a, _dl) = _week_core()
-    pkg = da.build_debrief_package(SUN, core, None, t, exit_signals_unavailable=True)
+    pkg = da.build_debrief_package(SUN, core, pd.DataFrame(), t, exit_signals_unavailable=True)
     _install_fake_anthropic(_RAW)
     result = da.generate_debrief(pkg, api_key="fake-key")
     html = notify.render_debrief_email(result, period=pkg)
     assert "so this section is missing (not a quiet week)." in html
-    quiet = da.build_debrief_package(SUN, core, None, t, exit_signals_df=pd.DataFrame())
+    quiet = da.build_debrief_package(SUN, core, pd.DataFrame(), t, exit_signals_df=pd.DataFrame())
     _install_fake_anthropic(_RAW)
     html_ok = notify.render_debrief_email(da.generate_debrief(quiet, api_key="fake-key"), period=quiet)
     assert "not a quiet week" not in html_ok
+
+
+# ─── DebRecs: a failed recommendations read is disclosed, never a quiet week ──
+
+_NO_SIGNALS_LINE = "No actionable signals were surfaced this week."
+
+
+def _quiet_protective(**kw):
+    # protective input supplied + empty, so only the entry-signal input varies
+    return _generic_pkg(exit_signals_df=pd.DataFrame(), **kw)
+
+
+def _one_rec():
+    return pd.DataFrame([{"ticker": "AAA", "rec_type": "new_pick", "rec_date": "2026-07-21",
+                          "verdict": "Buy", "conviction": "Buy"}])
+
+
+def test_recs_status_helper_contract():
+    assert da.recs_status(None) == "unavailable"
+    assert da.recs_status(None, unavailable=True) == "unavailable"
+    assert da.recs_status(pd.DataFrame()) == "ok"
+    assert da.recs_status(_one_rec(), unavailable=True) == "unavailable"
+    assert da.recs_status(_one_rec()) == "ok"
+
+
+def test_none_recs_frame_is_unavailable_never_zero_signals():
+    pkg = _quiet_protective(recs_df=None)
+    assert pkg["recs_status"] == "unavailable"
+    assert pkg["recs_surfaced"] == []
+    prompt = da._format_prompt(pkg)
+    assert da.RECS_UNAVAILABLE_PROMPT_LINE in prompt
+    assert _NO_SIGNALS_LINE not in prompt
+    assert da.recs_unavailable_note(pkg) == (
+        "Entry signals couldn't be loaded for this week, so this section is "
+        "missing (not a quiet week).")
+
+
+def test_recs_unavailable_flag_wins_over_a_supplied_frame():
+    ok = _quiet_protective(recs_df=_one_rec())
+    assert [r["ticker"] for r in ok["recs_surfaced"]] == ["AAA"]   # control: the frame is readable
+    pkg = _quiet_protective(recs_df=_one_rec(), recs_unavailable=True)
+    assert pkg["recs_status"] == "unavailable"
+    assert pkg["recs_surfaced"] == [] and pkg["signals_ignored"] == []
+    prompt = da._format_prompt(pkg)
+    assert da.RECS_UNAVAILABLE_PROMPT_LINE in prompt and _NO_SIGNALS_LINE not in prompt
+
+
+def test_empty_recs_frame_is_a_genuine_quiet_week():
+    pkg = _quiet_protective(recs_df=pd.DataFrame(), recs_unavailable=False)
+    assert pkg["recs_status"] == "ok"
+    prompt = da._format_prompt(pkg)
+    assert _NO_SIGNALS_LINE in prompt and "couldn't be loaded" not in prompt
+    assert da.recs_unavailable_note(pkg) is None
+    assert da.recs_unavailable_note({}) is None and da.recs_unavailable_note(None) is None
+
+
+def test_populated_recs_still_listed_with_status_ok():
+    pkg = _quiet_protective(recs_df=_one_rec())
+    assert pkg["recs_status"] == "ok"
+    prompt = da._format_prompt(pkg)
+    assert "AAA: New position" in prompt and da.RECS_UNAVAILABLE_PROMPT_LINE not in prompt
+
+
+def test_generated_debrief_carries_the_recs_note_alone():
+    core, (t, _a, _dl) = _week_core()
+    pkg = da.build_debrief_package(SUN, core, None, t, exit_signals_df=pd.DataFrame())
+    _install_fake_anthropic(_RAW)
+    result = da.generate_debrief(pkg, api_key="fake-key")
+    assert result["section_decisions"] == "Decisions text.\n\n" + da.RECS_UNAVAILABLE_NOTE
+    assert "$" not in da.RECS_UNAVAILABLE_NOTE and "**" not in da.RECS_UNAVAILABLE_NOTE
+    assert set(result) <= set(db._WEEKLY_DEBRIEF_COLS)
+
+
+def test_generated_debrief_carries_both_notes_protective_first():
+    core, (t, _a, _dl) = _week_core()
+    pkg = da.build_debrief_package(SUN, core, None, t, exit_signals_unavailable=True,
+                                   recs_unavailable=True)
+    _install_fake_anthropic(_RAW)
+    result = da.generate_debrief(pkg, api_key="fake-key")
+    assert result["section_decisions"] == (
+        "Decisions text.\n\n" + da.PROTECTIVE_UNAVAILABLE_NOTE + "\n\n" + da.RECS_UNAVAILABLE_NOTE)
+    # a reply with an empty Decisions section still shows both
+    _install_fake_anthropic("**What happened**\nFacts text.")
+    only_facts = da.generate_debrief(pkg, api_key="fake-key")
+    assert only_facts["section_decisions"] == (
+        da.PROTECTIVE_UNAVAILABLE_NOTE + "\n\n" + da.RECS_UNAVAILABLE_NOTE)
+
+
+def test_system_prompt_forbids_none_claim_for_an_unloaded_signal_kind():
+    assert "couldn't be loaded" in da._SYSTEM_PROMPT
 
 
 # ─── behavioral / decision-quality enrichment ─────────────────────────────────

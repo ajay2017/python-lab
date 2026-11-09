@@ -164,7 +164,7 @@ def test_run_debrief_no_minimum_snapshot_floor_anymore(monkeypatch):
     def _stop(**kw):
         reached.append(kw)
         raise RuntimeError("stop here")
-    monkeypatch.setattr(cr.db, "load_recommendations", _stop)
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none", _stop)
     monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none", lambda: pd.DataFrame())
     monkeypatch.setattr(cr.db, "load_holdings_or_none", lambda: pd.DataFrame({"Ticker": []}))
     with pytest.raises(RuntimeError, match="stop here"):
@@ -192,7 +192,7 @@ def _full_lane(monkeypatch, *, generate, saved, notified, repair=None, calls=Non
         "daily_snapshots_df": pd.DataFrame(), "flows": [], "income_events": []})
     monkeypatch.setattr(pi, "compute_period_core", lambda *a, **k: {})
     monkeypatch.setattr(sdata, "fetch_spy", lambda period="6mo": None)
-    monkeypatch.setattr(cr.db, "load_recommendations", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none", lambda **k: pd.DataFrame())
     monkeypatch.setattr(cr.db, "load_exit_signals_or_none", lambda days_back=10: pd.DataFrame())
     monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none", lambda: pd.DataFrame())
     monkeypatch.setattr(cr.db, "load_holdings_or_none", lambda: pd.DataFrame({"Ticker": []}))
@@ -419,6 +419,70 @@ def test_run_debrief_unreadable_exit_signals_keeps_the_repair_fingerprint_commit
     assert rc == 1 and len(notified) == 1
     assert "account_snapshot_repair: refused" in notified[0][1] and _EXIT_LINE in notified[0][1]
     assert committed == ["fp-1"]
+
+
+# ── DebRecs: an unreadable recommendations read is disclosed and fails the heartbeat ──
+
+_RECS_LINE = "debrief: recommendations unreadable — entry signals disclosed as unavailable"
+
+
+def _lane_with_recs_read(monkeypatch, week_read, *, all_read=pd.DataFrame(), exit_read=None):
+    """Run the fully-mocked lane once, then re-run it with `week_read` as the
+    week-scoped load_recommendations_or_none result (`all_read` for the no-arg
+    full-history call), capturing the build kwargs and the calls."""
+    from stock_analyzer import debrief_advisor as da
+    notified, calls, kws, logs = [], [], [], []
+    _full_lane(monkeypatch, generate=dict(_RESULT), saved=True, notified=notified, calls=calls)
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none",
+                        lambda **k: week_read if k else all_read)
+    if exit_read is not None:
+        monkeypatch.setattr(cr.db, "load_exit_signals_or_none",
+                            lambda days_back=10: exit_read[0])
+    monkeypatch.setattr(da, "build_debrief_package",
+                        lambda **k: kws.append(k) or
+                        {"narratable": True, "result_status": "ok", "week_ending": "2026-08-09"})
+    monkeypatch.setattr(cr, "_log", lambda msg: logs.append(msg))
+    notified.clear()
+    calls.clear()
+    monkeypatch.setattr(cr, "_LAST_LANE_FAILURE_DETAIL", None)
+    rc = cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
+    return rc, notified, calls, kws, logs
+
+
+def test_run_debrief_unreadable_recs_is_disclosed_and_fails_the_heartbeat(monkeypatch):
+    rc, notified, calls, kws, logs = _lane_with_recs_read(monkeypatch, None)
+    assert len(kws) == 1 and kws[0]["recs_unavailable"] is True
+    assert kws[0]["recs_df"] is None
+    assert calls == ["generate", "save"]                  # still generated AND saved, never blocked
+    assert rc == 1
+    assert notified == [("debrief", "debrief saved; " + _RECS_LINE)]
+    assert cr._LAST_LANE_FAILURE_DETAIL == "debrief saved; " + _RECS_LINE
+    assert any("recommendations lookup failed" in m for m in logs)
+    assert any("recs=unreadable" in m for m in logs)      # the result line no longer crashes on None
+
+
+def test_run_debrief_readable_recs_passes_not_unavailable_and_stays_green(monkeypatch):
+    for frame in (pd.DataFrame(), pd.DataFrame([{"ticker": "AAA"}])):
+        rc, notified, calls, kws, _logs = _lane_with_recs_read(monkeypatch, frame)
+        assert kws[0]["recs_unavailable"] is False
+        assert rc == 0 and notified == [] and cr._LAST_LANE_FAILURE_DETAIL is None
+        assert calls == ["generate", "save"]
+
+
+def test_run_debrief_unreadable_full_history_is_logged_but_not_a_lane_failure(monkeypatch):
+    # the behavioural fingerprint is optional enrichment: log only, stay green
+    rc, notified, calls, kws, logs = _lane_with_recs_read(
+        monkeypatch, pd.DataFrame(), all_read=None)
+    assert rc == 0 and notified == [] and cr._LAST_LANE_FAILURE_DETAIL is None
+    assert kws[0]["all_recs_df"] is None and kws[0]["recs_unavailable"] is False
+    assert any("full recommendation history lookup failed" in m for m in logs)
+
+
+def test_run_debrief_both_signal_reads_failing_names_both_failures(monkeypatch):
+    rc, notified, _calls, kws, _logs = _lane_with_recs_read(monkeypatch, None, exit_read=(None,))
+    assert kws[0]["recs_unavailable"] is True and kws[0]["exit_signals_unavailable"] is True
+    assert rc == 1 and len(notified) == 1
+    assert _EXIT_LINE in notified[0][1] and _RECS_LINE in notified[0][1]
 
 
 # ── _run_monthly_report: same anchor, same guarantee ──────────────────────────

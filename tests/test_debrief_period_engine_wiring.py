@@ -77,9 +77,12 @@ def test_app_debrief_block_uses_the_same_helper_and_passes_the_signal_frames(app
             "spy_closes_by_date"} <= names
     build = next(c for n, c in calls if n == "build_debrief_package")
     kws = {k.arg for k in build.keywords}
-    assert {"core", "exit_signals_df", "exit_signals_unavailable", "all_recs_df",
+    assert {"core", "exit_signals_df", "exit_signals_unavailable", "recs_unavailable", "all_recs_df",
             "trades_df", "recs_df"} <= kws
     assert "snapshots_df" not in kws and "spy_week_pct" not in kws
+    # both ends pinned (DebRecs review 2026-11-09): the page reads signals strictly
+    assert "load_recommendations_or_none" in names and "load_recommendations" not in names
+    assert "load_exit_signals_or_none" in names and "load_exit_signals" not in names
     # the legacy outage-vs-insufficient classifier is gone from the page
     assert "classify_snapshot_read" not in names and "load_daily_snapshots_or_none" not in names
     # trades come from the engine inputs, not the session's cached frame
@@ -107,9 +110,10 @@ def test_cron_debrief_uses_the_shared_engine_path():
     assert "load_daily_snapshots" not in names and "classify_snapshot_read" not in names
     assert "load_trades" not in names           # trades come from the engine inputs
     assert "load_exit_signals_or_none" in names and "load_exit_signals" not in names
+    assert "load_recommendations_or_none" in names and "load_recommendations" not in names
     build = next(c for n, c in calls if n == "build_debrief_package")
     kws = {k.arg for k in build.keywords}
-    assert {"core", "exit_signals_df", "exit_signals_unavailable", "all_recs_df",
+    assert {"core", "exit_signals_df", "exit_signals_unavailable", "recs_unavailable", "all_recs_df",
             "trades_df", "recs_df"} <= kws
     email = next(c for n, c in calls if n == "render_debrief_email")
     ekw = {k.arg for k in email.keywords}
