@@ -109,7 +109,13 @@ def october_hint(repaired_dates) -> "str | None":
         return None
     return ("October monthly return (Reports): its end anchor is the last valid October "
             f"account row; repaired October date(s): {', '.join(d.isoformat() for d in octs)}. "
-            "Regenerate the October monthly report after applying.")
+            "Nothing to regenerate: after applying, hard-refresh the app (Ctrl+F5; the "
+            "account rows are cached per session for the day) and open Reports > "
+            "Performance Review with an October period (Last month during November, else "
+            "Custom), which recomputes it. Don't use Monthly Portfolio Intelligence's "
+            "Generate button: that report doesn't read account rows, and "
+            "the button saves a NEW trailing 4-week report that takes over its month's "
+            "slot in the picker.")
 
 
 def _fmt(v, spec="{:,.2f}"):
