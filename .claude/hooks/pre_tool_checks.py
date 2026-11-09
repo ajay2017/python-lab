@@ -1127,6 +1127,13 @@ _GATE_FILES = {
     # cent, and so what `account_snapshot_backfill.py --explain` writes -- a
     # DB-write / data-integrity path, same class as account_snapshot_repair.
     "stock_analyzer/explained_gap_repair.py",
+    # Added 2026-11-09 (TJDate C1): the pure log-time checks for a hand-entered
+    # trade -- default date, fill-time requirement, the stored traded_at, the
+    # NON_TRADING_DATE / OUTSIDE_RTH / FUTURE and price-band findings, and the
+    # match against unlinked Robinhood fills -- which decide what the Trade
+    # Journal form blocks, ticks or switches to the broker-prefill path; a wrong
+    # call stores a wrong date, time or price in the journal that sizes every sell.
+    "stock_analyzer/trade_entry_checks.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per

@@ -2163,6 +2163,13 @@ JOURNAL_MATCH_PRICE_TOL_USD   = 0.01  # two prices within this ($/share) are "th
 TRADE_LOG_DUP_WINDOW_SESSIONS = 1     # a new entry is compared with rows up to this many trading sessions away (same price only beyond the same day)
 JOURNAL_MATCH_WINDOW_SESSIONS = 3     # a pending broker fill and an unlinked journal row this many trading sessions apart (or fewer) can be suggested as the same trade (Pending Imports hint)
 
+# ── Log-time trade-entry checks (trade_entry_checks.py, TJDate C1). Owner-agreed
+# 2026-11-02 as U4 (docs/plans/trade-entry-guard.md).
+TRADE_LOG_PRICE_BAND_TOL_PCT        = 1.0   # % a logged price may sit outside that session's low-high before it is flagged
+TRADE_LOG_PRICE_CHECK_MAX_AGE_DAYS  = 35    # a trade dated more calendar days ago than this is not price-checked (shown as unchecked, with the reason)
+NYSE_REGULAR_OPEN_ET                = (9, 30)   # (hour, minute) ET the regular session opens; a calendar fact, not a gate
+NYSE_REGULAR_CLOSE_ET               = (16, 0)   # (hour, minute) ET the regular session closes; early-close days use NYSE_EARLY_CLOSES instead
+
 # Truncation-ambiguity bound for daily_pnl.reconcile_baseline()'s qty_drift
 # unit guard. A DIFFERENT question from BROKER_DRIFT_SHARE_TOL above: that one
 # absorbs float rounding noise (~0.001 shares); this one absorbs int()
