@@ -87,7 +87,8 @@ def test_dry_run_makes_zero_writes_and_reports(world, capsys):
     assert rc == 0 and world.applied == []
     assert "partial_quantity" in out and "missing_ticker" in out
     assert "Dry run: nothing written" in out
-    assert "week ending 2026-11-01" in out and "October monthly return" in out
+    assert "week ending 2026-11-01" in out and "Monthly returns (Reports)" in out
+    assert "October 2026" in out and "Explained-gap" not in out
 
 
 def test_apply_aborts_when_probe_false_or_none(world):
@@ -163,3 +164,162 @@ def test_empty_debrief_frame_prints_the_unreadable_note(world, monkeypatch, caps
     monkeypatch.setattr(S.db, "load_weekly_debriefs", lambda limit=4: pd.DataFrame())
     S.main([])
     assert "debriefs couldn't be read, or none exist" in capsys.readouterr().out
+
+
+# -- --explain (N1-LogTime): owner-named trades that explain a "needs review" gap ----
+
+class GapWorld:
+    """Two legacy rows whose gross_book is short by one hand-logged BUY each:
+    09-22 by ON #388 (10 @ 73.60 = 736.00), 09-29 by META #396 (1 @ 500.00)."""
+
+    def __init__(self):
+        self.acct = [_legacy("2026-09-22", 500.0, -300.0),
+                     _legacy("2026-09-29", 1236.0, -300.0)]
+        self.trades = pd.DataFrame([
+            _trade(1, "AAA", 10, EARLY),
+            _trade(388, "ON", 10, "2026-09-22T19:30:00+00:00"),
+            _trade(396, "META", 1, "2026-09-29T19:30:00+00:00")])
+        rows = []
+        for d, sh in (("2026-09-22", {"AAA": 10, "ON": 10}),
+                      ("2026-09-29", {"AAA": 10, "ON": 10, "META": 1})):
+            for tk, n in sh.items():
+                px = {"AAA": 50.0, "ON": 73.6, "META": 500.0}[tk]
+                rows.append({"snapshot_date": d, "ticker": tk, "shares": n, "close_price": px})
+        self.snap = pd.DataFrame(rows)
+        self.applied = []
+        self.fields = {}
+        self.write_ok = True
+        self.persist = True
+
+
+@pytest.fixture
+def gap(monkeypatch):
+    w = GapWorld()
+    monkeypatch.setenv("SUPABASE_URL", "u")
+    monkeypatch.setenv("SUPABASE_KEY", "k")
+    monkeypatch.setattr(S.db, "load_account_daily_snapshots",
+                        lambda start_date=None: pd.DataFrame(w.acct))
+    monkeypatch.setattr(S.db, "load_trades_or_none", lambda: w.trades)
+    monkeypatch.setattr(S.db, "load_daily_snapshots_or_none", lambda start_date=None: w.snap)
+    monkeypatch.setattr(S.db, "load_weekly_debriefs", lambda limit=4: pd.DataFrame())
+    monkeypatch.setattr(S.db, "account_snapshot_provenance_available", lambda: True)
+
+    def _apply(d, fields):
+        w.applied.append(d)
+        w.fields[d] = fields
+        if not w.write_ok:
+            return False
+        if w.persist:
+            for r in w.acct:
+                if r["snapshot_date"] == d:
+                    r.update(fields)
+        return True
+    monkeypatch.setattr(S.db, "apply_account_snapshot_repair", _apply)
+    monkeypatch.setattr(S.data_mod, "fetch_unadjusted_history", lambda tk, period: None)
+    return w
+
+
+@pytest.mark.parametrize("bad", [
+    ["2026-09-22"],                                   # no =IDS
+    ["09-22=388"],                                    # bad date
+    ["2026-09-22=abc"],                               # not an int
+    ["2026-09-22=0"],                                 # not positive
+    ["2026-09-22=388+"],                              # empty id
+    ["2026-09-22=388", "2026-09-22=389"],             # date repeated
+    ["2026-09-22=388", "2026-09-29=388"],             # id named for two dates
+    ["2026-09-22=3²"],                            # superscript digit (isdigit but not int)
+    ["2026-09-01=388"],                               # before --since (default 2026-09-10)
+])
+def test_explain_parse_errors_die_with_exit_2(gap, bad):
+    argv = [x for spec in bad for x in ("--explain", spec)]
+    with pytest.raises(SystemExit) as e:
+        S.main(argv)
+    assert e.value.code == 2 and gap.applied == []
+
+
+def test_explain_dry_run_prints_the_section_and_writes_nothing(gap, capsys):
+    rc = S.main(["--explain", "2026-09-22=388", "--explain", "2026-09-29=396"])
+    out = capsys.readouterr().out
+    assert rc == 0 and gap.applied == []
+    assert "Explained-gap repairs (dates and trades named by you): 2 to repair, 0 refused." in out
+    assert "trade 388  BUY 10 ON @ 73.6000  = +736.00" in out
+    assert "trade 396  BUY 1 META @ 500.0000  = +500.00" in out
+    assert "gap before (gross - journal book x closes): -736.00; residual after: 0.00" in out
+    assert "gross     500.00 -> 1,236.00" in out
+    assert "Monthly returns (Reports) that may read a repaired date: September 2026 " in out
+    assert "(repaired: 2026-09-22, 2026-09-29)" in out
+    assert "and the explained-gap repairs above" in out
+
+
+def test_explain_apply_writes_the_explained_fields_and_exits_0(gap, capsys):
+    rc = S.main(["--explain", "2026-09-22=388", "--explain", "2026-09-29=396", "--apply"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert gap.applied == ["2026-09-22", "2026-09-29"]
+    assert "applied 2026-09-22 [explained_gap]" in out
+    f = gap.fields["2026-09-22"]
+    assert f["gross_book"] == 1236.0 and f["journal_max_trade_id"] == 396
+    assert f["original_gross_book"] == 500.0 and "book_positions" in f
+    assert "cash_balance" not in f and "cash_as_of" not in f
+    assert gap.fields["2026-09-29"]["gross_book"] == 1736.0
+    assert "no applied explained-gap date is a review or repair again" in out
+    # a second run: both dates now have provenance, so they are refused (exit 4 on --apply)
+    gap.applied.clear()
+    assert S.main(["--explain", "2026-09-22=388"]) == 0
+    assert "already has provenance" in capsys.readouterr().out
+    assert S.main(["--explain", "2026-09-22=388", "--apply"]) == 4
+    assert gap.applied == []
+
+
+def test_refused_explained_date_exits_4_but_other_writes_are_made(gap, capsys):
+    rc = S.main(["--explain", "2026-09-22=388", "--explain", "2026-09-29=999", "--apply"])
+    cap = capsys.readouterr()
+    assert rc == 4
+    assert gap.applied == ["2026-09-22"]
+    assert "2026-09-29: trade id 999 is not in the journal" in cap.out
+    assert "refused" in cap.err
+
+
+def test_explained_write_failure_exits_1(gap):
+    gap.write_ok = False
+    assert S.main(["--explain", "2026-09-22=388", "--explain", "2026-09-29=999", "--apply"]) == 1
+
+
+def test_explained_date_still_a_review_after_apply_exits_3(gap, capsys):
+    gap.persist = False                                # the write "succeeds" but nothing sticks
+    rc = S.main(["--explain", "2026-09-22=388", "--apply"])
+    assert rc == 3
+    assert "still proposes explained dates" in capsys.readouterr().err
+
+
+def test_no_explain_output_has_no_explained_section(gap, capsys):
+    assert S.main([]) == 0
+    out = capsys.readouterr().out
+    assert "Explained-gap" not in out and "explained-gap repairs above" not in out
+    assert "2 need review" in out
+    assert S.main(["--json"]) == 0
+    j = capsys.readouterr().out
+    assert '"explained"' not in j and '"explained_refusals"' not in j
+
+
+def test_explain_json_adds_the_explained_keys(gap, capsys):
+    assert S.main(["--json", "--explain", "2026-09-22=388", "--explain", "2026-09-29=999"]) == 0
+    j = capsys.readouterr().out
+    assert '"explained"' in j and '"explained_refusals"' in j
+    assert '"explained_gap"' in j and "not in the journal" in j
+
+
+def test_monthly_hint_months():
+    h = S.monthly_hint({date(2026, 9, 30)})
+    assert "September 2026, October 2026" in h and "(repaired: 2026-09-30)" in h
+    h = S.monthly_hint({date(2026, 10, 19)})
+    assert "October 2026 (repaired: 2026-10-19)" in h and "November" not in h
+    h = S.monthly_hint({date(2026, 9, 30), date(2026, 10, 19)})
+    assert "September 2026, October 2026 (repaired: 2026-09-30, 2026-10-19)" in h
+    assert "Custom period, or Last month when it is the month before this one" in h
+    assert "Nothing to regenerate: after applying, hard-refresh" in h
+    assert S.monthly_hint(set()) is None
+    # year roll: the last trading day of December is also January's start anchor
+    assert "December 2026, January 2027" in S.monthly_hint({date(2026, 12, 31)})
+    # a day before a weekend month-end is not itself the month's last trading day
+    assert "November 2026" not in S.monthly_hint({date(2026, 10, 29)})

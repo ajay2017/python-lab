@@ -1122,6 +1122,11 @@ _GATE_FILES = {
     # daily_snapshots rows a repaired account row's book implies (upsert / delete /
     # refuse) -- a DB-write / data-integrity path, the Today's-P&L baseline.
     "stock_analyzer/snapshot_row_repair.py",
+    # Added 2026-11-09 (N1-LogTime): the pure evidence rule that decides whether
+    # owner-named trades explain a legacy account row's gross_book gap to the
+    # cent, and so what `account_snapshot_backfill.py --explain` writes -- a
+    # DB-write / data-integrity path, same class as account_snapshot_repair.
+    "stock_analyzer/explained_gap_repair.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per

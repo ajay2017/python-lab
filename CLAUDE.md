@@ -90,7 +90,7 @@ The deterministic gates are the safety net; **the paid agents are for judgment o
 - **Prices per million tokens, input / output:** Opus 5.5 $4/$20; Sonnet 5.5 $2/$10; Haiku 5.5 $0.10/$0.50. Limit (owner 2026-11-07): the $190/month enterprise plan's usage meter, which resets about every 5 hours; only usage above 100% of it costs extra. `scripts/session_cost.py`'s API-equivalent $ is a yardstick, not a budget (memory `project_weekly_token_budget`).
 
 **When the `reviewer` is required:** `constants.py`, any gate, a scoring/recommendation formula, cross-feature coordination, DB-write / data-integrity, or a new user-facing decision surface.
-- **Mechanically enforced through `_GATE_FILES` in `.claude/hooks/pre_tool_checks.py`, which is the authoritative list** (81 files on 2026-11-07, after `broker_import.py` joined). Print it:
+- **Mechanically enforced through `_GATE_FILES` in `.claude/hooks/pre_tool_checks.py`, which is the authoritative list** (83 files on 2026-11-09, after `explained_gap_repair.py` joined). Print it:
   ```
   python -c "import sys; sys.path.insert(0,'.claude/hooks'); import pre_tool_checks as p; print(sorted(p._GATE_FILES))"
   ```
@@ -223,6 +223,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 3. **TJDate Phase 1** (`docs/plans/trade-entry-guard.md`): confirming pass, P0 probe, C3 and D0 done 2026-11-06; C4 done 2026-11-07 (broker-sync ET date; live check: the next broker sync log reads "closed N linked pending", no duplicate Pending Imports); NEXT C1, then C2, C3b, C5, U9, U8.
 4. **U7 + #21:** DESIGNED 2026-11-07 (`docs/plans/net-capital-broker-frame.md`, Opus planner PROCEED WITH CHANGES: net capital = the lower of journal and Robinhood's positions snapshot, tightening-only, shadow first); #21 traced = wording only (C5). **Owner to answer U1–U10 before C1.**
 5. **#34c probe:** read-only check of SnapTrade's own last-sync time before designing.
+- **Broker fill record** (owner asked 2026-11-09: automate the Robinhood → journal sync): DESIGNED (`docs/plans/broker-fill-record.md`, Opus planner PROCEED WITH CHANGES: Phase 1 one-click record of broker fill facts + a "notes owed" queue + same-day cron auto-link; Phase 2 cron auto-record gated). **Owner to answer U1–U16 and run probe P (`docs/sql/readonly-broker-fill-lag-probe.sql`) before any chunk;** it reorders TJDate (U14) and needs TJDate C5 + a UTC-date reader sweep (C0) first.
 - **Dated:** N1 C6b–C8 before the November report (`docs/plans/account-snapshot-repair.md`: ~~C6b review follow-ups~~ BUILT 2026-11-07, ~~C7 per-ticker `daily_snapshots` repair~~ BUILT 2026-11-07 (owner: run `scripts/daily_snapshot_row_repair.py` dry run, then `--apply`), C8 docs); **N1-LogTime** (8 hand-logged fills timed at log time; fix `docs/sql/journal-fix-2026-11-07-fill-times.sql` after Opus review, then the C3 backfill dry run for the legacy days); #26 C3c persisted stop floor by 2026-12-07 (`docs/plans/held-trailing-stop.md`).
 - **LockBreach:** owner decided 2026-11-03 to RETIRE Lock Setup (option A); queued, don't start unless asked (closes #20 f/u).
 - **Owner calls open:** keep the 6.0 Financials earnings fallback for uncurated financial names or restore 7.0 (C3 `212f2c5`); EW2; Fund; #25; Zone (planned-level zone parked until the ENTER_NOW base-rate readout).
