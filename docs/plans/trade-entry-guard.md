@@ -45,7 +45,7 @@ The broker-vs-journal check of 11-02 (`docs/sql/readonly-pending-imports-check.s
   - today, market open: default now (editable);
   - today, market closed: required;
   - past date: optional (16:00 ET anchor), but required when another same-ticker row exists that ET date.
-- **U2 — Default trade date:** today if it is a trading day and past 09:30 ET, else the previous trading day.
+- **U2 — Default trade date:** today if it is a trading day and past 09:30 ET, else the previous trading day. **Superseded 2026-11-09 (owner, option (c)):** before 09:30 ET on a trading day, no default date and a required fill time (see "C1 review deferrals for C2").
 - **U3 — Tick-box gating** ("I've checked, record it anyway"):
   - price outside the session range;
   - weekend or holiday date;
@@ -115,7 +115,7 @@ C2 must handle these; none is a C1 defect.
 - **Price differs, same day (owner / planner call).** A same-day fill with the same shares and a different price returns nothing (OKTA 11-02: entry 171.88 vs fill 189.14), so only the price band catches it, and it goes unchecked without a Yahoo bar. A PRICE_DIFFERS tick would follow the D0 precedent (about one tick a month).
 - **Typed 16:00 on an early-close day.** On 2026-11-27 (13:00 close) an owner-typed 16:00 equals the anchor, so it never gets OUTSIDE_RTH. Pass "the time was supplied", or name it with `trade_time.is_placeholder_time`'s 16:00 caveat.
 - **`so_far` after the close.** It is True for any entry dated today, even after 16:00 when the bar is final. Let C2 word it with `now_et`.
-- **U2, the pre-market default (owner call, asked 2026-11-09).** The owner trades extended hours, so a pre-market fill logged before 09:30 defaults to the previous session with an optional time: the 10-28 wrong-date class, silent until the sync. Options: (a) keep U2; (b) default today from midnight; (c) no default before 09:30, with the date in words and a required time (lead's recommendation).
+- **U2, the pre-market default (owner call, asked 2026-11-09).** The owner trades extended hours, so a pre-market fill logged before 09:30 defaults to the previous session with an optional time: the 10-28 wrong-date class, silent until the sync. Options: (a) keep U2; (b) default today from midnight; (c) no default before 09:30, with the date in words and a required time (lead's recommendation). **DECIDED 2026-11-09 (owner): (c).** Before 09:30 ET on a trading day the form pre-fills NO date: the owner picks it, the confirm card states it in words, and the fill time is required. C2 changes C1's `default_trade_date` (which still returns the previous session pre-open) and `fill_time_requirement` to match, with tests.
 - **Small:** reword MATCH_SAME_DAY to "Robinhood's record of this order is dated …" like the other kinds; link `txn_ids[0]` only.
 
 ## P0 probe results (owner ran `docs/sql/readonly-tjdate-p0-probe.sql`, 2026-11-06)
