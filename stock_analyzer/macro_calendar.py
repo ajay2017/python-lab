@@ -136,8 +136,10 @@ _STATIC: list[tuple] = [
     ("2026-08-12", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Jul 2026 CPI"),
     ("2026-09-09", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Aug 2026 CPI"),
     ("2026-10-14", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Sep 2026 CPI"),
-    ("2026-11-12", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Oct 2026 CPI"),
-    ("2026-12-09", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Nov 2026 CPI"),
+    # Oct / Nov 2026 corrected 2026-11-10 from bls.gov/schedule/news_release/cpi.htm (were 11-12 / 12-09,
+    # typed 2026-05-07 in 8e14382; Oct 2026 CPI came out 11-10).
+    ("2026-11-10", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Oct 2026 CPI"),
+    ("2026-12-10", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Nov 2026 CPI"),
 
     # CPI 2027 — BLS 2027 release schedule, bls.gov/schedule/news_release/cpi.htm (read 2026-10-31)
     ("2027-01-13", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Dec 2026 CPI"),
@@ -223,7 +225,8 @@ _STATIC: list[tuple] = [
     ("2026-09-10", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Aug 2026 PPI"),
     ("2026-10-15", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Sep 2026 PPI"),
     ("2026-11-13", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Oct 2026 PPI"),
-    ("2026-12-10", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Nov 2026 PPI"),
+    # Nov 2026 corrected 2026-11-10 from bls.gov/schedule/news_release/ppi.htm (was 12-10).
+    ("2026-12-15", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Nov 2026 PPI"),
 
     # PPI 2027 — BLS, bls.gov/schedule/news_release/ppi.htm (read 2026-10-31)
     ("2027-01-14", "08:30", "PPI Producer Prices",  "Inflation",   MEDIUM, "Dec 2026 PPI — upstream inflation signal"),
@@ -250,8 +253,9 @@ _STATIC: list[tuple] = [
     ("2026-08-14", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Jul 2026 Retail Sales"),
     ("2026-09-11", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Aug 2026 Retail Sales"),
     ("2026-10-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Sep 2026 Retail Sales"),
-    ("2026-11-13", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Oct 2026 Retail Sales"),
-    ("2026-12-11", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Nov 2026 Retail Sales"),
+    # Oct / Nov 2026 corrected 2026-11-10 from census.gov/retail/release_schedule.html (were 11-13 / 12-11).
+    ("2026-11-17", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Oct 2026 Retail Sales"),
+    ("2026-12-16", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Nov 2026 Retail Sales"),
 
     # Retail Sales 2027 — Census economic-indicators calendar, census.gov/economic-indicators/calendar-listview.html (read 2026-10-31)
     ("2027-01-15", "08:30", "Retail Sales",         "Consumer",    MEDIUM, "Dec 2026 Retail Sales — consumer spending = 70% of GDP"),

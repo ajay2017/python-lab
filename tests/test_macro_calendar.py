@@ -729,3 +729,37 @@ def test_detect_macro_regime_clean_inflation_fight_full_shape(monkeypatch):
     assert result["source"] == "fred+market"
     assert result["confidence"] == 60  # 3 / (3+0+0+2) * 100
     assert "scores" in result and "signals" in result
+
+
+# ── Agency-verified release dates (tripwire, 2026-11-10) ─────────────────────
+# Read from the agencies' own schedules on 2026-11-10 after the hand-typed
+# Oct 2026 CPI row (11-12) turned out wrong (BLS released it 11-10):
+#   CPI / PPI / jobs: bls.gov/schedule/news_release/{cpi,ppi,empsit}.htm
+#   Retail Sales:     census.gov/retail/release_schedule.html
+# A change here must cite the source page in the commit; never edit from memory.
+_VERIFIED_2026_11_10 = {
+    "CPI Inflation":       ["2026-11-10", "2026-12-10", "2027-01-13"],
+    "PPI Producer Prices": ["2026-11-13", "2026-12-15", "2027-01-14"],
+    "Non-Farm Payrolls":   ["2026-12-04", "2027-01-08"],
+    "Retail Sales":        ["2026-11-17", "2026-12-16", "2027-01-15"],
+}
+
+
+def test_static_rows_match_agency_schedules_read_2026_11_10():
+    from stock_analyzer import macro_calendar as mc
+    for name, expected in _VERIFIED_2026_11_10.items():
+        got = sorted(r[0] for r in mc._STATIC
+                     if r[2] == name and "2026-11-10" <= r[0] <= "2027-01-31")
+        assert got == expected, f"{name}: {got} != agency schedule {expected}"
+        times = {r[1] for r in mc._STATIC
+                 if r[2] == name and "2026-11-10" <= r[0] <= "2027-01-31"}
+        assert times == {"08:30"}, f"{name}: release time {times}"
+
+def test_verified_rows_carry_their_period_label():
+    from stock_analyzer import macro_calendar as mc
+    labels = {(r[0], r[2]): r[5] for r in mc._STATIC}
+    assert labels[("2026-11-10", "CPI Inflation")] == "Oct 2026 CPI"
+    assert labels[("2026-12-10", "CPI Inflation")] == "Nov 2026 CPI"
+    assert labels[("2026-12-15", "PPI Producer Prices")] == "Nov 2026 PPI"
+    assert labels[("2026-11-17", "Retail Sales")] == "Oct 2026 Retail Sales"
+    assert labels[("2026-12-16", "Retail Sales")] == "Nov 2026 Retail Sales"
