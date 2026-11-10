@@ -22,10 +22,11 @@ Nov 5, the new row's Nov 4. Session distance is counted in NYSE trading days
 (`data.trading_sessions_between`), so Fri -> Mon is 1 and a holiday adds none.
 
 Pure / no I/O / no Streamlit. `find_duplicate_entries` is the finding;
-`confirm_gate` turns findings into what the card renders. EXTENSION POINT: the
-C2 entry checks (docs/plans/trade-entry-guard.md) will add their own findings by
-appending to the list `_findings` builds, so one card, one tick box and one
-disabled rule stay the only confirm UI. Plain text only: the caller escapes it.
+`confirm_gate` turns findings into what the card renders. The C2 entry checks
+(docs/plans/trade-entry-guard.md, `trade_entry_checks`) arrive as the optional
+`entry_findings` argument of `confirm_gate` and are appended AFTER the duplicate
+blocks, so one card, one tick box and one disabled rule stay the only confirm UI.
+Plain text only: the caller escapes it.
 """
 
 from __future__ import annotations
@@ -52,6 +53,11 @@ TITLE_HARD = "Robinhood fill already in the journal"
 TITLE_POSSIBLE = "Possible duplicate — this looks like a trade already in your journal"
 LINE_HARD_NEXT = "Use 💰 Account → Broker Sync → Pending Imports → Already logged instead."
 LINE_TICK_HINT = "Tick the box below only if this is a separate fill."
+TITLE_ENTRY_HARD = "This entry can't be recorded as dated"
+TITLE_ENTRY_TICK = "Check the date and time"
+LINE_ENTRY_TICK_HINT = ("Tick the box below if the date and time are right "
+                        "(for example an extended-hours fill).")
+LABEL_ENTRY_TICK = "The date and time are right"
 
 
 # ── small coercions ──────────────────────────────────────────────────────────
@@ -272,7 +278,21 @@ def _tick_label(ids: list) -> str:
     return f"This is a separate fill, not {', '.join(names[:-1])} or {names[-1]}"
 
 
-def confirm_gate(dup: "dict | None") -> dict:
+def _entry_split(entry_findings) -> tuple:
+    """(hard texts, tick texts, info texts) of `trade_entry_checks` findings
+    `[{"kind", "severity", "text"}]`. None / [] -> three empty lists. A finding
+    with an unrecognised severity is treated as a tick (acknowledge it)."""
+    hard, tick, info = [], [], []
+    for f in entry_findings or []:
+        if not isinstance(f, dict):
+            continue
+        text = str(f.get("text") or "")
+        sev = f.get("severity")
+        (hard if sev == "hard" else info if sev == "info" else tick).append(text)
+    return hard, tick, info
+
+
+def confirm_gate(dup: "dict | None", entry_findings: "list | None" = None) -> dict:
     """What the confirm card renders and whether Confirm may be pressed.
 
     -> {"hard": bool, "needs_tick": bool, "tick_label": str,
@@ -280,13 +300,45 @@ def confirm_gate(dup: "dict | None") -> dict:
     `hard` = Confirm stays disabled whatever is ticked. `needs_tick` = Confirm
     stays disabled until the one checkbox labelled `tick_label` is ticked.
     A None / unchecked finding is an `info` block only: never blocks, says so.
+
+    `entry_findings` (optional): `trade_entry_checks` findings. With None / []
+    the result is exactly what `dup` alone gives. Otherwise, AFTER the duplicate
+    blocks: hard findings make one "error" block ("This entry can't be recorded
+    as dated") and set `hard`; tick findings make one "warning" block ("Check
+    the date and time", with the tick hint line when a box is shown) and need
+    the same single checkbox, whose label then names both reasons when a
+    duplicate tick is also due; info findings are one "info" block each. An
+    exact-identity duplicate (hard, no tick) still shows no checkbox, but the
+    entry findings are rendered next to it.
     """
     fs = _findings(dup)
     ids = [i for f in fs for i in f["ids"]]
-    needs_tick = bool(ids)
+    e_hard, e_tick, e_info = _entry_split(entry_findings)
+    dup_hard = any(f["hard"] for f in fs)
+    needs_tick = (bool(ids) or bool(e_tick)) and not dup_hard
+    blocks = [f["block"] for f in fs]
+    if e_hard:
+        blocks.append({"level": "error", "title": TITLE_ENTRY_HARD,
+                       "lines": list(e_hard)})
+    if e_tick:
+        lines = list(e_tick)
+        if needs_tick:
+            lines.append(LINE_ENTRY_TICK_HINT)
+        blocks.append({"level": "warning", "title": TITLE_ENTRY_TICK,
+                       "lines": lines})
+    for text in e_info:
+        blocks.append({"level": "info", "title": text, "lines": []})
+    if not needs_tick:
+        label = ""
+    elif ids and e_tick:
+        label = f"{_tick_label(ids)}, and the date and time are right"
+    elif ids:
+        label = _tick_label(ids)
+    else:
+        label = LABEL_ENTRY_TICK
     return {
-        "hard": any(f["hard"] for f in fs),
+        "hard": dup_hard or bool(e_hard),
         "needs_tick": needs_tick,
-        "tick_label": _tick_label(ids) if needs_tick else "",
-        "blocks": [f["block"] for f in fs],
+        "tick_label": label,
+        "blocks": blocks,
     }

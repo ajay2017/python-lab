@@ -383,6 +383,126 @@ def test_normalisation_keeps_the_time_known_flag():
     assert "(no time)" in tc.confirm_gate(d)["blocks"][0]["lines"][0]
 
 
+# ── C2a: entry findings on the same card ─────────────────────────────────────
+
+_HARD_F = {"kind": "FUTURE", "severity": "hard", "text": "Fri Nov 13, 3:00 PM ET is in the future"}
+_HARD_R = {"kind": "SELL_BEFORE_BUY", "severity": "hard", "text": "At Thu Nov 5, 2:00 PM ET your journal holds only 0 OKTA"}
+_TICK_F = {"kind": "OUTSIDE_RTH", "severity": "tick", "text": "4:06 PM ET is outside regular hours (9:30 AM-4:00 PM)"}
+_TICK_G = {"kind": "NON_TRADING_DATE", "severity": "tick", "text": "Sat Nov 7 is not a trading day"}
+_INFO_F = {"kind": "MATCH_SAME_DAY", "severity": "info", "text": "Robinhood shows this fill"}
+
+
+def _dups():
+    """A spread of dup findings: unchecked, clean, soft match, D0 hard."""
+    j = _journal(_row(1, NOV04))
+    return {
+        "none": None,
+        "clean": tc.find_duplicate_entries(_new(NOV04), _journal(), broker_path=False),
+        "soft": tc.find_duplicate_entries(_new(NOV04), j, broker_path=False),
+        "hard": tc.find_duplicate_entries(
+            _new(NOV04, txn="TX-1"), _journal(_row(1, NOV04, txn="TX-1")), broker_path=True),
+    }
+
+
+def test_no_entry_findings_is_byte_identical_to_the_dup_only_gate():
+    for name, d in _dups().items():
+        base = tc.confirm_gate(d)
+        assert tc.confirm_gate(d, entry_findings=None) == base, name
+        assert tc.confirm_gate(d, entry_findings=[]) == base, name
+        assert tc.confirm_gate(d, None) == base, name
+        assert list(base) == ["hard", "needs_tick", "tick_label", "blocks"], name
+
+
+def test_hard_entry_finding_only_is_one_error_block_and_no_tick():
+    d = _dups()["clean"]
+    g = tc.confirm_gate(d, entry_findings=[_HARD_F, _HARD_R])
+    assert g["hard"] is True and g["needs_tick"] is False and g["tick_label"] == ""
+    assert g["blocks"] == [{"level": "error", "title": "This entry can't be recorded as dated",
+                            "lines": [_HARD_F["text"], _HARD_R["text"]]}]
+
+
+def test_tick_entry_finding_only_is_a_warning_block_with_the_single_tick():
+    d = _dups()["clean"]
+    g = tc.confirm_gate(d, entry_findings=[_TICK_F])
+    assert g["hard"] is False and g["needs_tick"] is True
+    assert g["tick_label"] == "The date and time are right"
+    assert g["blocks"] == [{"level": "warning", "title": "Check the date and time",
+                            "lines": [_TICK_F["text"],
+                                      "Tick the box below if the date and time are right "
+                                      "(for example an extended-hours fill)."]}]
+
+
+def test_two_tick_findings_share_one_block_and_one_box():
+    g = tc.confirm_gate(_dups()["none"], entry_findings=[_TICK_G, _TICK_F])
+    assert g["needs_tick"] is True and g["tick_label"] == "The date and time are right"
+    warn = [b for b in g["blocks"] if b["level"] == "warning"]
+    assert len(warn) == 1 and warn[0]["lines"][:2] == [_TICK_G["text"], _TICK_F["text"]]
+
+
+def test_dup_tick_only_label_is_unchanged_and_both_ticks_merge_into_one_label():
+    soft = _dups()["soft"]
+    dup_only = tc.confirm_gate(soft)
+    assert dup_only["needs_tick"] is True
+    both = tc.confirm_gate(soft, entry_findings=[_TICK_F])
+    assert both["needs_tick"] is True
+    assert both["tick_label"] == f"{dup_only['tick_label']}, and the date and time are right"
+    # one box only: the dup block is first, the entry block follows
+    assert [b["level"] for b in both["blocks"]] == ["warning", "warning"]
+    assert both["blocks"][0] == dup_only["blocks"][0]
+    assert both["blocks"][1]["title"] == "Check the date and time"
+    assert both["hard"] is False
+
+
+def test_dup_tick_with_a_hard_entry_finding_is_hard_and_keeps_the_dup_box():
+    soft = _dups()["soft"]
+    dup_only = tc.confirm_gate(soft)
+    g = tc.confirm_gate(soft, entry_findings=[_HARD_F])
+    assert g["hard"] is True
+    assert g["needs_tick"] is True and g["tick_label"] == dup_only["tick_label"]
+    assert [b["level"] for b in g["blocks"]] == ["warning", "error"]
+
+
+def test_d0_hard_identity_still_has_no_tick_but_entry_findings_render_after_it():
+    hard = _dups()["hard"]
+    base = tc.confirm_gate(hard)
+    assert base["hard"] is True and base["needs_tick"] is False
+    for extra in ([_HARD_F], [_TICK_F], [_HARD_F, _TICK_F]):
+        g = tc.confirm_gate(hard, entry_findings=extra)
+        assert g["hard"] is True
+        assert g["needs_tick"] is False and g["tick_label"] == ""
+        assert g["blocks"][0] == base["blocks"][0]            # D0 block first, unchanged
+        assert len(g["blocks"]) == 1 + (1 if any(f["severity"] == "hard" for f in extra) else 0)             + (1 if any(f["severity"] == "tick" for f in extra) else 0)
+    # no dangling "tick the box below" hint when there is no box
+    g = tc.confirm_gate(hard, entry_findings=[_TICK_F])
+    assert g["blocks"][1]["lines"] == [_TICK_F["text"]]
+
+
+def test_unchecked_dup_plus_tick_entry_finding_reads_time_only_label():
+    g = tc.confirm_gate(None, entry_findings=[_TICK_F])
+    assert g["blocks"][0]["level"] == "info"                   # "couldn't check" block first
+    assert g["needs_tick"] is True and g["tick_label"] == "The date and time are right"
+    assert g["hard"] is False
+
+
+def test_info_entry_findings_never_block_or_need_a_tick():
+    g = tc.confirm_gate(_dups()["clean"], entry_findings=[_INFO_F])
+    assert g["hard"] is False and g["needs_tick"] is False and g["tick_label"] == ""
+    assert g["blocks"] == [{"level": "info", "title": _INFO_F["text"], "lines": []}]
+
+
+def test_unknown_severity_is_treated_as_a_tick_not_ignored():
+    g = tc.confirm_gate(_dups()["clean"], entry_findings=[{"kind": "X", "severity": "weird", "text": "odd"}])
+    assert g["needs_tick"] is True and g["hard"] is False
+
+
+def test_entry_finding_text_is_plain_text():
+    g = tc.confirm_gate(_dups()["soft"], entry_findings=[_HARD_R, _TICK_F])
+    texts = [g["tick_label"]]
+    for b in g["blocks"]:
+        texts += [b["title"], *b["lines"]]
+    assert all("<" not in x and ">" not in x for x in texts)
+
+
 # ── app.py wiring (source / AST pins) ────────────────────────────────────────
 
 def _app_text() -> str:
@@ -408,8 +528,10 @@ def test_both_confirm_buttons_are_disabled_by_the_gate():
 
 def test_gate_is_built_from_confirm_gate_and_ack_key_carries_the_idempotency_key():
     t = _app_text()
-    assert 'trade_confirm.confirm_gate(st.session_state.get("_tj_pending_dup_sell"))' in t
-    assert 'trade_confirm.confirm_gate(st.session_state.get("_tj_pending_dup_buy"))' in t
+    assert ('trade_confirm.confirm_gate(\n            st.session_state.get("_tj_pending_dup_sell"), '
+            'entry_findings=_ps_ef)') in t
+    assert ('trade_confirm.confirm_gate(\n            st.session_state.get("_tj_pending_dup_buy"), '
+            'entry_findings=_pb_ef)') in t
     assert 'key=f"_tj_ack_{_pending_sell[\'idempotency_key\']}"' in t
     assert 'key=f"_tj_ack_{_pending_buy[\'idempotency_key\']}"' in t
     # exactly one tick box per card, labelled by the gate
@@ -444,3 +566,120 @@ def test_dup_keys_are_popped_with_their_pending_record():
     t = _app_text()
     assert t.count('st.session_state.pop("_tj_pending_dup_sell", None)') == 2
     assert t.count('st.session_state.pop("_tj_pending_dup_buy", None)') == 2
+
+
+# ── C2a wiring pins (app.py has no importable surface) ───────────────────────
+
+def test_entry_keys_are_staged_beside_the_record_and_popped_with_it():
+    t = _app_text()
+    assert t.count('st.session_state["_tj_pending_entry_sell"] = _entry_stage') == 1
+    assert t.count('st.session_state["_tj_pending_entry_buy"] = _entry_stage') == 1
+    assert t.count('st.session_state.pop("_tj_pending_entry_sell", None)') == 2
+    assert t.count('st.session_state.pop("_tj_pending_entry_buy", None)') == 2
+    # the entry stage never goes into the record that db.save_trade receives
+    assert "_entry_stage" not in _slice(t, "record = {", "# SnapTrade dedup key")
+    assert "_entry" not in _slice(t, "_ps_saved = db.save_trade(_pending_sell)",
+                                  "if _ps_saved or not db.has_db()")
+
+
+def test_manual_traded_at_comes_from_resolve_traded_at_and_the_old_branches_are_gone():
+    t = _app_text()
+    seg = _slice(t, "TJDup: ONE strict journal read at staging", 'st.session_state["_tj_pending_buy"] = record')
+    assert "trade_entry_checks.resolve_traded_at(" in seg
+    assert "trade_entry_checks.time_findings(" in seg and "time_supplied=" in seg
+    assert "trade_entry_checks.sell_replay_finding(" in seg
+    assert "not _override_sell" in seg
+    assert "trade_entry_checks.same_ticker_same_day(" in seg
+    # resolution reads the strict journal read made just above it
+    assert seg.index("_dup_journal =") < seg.index("same_ticker_same_day(")
+    assert "elif _is_manual_backdated:" not in t
+    assert "_et_anchor_iso(_tj_picked_date)" not in t
+
+
+def test_date_input_defaults_through_default_trade_date_and_handles_none():
+    t = _app_text()
+    assert "trade_entry_checks.default_trade_date(_tj_now)" in t
+    assert "value=_tj_date_value," not in t
+    assert 'value=st.session_state.get("_tj_trade_date", _today_et())' not in t
+    assert "(_tj_picked_date is not None)" in t
+    assert 'st.error("Pick the trade date.")' in t
+    assert 'key="_tj_fill_time"' in t
+    # only the two successful saves pop it; the stale-day reset ASSIGNS
+    assert t.count('st.session_state.pop("_tj_fill_time", None)') == 2
+
+
+def test_no_db_rows_keep_the_records_own_traded_at():
+    t = _app_text()
+    assert '"traded_at": _pending_sell.get("traded_at") or _now_et().isoformat()' in t
+    assert '"traded_at": _pending_buy.get("traded_at") or _now_et().isoformat()' in t
+    assert '"id": None, "traded_at": _now_et().isoformat()' not in t
+
+
+def test_sell_replay_unchecked_info_finding_neither_blocks_nor_needs_a_tick():
+    from stock_analyzer import trade_entry_checks as tec
+    info = tec.sell_replay_unchecked_finding()
+    for dup in (_dups()["clean"], _dups()["none"]):
+        base = tc.confirm_gate(dup)
+        g = tc.confirm_gate(dup, entry_findings=[info])
+        assert g["hard"] is base["hard"] is False
+        assert g["needs_tick"] is base["needs_tick"] is False
+        assert g["tick_label"] == ""
+        assert g["blocks"][-1] == {"level": "info", "title": info["text"], "lines": []}
+        assert g["blocks"][:-1] == base["blocks"]
+    # beside a tick finding it adds no second box and no tick of its own
+    g = tc.confirm_gate(_dups()["clean"], entry_findings=[_TICK_F, info])
+    assert g["needs_tick"] is True and g["tick_label"] == "The date and time are right"
+    assert [b["level"] for b in g["blocks"]] == ["warning", "info"]
+
+
+def test_c2a_review_fixes_are_wired_in_app():
+    t = _app_text()
+    assert "trade_entry_checks.trade_date_widget_reset(" in t
+    assert 'st.session_state["_tj_trade_date_seeded_on"] = _today_et()' in t
+    assert 'st.session_state.pop("_tj_fill_time", None)' in t
+    assert "trade_entry_checks.pick_date_caption(_now_et())" in t
+    assert "trade_entry_checks.fill_time_missing_text(" in t
+    assert "_dup_journal is None" in t
+    seg = _slice(t, "trade_entry_checks.time_findings(", "if _entry_ok:\n                    try:")
+    # the replay check has its own try / except that keeps the time findings
+    assert seg.count("try:") == 2 and seg.count("except Exception:") == 2
+    assert "trade_entry_checks.sell_replay_unchecked_finding()" in seg
+    assert seg.index("trade_entry_checks.logging_as_text(") < seg.index("sell_replay_finding(")
+
+
+def test_trade_date_reset_assigns_never_pops_and_the_widget_value_is_none():
+    t = _app_text()
+    blk = _slice(t, "_tj_now = _now_et()", 'st.session_state["_tj_trade_date_seeded_on"] = _today_et()')
+    # Streamlit pushes a value to the browser only when session_state is assigned
+    assert 'st.session_state["_tj_trade_date"] = trade_entry_checks.default_trade_date(_tj_now)' in blk
+    assert 'st.session_state["_tj_fill_time"] = None' in blk
+    assert 'if _tj_date_reset_this_run or "_tj_trade_date" not in st.session_state:' in blk
+    assert ".pop(" not in blk
+    # a non-None default beside an assignment draws Streamlit's duplicate-value warning
+    di = _slice(blk, "st.date_input(", 'key="_tj_trade_date"')
+    assert "value=None," in di
+    # after a save the fill time is assigned too, so the browser clears (pop + rerun)
+    assert ('if "_tj_fill_time" not in st.session_state:\n'
+            '                    st.session_state["_tj_fill_time"] = None') in t
+
+
+def test_a_reset_this_run_refuses_to_stage_and_says_why():
+    t = _app_text()
+    assert "_tj_date_reset_this_run = False" in t          # defined on the broker path too
+    i = t.index("elif not _is_broker_trade and _tj_date_reset_this_run:")
+    seg = t[i:i + 500]
+    assert "st.warning(trade_entry_checks.DATE_RESET_NOTICE)" in seg
+    assert '_tj_prefill"] = _stash_failed_entry' in seg
+    # it sits before the pick-the-date check and before staging
+    assert i < t.index('st.error("Pick the trade date.")')
+    assert i < t.index("trade_entry_checks.resolve_traded_at(")
+
+
+def test_replay_still_runs_when_the_time_checks_fail():
+    t = _app_text()
+    seg = _slice(t, "trade_entry_checks.time_findings(", "if _entry_ok:\n                    try:")
+    assert '"time_unchecked": True' in seg
+    assert "if _entry_f is not None and action" not in seg
+    assert 'if action == "SELL" and not _override_sell:' in seg
+    # the card still says the date / time weren't checked
+    assert 'bool(_e.get("time_unchecked", False))' in t

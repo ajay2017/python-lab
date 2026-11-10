@@ -109,6 +109,7 @@ from stock_analyzer.session_label import move_when_phrase as _move_when_phrase
 from stock_analyzer import broker_sync
 from stock_analyzer import trade_time
 from stock_analyzer import trade_confirm
+from stock_analyzer import trade_entry_checks
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
@@ -30880,6 +30881,20 @@ elif page == "📒 Trade Journal":
                         unsafe_allow_html=True,
                     )
 
+    # TJDate C2a: what staging stored next to a pending record under
+    # `_tj_pending_entry_sell` / `_tj_pending_entry_buy` ({"findings", "logging_as"}).
+    # findings None = the date / time checks raised ("couldn't check", never a
+    # silent clean); a missing value (a card staged before this shipped) is [].
+    def _tj_entry_view(_key):
+        _e = st.session_state.get(_key)
+        if not isinstance(_e, dict):
+            return [], "", False
+        _f = _e.get("findings")
+        return (([] if _f is None else _f), _e.get("logging_as", ""),
+                _f is None or bool(_e.get("time_unchecked", False)))
+
+    _TJ_ENTRY_UNCHECKED = "Couldn't check the date and time."
+
     # ── SELL confirmation card ─────────────────────────────────────────────
     _pending_sell = st.session_state.get("_tj_pending_sell")
     if _pending_sell:
@@ -30899,6 +30914,9 @@ elif page == "📒 Trade Journal":
             f"{_ps_pnl_line}\n\n"
             f"This will update your holdings and P&L — the record cannot be undone without a manual correction."
         )
+        _ps_ef, _ps_logging_as, _ps_unchecked = _tj_entry_view("_tj_pending_entry_sell")
+        if _ps_logging_as:
+            st.caption(_ps_logging_as.replace("$", "\\$"))
         # Concept F: wash-sale awareness — only when selling at a loss (the rule
         # applies to disallowed losses). Awareness-only; never blocks the sale.
         if _ps_pnl is not None and _ps_pnl < 0:
@@ -30928,8 +30946,11 @@ elif page == "📒 Trade Journal":
                     unsafe_allow_html=True,
                 )
         # TJDup: duplicate-entry findings (staged with the record, never part of it).
-        _ps_gate = trade_confirm.confirm_gate(st.session_state.get("_tj_pending_dup_sell"))
+        _ps_gate = trade_confirm.confirm_gate(
+            st.session_state.get("_tj_pending_dup_sell"), entry_findings=_ps_ef)
         _tj_render_gate_blocks(_ps_gate["blocks"])
+        if _ps_unchecked:
+            st.info(_TJ_ENTRY_UNCHECKED)
         _ps_ack = (
             st.checkbox(_ps_gate["tick_label"],
                         key=f"_tj_ack_{_pending_sell['idempotency_key']}")
@@ -30948,7 +30969,8 @@ elif page == "📒 Trade Journal":
                     db.mark_snaptrade_pending_import_logged(_ps_broker_pid)
                     st.session_state.pop("_tj_broker_prefill", None)
                 if not db.has_db():
-                    _ps_new_row = pd.DataFrame([{**_pending_sell, "id": None, "traded_at": _now_et().isoformat()}])
+                    _ps_new_row = pd.DataFrame([{**_pending_sell, "id": None,
+                                                 "traded_at": _pending_sell.get("traded_at") or _now_et().isoformat()}])
                     st.session_state.trades_df = pd.concat(
                         [_ps_new_row, st.session_state.trades_df], ignore_index=True
                     )
@@ -31004,6 +31026,7 @@ elif page == "📒 Trade Journal":
                     )
                 st.session_state.pop("_tj_pending_sell", None)
                 st.session_state.pop("_tj_pending_dup_sell", None)
+                st.session_state.pop("_tj_pending_entry_sell", None)
                 st.session_state.pop("_tj_prefill", None)
                 st.session_state.pop("_tj_override_price", None)
                 st.session_state.pop("_tj_override_ticker", None)
@@ -31016,6 +31039,7 @@ elif page == "📒 Trade Journal":
                 # one backdated trade would leave the field sticky on that
                 # past date for the NEXT trade too.
                 st.session_state.pop("_tj_trade_date", None)
+                st.session_state.pop("_tj_fill_time", None)
                 _reset_tj_decision_context()
                 import time as _ps_time
                 st.session_state["_tj_last_submit_sig"] = (_ps_ticker, "SELL", _ps_shares)
@@ -31030,6 +31054,7 @@ elif page == "📒 Trade Journal":
             }
             st.session_state.pop("_tj_pending_sell", None)
             st.session_state.pop("_tj_pending_dup_sell", None)
+            st.session_state.pop("_tj_pending_entry_sell", None)
             # Cancelling a broker-sourced confirmation also unlocks the form
             # (2026-08-17 review finding) — otherwise the locked fields would
             # persist even though _tj_pending_sell is gone, with no visible
@@ -31062,6 +31087,9 @@ elif page == "📒 Trade Journal":
             f"at **${_pb_price:,.2f}**"
             f"{_pb_extra}"
         )
+        _pb_ef, _pb_logging_as, _pb_unchecked = _tj_entry_view("_tj_pending_entry_buy")
+        if _pb_logging_as:
+            st.caption(_pb_logging_as.replace("$", "\\$"))
         # Pre-Mortem in-text price check (trigger_price_check): say when the AI's
         # price was refused, or which trigger will be monitored.
         from stock_analyzer import trigger_price_check as _pb_tpc
@@ -31104,8 +31132,11 @@ elif page == "📒 Trade Journal":
         if _pb_hold_note:
             st.caption(_pb_hold_note.replace("$", "\\$"))
         # TJDup: duplicate-entry findings (staged with the record, never part of it).
-        _pb_gate = trade_confirm.confirm_gate(st.session_state.get("_tj_pending_dup_buy"))
+        _pb_gate = trade_confirm.confirm_gate(
+            st.session_state.get("_tj_pending_dup_buy"), entry_findings=_pb_ef)
         _tj_render_gate_blocks(_pb_gate["blocks"])
+        if _pb_unchecked:
+            st.info(_TJ_ENTRY_UNCHECKED)
         _pb_ack = (
             st.checkbox(_pb_gate["tick_label"],
                         key=f"_tj_ack_{_pending_buy['idempotency_key']}")
@@ -31133,7 +31164,8 @@ elif page == "📒 Trade Journal":
                 st.session_state.pop("_tj_premortem_commitment", None)
                 st.session_state.pop("_tj_premortem_commitment_for", None)
                 if not db.has_db():
-                    _pb_new_row = pd.DataFrame([{**_pending_buy, "id": None, "traded_at": _now_et().isoformat()}])
+                    _pb_new_row = pd.DataFrame([{**_pending_buy, "id": None,
+                                                 "traded_at": _pending_buy.get("traded_at") or _now_et().isoformat()}])
                     st.session_state.trades_df = pd.concat(
                         [_pb_new_row, st.session_state.trades_df], ignore_index=True
                     )
@@ -31290,6 +31322,7 @@ elif page == "📒 Trade Journal":
                     st.error(_holdings_write_failed_msg(_pb_ticker))
                 st.session_state.pop("_tj_pending_buy", None)
                 st.session_state.pop("_tj_pending_dup_buy", None)
+                st.session_state.pop("_tj_pending_entry_buy", None)
                 st.session_state.pop("_tj_pending_buy_trigger_note", None)
                 st.session_state.pop("_tj_prefill", None)
                 st.session_state.pop("_tj_override_price", None)
@@ -31300,6 +31333,7 @@ elif page == "📒 Trade Journal":
                 # See the matching SELL-confirm comment above — reset the
                 # date picker so it doesn't stay sticky on a past date.
                 st.session_state.pop("_tj_trade_date", None)
+                st.session_state.pop("_tj_fill_time", None)
                 _reset_tj_decision_context()
                 import time as _pb_time
                 st.session_state["_tj_last_submit_sig"] = (_pb_ticker, "BUY", _pb_shares)
@@ -31314,6 +31348,7 @@ elif page == "📒 Trade Journal":
             }
             st.session_state.pop("_tj_pending_buy", None)
             st.session_state.pop("_tj_pending_dup_buy", None)
+            st.session_state.pop("_tj_pending_entry_buy", None)
             st.session_state.pop("_tj_pending_buy_trigger_note", None)
             # See the matching SELL-cancel comment above — unlock the form.
             st.session_state.pop("_tj_pending_broker_id", None)
@@ -31364,7 +31399,7 @@ elif page == "📒 Trade Journal":
                 st.rerun()
         # ── Action + Ticker + Date live OUTSIDE the form so changes trigger a
         # rerun and cost basis can be auto-looked-up before the form renders.
-        _tx_c1, _tx_c2, _tx_c3 = st.columns([1, 2, 1])
+        _tx_c1, _tx_c2, _tx_c3, _tx_c4 = st.columns([1, 2, 1, 1])
         with _tx_c1:
             st.radio(
                 "Action", ["BUY", "SELL"], horizontal=True,
@@ -31388,6 +31423,7 @@ elif page == "📒 Trade Journal":
             # carry a real date (_broker_prefill["trade_date"]) — shown here
             # locked, matching the existing locked Action/Ticker/Shares/Price
             # fields, rather than editable.
+            _tj_date_reset_this_run = False
             if _is_broker_trade:
                 _bp_raw_date = _broker_prefill.get("trade_date")
                 try:
@@ -31399,9 +31435,28 @@ elif page == "📒 Trade Journal":
                     disabled=True, key="_tj_trade_date_locked",
                 )
             else:
+                # TJDate C2a (owner U2 option (c), 2026-11-09): before the open on
+                # a trading day no date is pre-filled; the owner must pick one.
+                # A value the owner already picked today is kept. A value from an
+                # earlier ET day (a tab left open overnight), or a blank that the
+                # default can now fill (left blank across 09:30), is replaced.
+                # The key is ASSIGNED, never popped: Streamlit pushes a value to
+                # the browser only when session_state is assigned in that run, so
+                # a pop would change what the server reads but not what the
+                # owner sees. The widget's own `value` stays None for the same
+                # reason (a non-None default beside an assignment draws a warning).
+                _tj_now = _now_et()
+                _tj_seeded_on = st.session_state.get("_tj_trade_date_seeded_on")
+                _tj_date_reset_this_run = trade_entry_checks.trade_date_widget_reset(
+                    st.session_state.get("_tj_trade_date"), _tj_seeded_on, _tj_now)
+                if _tj_date_reset_this_run and trade_entry_checks.trade_date_seeded_stale(
+                        _tj_seeded_on, _tj_now):
+                    st.session_state["_tj_fill_time"] = None
+                if _tj_date_reset_this_run or "_tj_trade_date" not in st.session_state:
+                    st.session_state["_tj_trade_date"] = trade_entry_checks.default_trade_date(_tj_now)
                 _tj_picked_date = st.date_input(
                     "Trade date",
-                    value=st.session_state.get("_tj_trade_date", _today_et()),
+                    value=None,
                     max_value=_today_et(),
                     key="_tj_trade_date",
                     help="Logging this after the fact? Pick the real trade "
@@ -31409,15 +31464,41 @@ elif page == "📒 Trade Journal":
                          "this entry will keep showing up as an unmatched "
                          "Robinhood transaction in 💰 Account → Broker Sync.",
                 )
+                st.session_state["_tj_trade_date_seeded_on"] = _today_et()
+        with _tx_c4:
+            if not _is_broker_trade:
+                # Outside the form so the requirement caption below reacts to the
+                # date / ticker. The wall-clock value is read as ET, never converted.
+                # Assigned (not left to a pop) after a save so the browser clears too.
+                if "_tj_fill_time" not in st.session_state:
+                    st.session_state["_tj_fill_time"] = None
+                st.time_input(
+                    "Fill time (ET)", value=None, step=60, key="_tj_fill_time",
+                    help="The time of the fill in Robinhood, Eastern Time.",
+                )
         # True only for a manual entry whose picked date isn't today — a
         # broker-sourced trade is never "manual backdated" even though its
         # own date is also in the past (it already gets Retrospective
         # framing via `_is_broker_trade` below).
-        _is_manual_backdated = (not _is_broker_trade) and (_tj_picked_date != _today_et())
+        _is_manual_backdated = ((not _is_broker_trade) and (_tj_picked_date is not None)
+                                and (_tj_picked_date != _today_et()))
 
         # Reactive cost-basis lookup — runs on every rerun after ticker/action change
         _live_action = st.session_state.get("_tj_action", "BUY")
         _live_ticker = (st.session_state.get("_tj_ticker") or "").strip().upper()
+
+        # TJDate C2a: say whether the fill time is needed for this date. The
+        # decision is `trade_entry_checks.fill_time_requirement`; an unreadable
+        # journal reads as "a same-ticker row exists" (fail closed: ask for the time).
+        if not _is_broker_trade:
+            if _tj_picked_date is None:
+                st.caption(trade_entry_checks.pick_date_caption(_now_et()))
+            else:
+                _tj_live_sts = trade_entry_checks.same_ticker_same_day(
+                    st.session_state.get("trades_df"), _live_ticker, _tj_picked_date)
+                st.caption(trade_entry_checks.fill_time_caption(
+                    trade_entry_checks.fill_time_requirement(
+                        _tj_picked_date, _now_et(), _tj_live_sts is not False)))
 
         # ── Live market price lookup for the sanity check ─────────────────────
         # Fetches the latest known price from (1) port_df if held, (2) scanner
@@ -31939,7 +32020,7 @@ elif page == "📒 Trade Journal":
         # panic-window and vs-SPY benchmark will be wrong for that row. Broker
         # trades get their own equivalent check at confirm time (below, in the
         # record-construction block) — skip here to avoid a duplicate warning.
-        if not _is_broker_trade and not is_trading_day(_tj_picked_date):
+        if not _is_broker_trade and _tj_picked_date is not None and not is_trading_day(_tj_picked_date):
             st.warning(
                 f"{_tj_picked_date.strftime('%A %b %d')} is not a trading day. "
                 "Trade Review's panic-window and vs-SPY benchmark will be "
@@ -32252,6 +32333,18 @@ elif page == "📒 Trade Journal":
                 if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
                     st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
                     st.session_state["_tj_thesis_seed_pending"] = True
+            elif not _is_broker_trade and _tj_date_reset_this_run:
+                st.warning(trade_entry_checks.DATE_RESET_NOTICE)
+                st.session_state["_tj_prefill"] = _stash_failed_entry
+                if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
+                    st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
+                    st.session_state["_tj_thesis_seed_pending"] = True
+            elif not _is_broker_trade and _tj_picked_date is None:
+                st.error("Pick the trade date.")
+                st.session_state["_tj_prefill"] = _stash_failed_entry
+                if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
+                    st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
+                    st.session_state["_tj_thesis_seed_pending"] = True
             elif _shares_block_reason:
                 st.markdown(
                     f"<div style='background:#3f1d1d;border:1px solid #ef4444;"
@@ -32520,10 +32613,10 @@ elif page == "📒 Trade Journal":
                     "premortem_trigger_direction": _pmt_trigger_direction,
                 }
                 # SnapTrade dedup key + the real broker fill date. Only set
-                # when this is a broker-sourced trade — every other write
-                # path (manual entry) omits these keys entirely so `traded_at`
-                # keeps defaulting to the DB's now() and `broker_txn_id` stays
-                # NULL, exactly as before this feature existed.
+                # when this is a broker-sourced trade; a manual entry never
+                # carries `broker_txn_id` (it stays NULL) and gets its
+                # `traded_at` from `trade_entry_checks.resolve_traded_at`
+                # below (TJDate C2a: no manual entry relies on the DB's now()).
                 if _is_broker_trade:
                     record["broker_txn_id"] = _broker_prefill.get("snaptrade_txn_id")
                     # Anchor to a real ET time rather than sending the bare
@@ -32560,14 +32653,6 @@ elif page == "📒 Trade Journal":
                     record["asset_type"] = broker_sync.resolve_trade_asset_type(
                         ticker_input, _at_kinds, None
                     )
-                elif _is_manual_backdated:
-                    # Same anchor helper the broker path uses — a bare date
-                    # would cast to midnight UTC (the PRIOR EVENING in ET),
-                    # dating the trade a day early. When the picked date IS
-                    # today, deliberately emit no key at all so today's
-                    # trades keep the DB's now() default byte-for-byte
-                    # unchanged (same behavior as before this fix existed).
-                    record["traded_at"] = _et_anchor_iso(_tj_picked_date)
                 # ── SELL/BUY: hold for confirmation — don't write to DB yet ──
                 # TJDup: ONE strict journal read at staging (never the lenient
                 # load_trades: an unreadable journal must say "couldn't check", not
@@ -32575,23 +32660,78 @@ elif page == "📒 Trade Journal":
                 # never reach db.save_trade(record).
                 _dup_journal = (db.load_trades_or_none() if db.has_db()
                                 else st.session_state.get("trades_df"))
-                try:
-                    _dup_check = trade_confirm.find_duplicate_entries(
-                        record, _dup_journal, broker_path=_is_broker_trade)
-                except Exception:
-                    _dup_check = None       # confirm card shows "couldn't check"
-                if action == "SELL":
-                    st.session_state["_tj_pending_sell"] = record
-                    st.session_state["_tj_pending_dup_sell"] = _dup_check
-                else:
-                    st.session_state["_tj_pending_buy"] = record
-                    st.session_state["_tj_pending_dup_buy"] = _dup_check
-                # Carried alongside the staged record (not part of it, so it's
-                # never sent to save_trade) — the snaptrade_pending_imports row
-                # to flip to 'logged' once this record actually saves.
+                # TJDate C2a: the manual entry's traded_at, and the date / time
+                # findings staged beside the record (never inside it). Broker
+                # entries keep their locked date and get only the date-in-words line.
+                _entry_stage = {"findings": [], "logging_as": ""}
+                _entry_ok = True
                 if _is_broker_trade:
-                    st.session_state["_tj_pending_broker_id"] = _broker_prefill.get("pending_id")
-                st.rerun()
+                    if "traded_at" in record:
+                        try:
+                            _entry_stage["logging_as"] = trade_entry_checks.logging_as_text(
+                                record["traded_at"], _today_et(), False)
+                        except Exception:
+                            _entry_stage["logging_as"] = ""
+                else:
+                    _tj_ft = st.session_state.get("_tj_fill_time")
+                    _tj_sts = trade_entry_checks.same_ticker_same_day(
+                        _dup_journal, ticker_input, _tj_picked_date)
+                    try:
+                        record["traded_at"] = trade_entry_checks.resolve_traded_at(
+                            _tj_picked_date, _tj_ft, _now_et(), _tj_sts is not False)
+                    except ValueError:
+                        _entry_ok = False
+                        st.error(trade_entry_checks.fill_time_missing_text(
+                            _tj_picked_date, _now_et(), _dup_journal is None))
+                        st.session_state["_tj_prefill"] = _stash_failed_entry
+                        if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
+                            st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
+                            st.session_state["_tj_thesis_seed_pending"] = True
+                    if _entry_ok:
+                        try:
+                            _entry_f = trade_entry_checks.time_findings(
+                                record["traded_at"], _now_et(), time_supplied=_tj_ft is not None)
+                            _entry_stage = {
+                                "findings": _entry_f,
+                                "logging_as": trade_entry_checks.logging_as_text(
+                                    record["traded_at"], _today_et(), _tj_ft is not None),
+                            }
+                        except Exception:
+                            # The date / time checks failed: the card says so
+                            # ("time_unchecked"), and the SELL replay below still runs.
+                            _entry_f = []
+                            _entry_stage = {"findings": _entry_f, "logging_as": "",
+                                            "time_unchecked": True}
+                        # The replay check has its own try: a failure there keeps the
+                        # time findings and says the SELL was not checked (info).
+                        if action == "SELL" and not _override_sell:
+                            try:
+                                _entry_sr = trade_entry_checks.sell_replay_finding(
+                                    _dup_journal, ticker_input, shares_val, record["traded_at"])
+                            except Exception:
+                                _entry_sr = trade_entry_checks.sell_replay_unchecked_finding()
+                            if _entry_sr is not None:
+                                _entry_f.append(_entry_sr)
+                if _entry_ok:
+                    try:
+                        _dup_check = trade_confirm.find_duplicate_entries(
+                            record, _dup_journal, broker_path=_is_broker_trade)
+                    except Exception:
+                        _dup_check = None       # confirm card shows "couldn't check"
+                    if action == "SELL":
+                        st.session_state["_tj_pending_sell"] = record
+                        st.session_state["_tj_pending_dup_sell"] = _dup_check
+                        st.session_state["_tj_pending_entry_sell"] = _entry_stage
+                    else:
+                        st.session_state["_tj_pending_buy"] = record
+                        st.session_state["_tj_pending_dup_buy"] = _dup_check
+                        st.session_state["_tj_pending_entry_buy"] = _entry_stage
+                    # Carried alongside the staged record (not part of it, so it's
+                    # never sent to save_trade) — the snaptrade_pending_imports row
+                    # to flip to 'logged' once this record actually saves.
+                    if _is_broker_trade:
+                        st.session_state["_tj_pending_broker_id"] = _broker_prefill.get("pending_id")
+                    st.rerun()
 
 
     with _tj_tab_perf:
@@ -44547,7 +44687,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Awareness only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap. The **beta card**, when your portfolio beta breaches its target, states the exact dollar figure needed to trim your top contributor back to target (not a rough percentage), discloses whether that trim also improves or worsens your margin/leverage exposure (a margin-funded ADD can make the beta *number* look better while your actual exposure against your equity gets *worse* — the app now says so explicitly), and — inside a **"📊 Rank Defensive-Beta Candidates"** expander — ranks real defensive-sector candidates by how much beta relief they'd actually provide, disclosing (never hiding) when a candidate is below the app's normal Buy gate or structurally can't reach target at all. It never issues a buy call below that gate — ranking and disclosure only, the decision stays yours.
 - **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English, and (further down the same tab) a **Hidden Same-Bet Detector** — an on-demand check for positions that look diversified by sector and price correlation but secretly bet on the same underlying assumption, classifying each finding as unverified/possible/confirmed against the correlation data above. **🧭 Signal Coherence** (a 5th tab) mechanically joins three existing per-ticker surfaces — the composite score's own direction, the weekly Thesis Review status, and the most recent Bull/Bear debate verdict — and surfaces only names where they genuinely disagree; no synthesized explanation, just the raw signals side by side. Explicitly directional, not precise. Awareness only — never gates or reorders; composite score still decides which name to act on.
 - **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; signal-driven actions; the headline at the top states what to do: a red **⛔ Act first** when a stop is breached, naming Today's Brief only when the Brief lists that breach (otherwise "the stop rule says sell at the next open"); an ℹ️ note, a 🟢 alert line and no danger count when the live price has recovered above the stop; an amber **🔴 danger alerts below — review each** for other danger alerts; and the green all-clear only when there is nothing to act on and no warning) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations, plus a trim card for a danger-tier correlated pair you hold, when both names are scored). If the correlation sample behind a pair is too thin or couldn't be confirmed, no trim is recommended — the pair appears under **Correlated pairs — trim withheld** instead, and the Daily Brief keeps add-to-winner suggestions on both names paused. Likewise the green "well balanced" line only shows when the correlation check behind it is verified. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it, each dismissible for the session (a dismissed alert reappears if the target/floor changes or a new one fires, so nothing is silently suppressed permanently). Note: weight-*target* rebalancing (drift vs. a target allocation %) lives on 🥧 Portfolio Overview's ⚖️ Rebalancing tab — a different feature from this page's score-driven actions.
-- **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**; pick the actual trade date if you're logging it after the fact — otherwise it stamps today's date, which then can't auto-match your broker's own record and will keep showing up as an unmatched transaction in 💰 Account → Broker Sync. Backdating a Buy shows the same "🔮 Retrospective Pre-Mortem" framing broker-imported trades use — the pre-mortem is still required, just honestly reframed since the trade already happened), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
+- **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**; pick the trade date and, when asked, the fill time in Eastern Time from Robinhood. Before 9:30 AM ET on a trading day the date starts blank, so you choose between yesterday's after-hours fill and today's pre-market fill, and the fill time is required. During market hours a blank time records the moment you press Record; on a past date the time is optional (blank places it at 4:00 PM ET) unless you already logged that ticker that day. The confirm card spells out the date and time it will record ("Logging as …"), asks for a tick on a weekend or holiday date or a time outside regular hours (extended-hours fills are fine), and refuses a time in the future or a SELL that would be replayed before the BUY covering it. A wrong date can't auto-match your broker's own record and keeps showing up as an unmatched transaction in 💰 Account → Broker Sync. Backdating a Buy shows the same "🔮 Retrospective Pre-Mortem" framing broker-imported trades use — the pre-mortem is still required, just honestly reframed since the trade already happened), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
 - **🪞 Trade Review** — behavioural retrospective on every recorded trade, over a selectable look-back window (2wk/30d/60d/90d/all-time). Categorizes each trade *App-Followed* (aligned with the app's recommendation), *Deviated* (external info/discretionary), or *Discretionary* (neither recorded) — inferred from the Journal columns, no manual tagging — and flags panic-window trades (made on a day the S&P 500 closed ≤ -1.5%) plus a vs-SPY benchmark per trade. **💡 What the Data Says** turns the raw numbers into a verdict, concrete findings, and one next move. **📈 Performance Trends** charts cumulative P&L and rolling win rate over the window. **⚖ Risk Discipline** checks position-size discipline against your single-name ceiling and sector mix. **🎯 Course-Correction Recommendations** and a **📜 Per-Trade Scorecard** round it out for drilling into individual trades.
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🧭 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).

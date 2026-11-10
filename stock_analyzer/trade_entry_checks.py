@@ -9,15 +9,24 @@ Nothing compared the entry with the market or with Robinhood's own fills.
 
 WHAT THIS MODULE IS. Pure decisions only. No streamlit, no database, no network,
 no clock read: every function that needs "now" takes `now_et` (a tz-aware
-datetime) from its caller. It is NOT wired into the form yet; chunk C2 does that
-and owns the fetching (`data.fetch_unadjusted_history` for the day's bar, which
-is split-adjusted and dividend-unadjusted, and
+datetime) from its caller. The TIME half is wired into the Trade Journal form by
+chunk C2a (`default_trade_date`, `fill_time_requirement`, `resolve_traded_at`,
+`time_findings`, `same_ticker_same_day`, `logging_as_text`,
+`sell_replay_finding`, and the form helpers `trade_date_widget_reset`,
+`fill_time_missing_text`). The price and broker halves are not wired yet; chunk C2b
+does that and owns the fetching (today's / a recent day's bar low / high from
+`data.fetch_session_range`, falling back to the `data.fetch_unadjusted_history`
+frame, split-adjusted and dividend-unadjusted, for older dates, and
 `db.load_snaptrade_unlinked_fills_or_none` for the broker's fills). Plain text
 only in every `text` field: the caller escapes it and puts `$` as `&#36;`.
 
   * Time: `session_hours`, `default_trade_date`, `fill_time_requirement`,
     `resolve_traded_at`, `time_findings` (NON_TRADING_DATE / OUTSIDE_RTH are
-    ticks, FUTURE is a hard block).
+    ticks, FUTURE is a hard block), `same_ticker_same_day`, `logging_as_text`,
+    `fill_time_caption`, `pick_date_caption`, `trade_date_widget_reset`,
+    `fill_time_missing_text`.
+  * Replay: `sell_replay_finding`, the as-of-time hard block for a SELL that
+    `db.recalculate_from_trades` would replay before the BUY that covers it.
   * Price: `price_band_finding`, a logged price against that session's
     split-adjusted, dividend-unadjusted low-high band. Never a silent in-band:
     anything it can't judge is `unchecked` with a reason.
@@ -47,6 +56,7 @@ import pandas as pd
 from stock_analyzer import trade_time
 from stock_analyzer.constants import (
     BROKER_DRIFT_SHARE_TOL,
+    IMPORTED_TRADE_ANCHOR_ET_HOUR,
     JOURNAL_MATCH_PRICE_TOL_USD,
     JOURNAL_MATCH_WINDOW_SESSIONS,
     NYSE_EARLY_CLOSES,
@@ -62,6 +72,15 @@ from stock_analyzer.market_time import ET, et_anchor_iso
 KIND_NON_TRADING_DATE = "NON_TRADING_DATE"
 KIND_OUTSIDE_RTH = "OUTSIDE_RTH"
 KIND_FUTURE = "FUTURE"
+# Finding kinds (journal replay)
+KIND_SELL_BEFORE_BUY = "SELL_BEFORE_BUY"
+KIND_SELL_REPLAY_UNCHECKED = "SELL_REPLAY_UNCHECKED"
+
+# Shown instead of staging when the form's trade date was reset for a new ET day
+# (or by the 09:30 flip) in the very run the owner pressed Record: what they saw
+# may not be what the server now holds.
+DATE_RESET_NOTICE = ("The trade date was reset. Check the date and "
+                     "fill time, then press Record again.")
 # Finding kinds (broker fills)
 KIND_MATCH_SAME_DAY = "MATCH_SAME_DAY"
 KIND_OTHER_DATE = "OTHER_DATE"
@@ -225,19 +244,23 @@ def session_hours(d) -> "tuple[datetime, datetime] | None":
     )
 
 
-def default_trade_date(now_et) -> date:
-    """The trade date the form should offer (owner decision U2).
+def default_trade_date(now_et) -> "date | None":
+    """The trade date the form should offer (owner decision U2, option (c),
+    2026-11-09).
 
-    Today when today is a trading day and `now_et` is at or past the open;
-    otherwise the previous trading day (a weekend, a holiday, or before 09:30
-    on a trading day all fall back to the last session). `now_et` must be
-    tz-aware (ValueError otherwise).
+    * Today is a trading day and `now_et` is at or past the open: today.
+    * Today is a trading day and `now_et` is before the open (pre-market):
+      None. The form pre-fills NO date and the owner must pick one, because a
+      pre-market log is either yesterday's after-hours fill or today's
+      pre-market fill and the app can't tell which.
+    * Today is a weekend or holiday: the previous trading day.
+    `now_et` must be tz-aware (ValueError otherwise).
     """
     now = _aware_et(now_et)
     today = now.date()
     hours = session_hours(today)
-    if hours is not None and now >= hours[0]:
-        return today
+    if hours is not None:
+        return today if now >= hours[0] else None
     return _previous_trading_day(today)
 
 
@@ -250,8 +273,13 @@ def fill_time_requirement(trade_date, now_et, same_ticker_same_day: bool) -> str
       after the close, a weekend or a holiday), OR the date is in the future
       (the time is then needed so `time_findings` can block it as FUTURE), OR
       the date is past and another same-ticker row already exists on that ET
-      date (`same_ticker_same_day`), where a 16:00 anchor would order wrongly.
-    * "optional": any other past date; the 16:00 ET anchor is used.
+      date (`same_ticker_same_day`), where a 16:00 anchor would order wrongly,
+      OR (owner decision U2 option (c), 2026-11-09) today is a trading day and
+      `now_et` is before that day's open: ANY trade date, because pre-open is
+      when the extended-hours date and time are ambiguous.
+    * "optional": any other past date; the 16:00 ET anchor is used. Logging a
+      past date on a weekend or holiday stays "optional" on purpose: the
+      owner's decision covers trading-day pre-open only.
     """
     now = _aware_et(now_et)
     d = _as_date(trade_date)
@@ -260,8 +288,11 @@ def fill_time_requirement(trade_date, now_et, same_ticker_same_day: bool) -> str
     today = now.date()
     if d > today:
         return REQ_REQUIRED
+    today_hours = session_hours(today)
+    if today_hours is not None and now < today_hours[0]:
+        return REQ_REQUIRED
     if d == today:
-        hours = session_hours(today)
+        hours = today_hours
         if hours is not None and hours[0] <= now <= hours[1]:
             return REQ_DEFAULT_NOW
         return REQ_REQUIRED
@@ -300,7 +331,7 @@ def resolve_traded_at(trade_date, fill_time, now_et,
     return et_anchor_iso(d)
 
 
-def time_findings(traded_at, now_et) -> list:
+def time_findings(traded_at, now_et, time_supplied: bool = False) -> list:
     """Findings about WHEN a trade is dated: `[{"kind", "severity", "text"}]`.
 
     * FUTURE (hard): `traded_at` is later than `now_et`.
@@ -310,7 +341,10 @@ def time_findings(traded_at, now_et) -> list:
       Regular hours are open <= t <= close, CLOSE INCLUSIVE (closing-auction
       prints at 16:00:00); an early-close day closes at its early close. The
       16:00 ET date-only anchor (`trade_time.is_placeholder_time`) is an
-      app-invented time and never fires this.
+      app-invented time and never fires this, UNLESS `time_supplied` is True:
+      then the owner typed that time (a real 16:00 fill on an early-close day
+      such as 2026-11-27, 13:00 close, is outside regular hours) and it is
+      checked like any other time.
     `traded_at` is an ISO string / datetime (naive is read as UTC, the
     `trade_time` convention); ValueError if unreadable. `now_et` must be aware.
     Order: FUTURE, then the date or time finding.
@@ -334,7 +368,7 @@ def time_findings(traded_at, now_et) -> list:
         })
         return out
 
-    if trade_time.is_placeholder_time(traded_at):
+    if not time_supplied and trade_time.is_placeholder_time(traded_at):
         return out
     open_dt, close_dt = hours
     if t < open_dt or t > close_dt:
@@ -348,15 +382,275 @@ def time_findings(traded_at, now_et) -> list:
     return out
 
 
+def same_ticker_same_day(journal, ticker, trade_date) -> "bool | None":
+    """Whether the journal already holds a row for `ticker` on ET date `trade_date`.
+
+    `journal` is a trades frame (columns `ticker`, `traded_at`) or None. Three
+    states: None when it can't be judged (journal None, not a frame, a frame
+    missing a column, or an unreadable `trade_date`): callers treat None as
+    True, i.e. fail closed and ask for the fill time. Otherwise True / False.
+    A blank `ticker` matches nothing (False); the form re-checks with the real
+    ticker at submit. The row's date is `trade_time.et_trade_date` (the ET date
+    of the stored value, idempotent on a raw or a normalized `traded_at`); a row
+    with an unreadable `traded_at` is ignored.
+    """
+    if journal is None or not isinstance(journal, pd.DataFrame):
+        return None
+    d = _as_date(trade_date)
+    if d is None:
+        return None
+    if journal.empty:
+        return False
+    if "ticker" not in journal.columns or "traded_at" not in journal.columns:
+        return None
+    tk = str(ticker or "").strip().upper()
+    if not tk:
+        return False
+    mask = journal["ticker"].astype(str).str.strip().str.upper() == tk
+    for v in journal.loc[mask, "traded_at"]:
+        if trade_time.et_trade_date(v) == d:
+            return True
+    return False
+
+
+def logging_as_text(traded_at, today_et, time_supplied: bool) -> str:
+    """The confirm card's date-in-words line (owner decision 3 of 2026-11-02).
+
+    "Logging as Thu Nov 5, 2:43 PM ET" when `time_supplied` or the time is not
+    the 16:00 ET date-only placeholder; "Logging as Thu Nov 5 (no fill time:
+    placed at 4:00 PM ET)" when it is the placeholder and the owner gave no
+    time. ", 2025" follows the day only when the ET year differs from
+    `today_et`'s. Plain text, no `$`. ValueError if `traded_at` is unreadable.
+    """
+    t = _to_et_datetime(traded_at)
+    today = _as_date(today_et)
+    day = _fmt_date(t.date())
+    if today is not None and t.year != today.year:
+        day = f"{day}, {t.year}"
+    if time_supplied or not trade_time.is_placeholder_time(traded_at):
+        return f"Logging as {day}, {_fmt_dt_clock(t)} ET"
+    anchor = _fmt_clock(int(IMPORTED_TRADE_ANCHOR_ET_HOUR), 0)
+    return f"Logging as {day} (no fill time: placed at {anchor} ET)"
+
+
+def fill_time_caption(requirement) -> str:
+    """The one-line caption under the form's fill-time box for a
+    `fill_time_requirement` result. An unknown value reads as the strictest
+    ("required"), never as a blank that implies the time can be skipped."""
+    if requirement == REQ_DEFAULT_NOW:
+        return "Leave blank to use the time you press Record."
+    if requirement == REQ_OPTIONAL:
+        anchor = _fmt_clock(int(IMPORTED_TRADE_ANCHOR_ET_HOUR), 0)
+        return f"Optional: blank places it at {anchor} ET."
+    return "Required: enter the fill time from Robinhood (ET)."
+
+
+def pick_date_caption(now_et) -> str:
+    """The caption shown while the form has no trade date. Before the open on a
+    trading day (when the form pre-fills nothing, owner decision U2 option (c))
+    it explains the choice; at any other time it is the plain prompt."""
+    now = _aware_et(now_et)
+    hours = session_hours(now.date())
+    if hours is not None and now < hours[0]:
+        oh, om = NYSE_REGULAR_OPEN_ET
+        return (f"Before {_fmt_clock(int(oh), int(om))} ET: pick the trade date "
+                "(yesterday's after-hours fill or today's pre-market fill).")
+    return "Pick the trade date."
+
+
+def trade_date_seeded_stale(seeded_on, now_et) -> bool:
+    """True when the ET date the trade-date widget was last used on
+    (`seeded_on`, a date or ISO string; None = never) is not today's ET date:
+    a tab left open overnight must not carry yesterday's date and fill time
+    into a new session. An unreadable `seeded_on` is not stale."""
+    now = _aware_et(now_et)
+    d = _as_date(seeded_on)
+    return d is not None and d != now.date()
+
+
+def trade_date_widget_reset(stored_value, seeded_on, now_et) -> bool:
+    """Whether the form must drop the stored trade date so the default applies.
+
+    True when the stored date is from an earlier ET day (`trade_date_seeded_stale`),
+    or when the stored value is None (left blank across the 09:30 open, or
+    cleared after it) while `default_trade_date(now_et)` now has a date to offer.
+    False when the owner's pick is from today, and when the value is None before
+    the open (the form deliberately offers no date then).
+    """
+    if trade_date_seeded_stale(seeded_on, now_et):
+        return True
+    return stored_value is None and default_trade_date(now_et) is not None
+
+
+def fill_time_missing_text(trade_date, now_et, journal_unreadable: bool) -> str:
+    """The error when `resolve_traded_at` refuses for want of a fill time.
+
+    The plain message, except when the journal couldn't be read and the date is
+    a past one outside the pre-open window (where the requirement would be
+    "optional" but for the unread same-ticker check): then it says why the time
+    is required.
+    """
+    d = _as_date(trade_date)
+    if (journal_unreadable and d is not None
+            and fill_time_requirement(d, now_et, False) == REQ_OPTIONAL):
+        return ("Enter the fill time (ET): the journal couldn't be read to check "
+                "for other trades in this ticker that day, so the time is required.")
+    return "Enter the fill time (ET) — it's required for this date."
+
+
+# ── journal replay ───────────────────────────────────────────────────────────
+
+def _replay_rows(journal, tk: str) -> "list | None":
+    """The journal rows for `tk` as replay entries, or None when the frame
+    can't be read. Mirrors the row filter of `db.recalculate_from_trades`:
+    shares and price must be positive; the action decides SPLIT / BUY / SELL
+    (`"SPLIT" in action` first, then BUY, then SELL)."""
+    if journal is None or not isinstance(journal, pd.DataFrame):
+        return None
+    if journal.empty:
+        return []
+    for col in ("ticker", "action", "shares", "price", "traded_at"):
+        if col not in journal.columns:
+            return None
+    df = journal[journal["ticker"].astype(str).str.strip().str.upper() == tk]
+    if df.empty:
+        return []
+    ts = pd.to_datetime(df["traded_at"], errors="coerce", utc=True, format="ISO8601")
+    out = []
+    for (_, row), t in zip(df.iterrows(), ts):
+        action = str(row.get("action", "")).upper()
+        sh, px = _num(row.get("shares")), _num(row.get("price"))
+        if sh is None or px is None or sh <= 0 or px <= 0:
+            continue
+        if "SPLIT" in action:
+            kind = "SPLIT"
+        elif "BUY" in action:
+            kind = "BUY"
+        elif "SELL" in action:
+            kind = "SELL"
+        else:
+            continue
+        rid = _num(row.get("id"))
+        out.append({
+            "kind": kind, "shares": sh, "raw": row.get("traded_at"), "new": False,
+            "ts": None if pd.isna(t) else t,
+            "id": rid if rid is not None else math.inf,
+        })
+    return out
+
+
+def _replay_order(rows: list) -> list:
+    """Replay order of `db.recalculate_from_trades`: by parsed `traded_at`
+    (unparseable last), then id; the staged row has the highest id, so it sorts
+    after every existing row with an equal timestamp."""
+    return sorted(rows, key=lambda r: (
+        r["ts"] is None, r["ts"] if r["ts"] is not None else 0, r["id"], r["new"]))
+
+
+def _replay_violations(ordered: list) -> list:
+    """Walk the running balance; one `{"row", "before"}` per SELL that takes it
+    below `-BROKER_DRIFT_SHARE_TOL`. Like the db replay, an over-sell is clamped
+    at zero and the walk goes on."""
+    bal = 0.0
+    bad = []
+    for r in ordered:
+        if r["kind"] == "SPLIT":
+            bal = r["shares"]
+        elif r["kind"] == "BUY":
+            bal += r["shares"]
+        else:
+            nxt = bal - r["shares"]
+            if nxt < -BROKER_DRIFT_SHARE_TOL:
+                bad.append({"row": r, "before": bal})
+                nxt = 0.0
+            bal = max(nxt, 0.0)
+    return bad
+
+
+def sell_replay_unchecked_finding() -> dict:
+    """The info finding for "the replay check could not run" (never silent)."""
+    return {
+        "kind": KIND_SELL_REPLAY_UNCHECKED, "severity": SEV_INFO,
+        "text": "Couldn't check this SELL against the order of your journal's trades.",
+    }
+
+
+def sell_replay_finding(journal, ticker, shares, traded_at) -> "dict | None":
+    """A hard block for a SELL that the journal replay would orphan.
+
+    `db.recalculate_from_trades` replays by `traded_at` then id, so a SELL timed
+    14:00 lands BEFORE a past-dated BUY on the 16:00 placeholder and becomes
+    "SELL with no prior BUY". The form's older guard checks total shares only.
+    This inserts the new SELL (sorted after every existing row with an equal
+    timestamp) into that ordering and walks the running balance from there on.
+    It mirrors the db replay's ordering, row filter, SPLIT overwrite and
+    clamp-at-zero, but judges a shortfall against `BROKER_DRIFT_SHARE_TOL` (the
+    db replay warns at 1e-6).
+
+    * None when `ticker` / `shares` are unusable, or when the balance never
+      drops below `-BROKER_DRIFT_SHARE_TOL` because of this row.
+    * An info finding (`sell_replay_unchecked_finding`) when the journal can't
+      be read (None, not a frame, or a frame missing a column): the check did not
+      run, and that is said, never a silent clean. The caller's other guards
+      still run; nothing blocks.
+    * Otherwise `{"kind": "SELL_BEFORE_BUY", "severity": "hard", "text"}`: the
+      new SELL itself is short at its place in the order, or it leaves a LATER
+      existing SELL short (a shortfall that already existed without this row is
+      not blamed on it; a later row's unreadable date reads "date unknown").
+    `traded_at` unreadable -> ValueError.
+    """
+    tk = str(ticker or "").strip().upper()
+    sh = _num(shares)
+    if not tk or sh is None or sh <= 0:
+        return None
+    rows = _replay_rows(journal, tk)
+    if rows is None:
+        return sell_replay_unchecked_finding()
+    t = _to_et_datetime(traded_at)
+    new = {"kind": "SELL", "shares": sh, "raw": traded_at, "new": True,
+           "ts": pd.Timestamp(t).tz_convert("UTC"), "id": math.inf}
+    base_bad = {id(v["row"]) for v in _replay_violations(_replay_order(rows))}
+    bad = _replay_violations(_replay_order(rows + [new]))
+    when = f"{_fmt_date(t.date())}, {_fmt_dt_clock(t)} ET"
+    anchor = _fmt_clock(int(IMPORTED_TRADE_ANCHOR_ET_HOUR), 0)
+    for v in bad:
+        if v["row"] is new:
+            return {
+                "kind": KIND_SELL_BEFORE_BUY, "severity": SEV_HARD,
+                "text": (f"At {when} your journal holds only {_fmt_shares(max(v['before'], 0.0))} "
+                         f"{tk}: the BUY that covers this SELL is stored at a later time "
+                         f"(a BUY logged without a fill time is placed at {anchor} ET), "
+                         "so the SELL would be replayed first and count as a sale of "
+                         "shares you didn't hold. If this SELL's time is right, the BUY "
+                         "covering it is stored too late: delete it in \U0001F4CB History and "
+                         "re-log it with its fill time (a Robinhood-linked BUY would lose "
+                         "its link, so tick 'Allow SELL without a matching holding' "
+                         "instead). The same tick covers a holding from before the app."),
+            }
+    for v in bad:
+        if id(v["row"]) not in base_bad:
+            ld = trade_time.et_trade_date(v["row"]["raw"])
+            lw = _fmt_date(ld) if ld is not None else "date unknown"
+            return {
+                "kind": KIND_SELL_BEFORE_BUY, "severity": SEV_HARD,
+                "text": (f"This SELL leaves too few {tk} shares for a later SELL already in "
+                         f"your journal ({lw}). Check the share count and dates, or tick "
+                         "'Allow SELL without a matching holding' for a holding from "
+                         "before the app."),
+            }
+    return None
+
+
 # ── price ────────────────────────────────────────────────────────────────────
 
 def price_band_finding(price, trade_date, bar, today_et) -> dict:
     """A logged price against that session's daily range.
 
     `bar` is `{"low", "high"}` for `trade_date`'s split-adjusted, dividend-
-    unadjusted daily bar (the C2 caller fetches it with
-    `data.fetch_unadjusted_history`, which still split-adjusts) or None. C2 MUST
-    pass `bar=None` (so the result is "unchecked") when a split falls between
+    unadjusted daily bar (the C2b caller takes today's / a recent day's low /
+    high from `data.fetch_session_range` and falls back to the
+    `data.fetch_unadjusted_history` frame, which still split-adjusts, for older
+    dates) or None. C2b MUST pass `bar=None` (so the result is "unchecked") when a split falls between
     the trade date and today: the bar would then be on a different share basis
     than the price the owner typed. The band is
     `low x (1 - tol/100)` to `high x (1 + tol/100)` with
