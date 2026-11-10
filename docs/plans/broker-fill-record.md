@@ -1,5 +1,7 @@
 # Broker fill record: Robinhood fills into the journal with less manual work
 
+**Status (2026-11-10): DESIGNED, QUEUED by the owner** (other items first; don't start without a fresh ask). TJDate keeps its own order (C2 next), so U14's reorder is not taken for now; re-ask U14 when this plan resumes.
+
 **Status (2026-11-09): DESIGNED, not started.**
 - **Asked by:** the owner on 2026-11-09, "automate the sync between App and Robinhood so we avoid some of the manual review steps".
 - **Planner:** Opus 5.5 (`claude-opus-5-5`), verdict PROCEED WITH CHANGES.
