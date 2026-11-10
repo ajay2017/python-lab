@@ -12,7 +12,7 @@
 --
 -- Owner applies this manually in the Supabase SQL editor. Idempotent: safe to
 -- re-run. No RLS change (the table keeps its service_role policy). Until it is
--- applied, the app reads "no completed broker transaction sync is on record" and
+-- applied, the app reads "the time of the last completed broker sync couldn't be read" and
 -- the cron's stamp fails quietly (a log line, never a lane failure).
 -- =====================================================================
 
