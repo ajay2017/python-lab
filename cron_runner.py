@@ -74,6 +74,7 @@ from stock_analyzer import broker_sync
 from stock_analyzer import db
 from stock_analyzer import healthcheck_ping
 from stock_analyzer import snaptrade_client
+from stock_analyzer import trade_time
 from stock_analyzer.account import compute_account_snapshot
 from stock_analyzer.constants import (
     ALERT_EMAIL_HOUR_ET, ALERT_EOD_HOUR_ET, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS,
@@ -2665,7 +2666,10 @@ def _run_thesis(now_et, force: bool) -> int:
             }
         positions.append({
             "ticker":      ticker,
-            "trade_date":  str(row.get("traded_at", ""))[:10],
+            # TJDate C3b: the BUY's ET date (the UTC [:10] slice dated a fill
+            # after ~19:00 ET one day late); ET today when unreadable, the same
+            # fallback as the app's Thesis Review save paths.
+            "trade_date":  (trade_time.et_trade_date(row.get("traded_at")) or today).isoformat(),
             "user_thesis": str(row["user_thesis"]),
             "inputs":      _ta.build_review_inputs(
                 technical=ev["technical"],

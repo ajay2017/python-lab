@@ -12,7 +12,7 @@
       "MARKDOWN_DOLLAR_PAIR\u001fst.success(_pb_msg)": 1,
       "MARKDOWN_DOLLAR_PAIR\u001fst.warning( f\"\u26a0\ufe0f **Confirm this SELL before it's recorded**\\n\\n\" f\"SELL **{_ps_shares:g} {_share_word(_ps_shares)} of {_ps_ticker}** \" f\"at **${_ps_price:,.2f}**\" f\"{_ps_pnl_line}\\n\\n\" f\"This will update your holdings and P&L \u2014 the record cannot be undone without a manual correction.\" )": 1,
       "NAIVE_DATE_TODAY\u001f_dt.date.today()": 1,
-      "NAIVE_DATE_TODAY\u001fdate.today()": 6,
+      "NAIVE_DATE_TODAY\u001fdate.today()": 4,
       "OFFLINE_SENTINEL_COLLAPSE\u001f(_daily_brief or {}).get(\"act_today\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f(_daily_brief or {}).get(\"grow_today\") or {}": 2,
       "OFFLINE_SENTINEL_COLLAPSE\u001f(_daily_brief or {}).get(\"review_list\") or []": 1,

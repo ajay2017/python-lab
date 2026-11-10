@@ -157,9 +157,11 @@ def test_the_four_display_slices_are_gone():
     assert 'str(_sca_brow.get("traded_at", ""))[:10]' not in _APP
 
 
-def test_c3b_db_write_site_left_alone():
-    # Deliberately out of scope (C3b: feeds thesis_reviews.trade_date).
-    assert '_trade_date_by_ticker[_bt]  = str(_brow.get("traded_at", ""))[:10]' in _APP
+def test_c3b_db_write_site_now_uses_the_et_date():
+    # Was out of C3's scope; C3b (feeds thesis_reviews.trade_date) moved it to
+    # the ET date. The full pin is tests/test_tjdate_c3b_dates.py.
+    assert '_trade_date_by_ticker[_bt]  = str(_brow.get("traded_at", ""))[:10]' not in _APP
+    assert '_bt_d = trade_time.et_trade_date(_brow.get("traded_at"))' in _APP
 
 
 def test_opening_window_pattern_skips_placeholder_anchors():

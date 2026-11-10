@@ -45900,7 +45900,11 @@ elif page == "🧠 AI Insights":
             for _, _brow in _buys.iterrows():
                 _bt = str(_brow["ticker"]).upper()
                 if _bt not in _trade_date_by_ticker:
-                    _trade_date_by_ticker[_bt]  = str(_brow.get("traded_at", ""))[:10]
+                    # TJDate C3b: the ET date of the BUY (the UTC [:10] slice dated a
+                    # fill after ~19:00 ET one day late); None when unreadable, so the
+                    # save paths fall back to ET today and the age reads None.
+                    _bt_d = trade_time.et_trade_date(_brow.get("traded_at"))
+                    _trade_date_by_ticker[_bt]  = _bt_d.isoformat() if _bt_d else None
                     _entry_price_by_ticker[_bt] = _brow.get("price")
                 if _bt not in _thesis_by_ticker:
                     _th = _brow.get("user_thesis")
@@ -46330,7 +46334,7 @@ elif page == "🧠 AI Insights":
                                         ),
                                         regime=st.session_state.get("_market_tone_cache"),
                                     )
-                                    _trade_date = _trade_date_by_ticker.get(_ticker) or str(date.today())
+                                    _trade_date = _trade_date_by_ticker.get(_ticker) or _today_et().isoformat()
                                     _saved = _ai_db.save_thesis_review({
                                         "ticker":      _ticker,
                                         "trade_date":  _trade_date,
@@ -46404,7 +46408,7 @@ elif page == "🧠 AI Insights":
                                         key=f"_ckpt_confirm_{_ticker}",
                                         disabled=st.session_state.get("_readonly", False),
                                     ):
-                                        _trade_date = _trade_date_by_ticker.get(_ticker) or str(date.today())
+                                        _trade_date = _trade_date_by_ticker.get(_ticker) or _today_et().isoformat()
                                         from datetime import timezone as _tz
                                         from datetime import datetime as _dt_now
                                         _saved_ckpt = _ai_db.save_thesis_review({
