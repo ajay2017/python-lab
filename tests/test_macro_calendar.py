@@ -13,7 +13,7 @@ installed module is monkeypatched directly (its local import resolves to the
 same cached module object), mirroring test_stress_test.py's yfinance pattern
 (also used here for the SPY/VIX market-data signals).
 """
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import pytest
@@ -278,6 +278,12 @@ def _mk_event(event_name, ev_date, **extra):
     return d
 
 
+def _et(y, m, d, hh=9, mm=30):
+    """A tz-aware America/New_York datetime (what _fred_series_last_updated_et returns)."""
+    import pytz
+    return pytz.timezone("America/New_York").localize(datetime(y, m, d, hh, mm))
+
+
 def test_fetch_fred_unrecognized_event_skipped_entirely(monkeypatch):
     def _boom(*a, **k):
         raise AssertionError("_fred_obs should not be called for an unmapped event")
@@ -294,7 +300,7 @@ def test_fetch_fred_same_series_fetched_once_for_multiple_events(monkeypatch):
         calls.append(series_id)
         return [114.0 - i for i in range(14)]
     monkeypatch.setattr(mc, "_fred_obs", fake_fred_obs)
-    monkeypatch.setattr(mc, "_fred_series_last_updated", lambda *a, **k: None)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
 
     ev1 = _mk_event("CPI Inflation", date(2026, 6, 1))
     ev2 = _mk_event("CPI Inflation", date(2026, 5, 1))
@@ -304,7 +310,7 @@ def test_fetch_fred_same_series_fetched_once_for_multiple_events(monkeypatch):
 
 def test_fetch_fred_future_event_actual_none_previous_from_current_obs(monkeypatch):
     monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [3.5])
-    monkeypatch.setattr(mc, "_fred_series_last_updated", lambda *a, **k: None)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev = _mk_event("GDP Advance Estimate", date(2026, 10, 30))  # future vs. today below
     mc._fetch_fred("key", [ev], date(2026, 7, 15))
     assert ev["actual"] is None
@@ -316,7 +322,7 @@ def test_fetch_fred_future_event_actual_none_previous_from_current_obs(monkeypat
 
 def test_fetch_fred_past_event_actual_from_current_previous_from_shifted(monkeypatch):
     monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
-    monkeypatch.setattr(mc, "_fred_series_last_updated", lambda *a, **k: None)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev = _mk_event("GDP Advance Estimate", date(2026, 5, 1))  # past vs. today below
     mc._fetch_fred("key", [ev], date(2026, 7, 15))
     assert ev["actual"] == "GDP QoQ Ann.: 4.00%"
@@ -326,7 +332,7 @@ def test_fetch_fred_past_event_actual_from_current_previous_from_shifted(monkeyp
 
 def test_fetch_fred_prepopulated_actual_and_previous_not_overwritten(monkeypatch):
     monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
-    monkeypatch.setattr(mc, "_fred_series_last_updated", lambda *a, **k: None)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev = _mk_event("GDP Advance Estimate", date(2026, 5, 1),
                     actual="Preset Actual", previous="Preset Previous")
     mc._fetch_fred("key", [ev], date(2026, 7, 15))
@@ -336,7 +342,7 @@ def test_fetch_fred_prepopulated_actual_and_previous_not_overwritten(monkeypatch
 
 def test_fetch_fred_source_stamped_only_when_originally_static(monkeypatch):
     monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
-    monkeypatch.setattr(mc, "_fred_series_last_updated", lambda *a, **k: None)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev_static = _mk_event("GDP Advance Estimate", date(2026, 5, 1), source="static")
     ev_other = _mk_event("GDP Advance Estimate", date(2026, 5, 1), source="custom")
     mc._fetch_fred("key", [ev_static, ev_other], date(2026, 7, 15))
@@ -346,7 +352,7 @@ def test_fetch_fred_source_stamped_only_when_originally_static(monkeypatch):
 
 def test_fetch_fred_drift_days_computed_only_for_past_event_with_known_last_updated(monkeypatch):
     monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
-    monkeypatch.setattr(mc, "_fred_series_last_updated", lambda *a, **k: date(2026, 4, 29))
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 4, 29))
     ev = _mk_event("GDP Advance Estimate", date(2026, 5, 1))
     mc._fetch_fred("key", [ev], date(2026, 7, 15))
     assert ev["released_at"] == "2026-04-29"
@@ -356,7 +362,7 @@ def test_fetch_fred_drift_days_computed_only_for_past_event_with_known_last_upda
 
 def test_fetch_fred_released_false_and_drift_none_for_future_event_even_with_known_last_updated(monkeypatch):
     monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0])
-    monkeypatch.setattr(mc, "_fred_series_last_updated", lambda *a, **k: date(2026, 7, 1))
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 7, 1))
     ev = _mk_event("GDP Advance Estimate", date(2026, 10, 30))
     mc._fetch_fred("key", [ev], date(2026, 7, 15))
     assert ev["released_at"] == "2026-07-01"  # populated regardless of past/future
@@ -366,12 +372,185 @@ def test_fetch_fred_released_false_and_drift_none_for_future_event_even_with_kno
 
 def test_fetch_fred_mutates_events_list_in_place(monkeypatch):
     monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
-    monkeypatch.setattr(mc, "_fred_series_last_updated", lambda *a, **k: None)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev = _mk_event("GDP Advance Estimate", date(2026, 5, 1))
     events = [ev]
     mc._fetch_fred("key", events, date(2026, 7, 15))
     assert events[0] is ev
     assert ev["actual"] is not None
+
+
+# ─── MacroSameDay: a same-day event is released only once FRED updated it at/after its time ───
+
+_TODAY_RELEASE = date(2026, 12, 10)  # CPI day, ET date passed in (clock never read)
+
+
+def test_parse_fred_stamp_et_converts_central_to_eastern_with_dst():
+    p = mc._parse_fred_stamp_et
+    # CST (-06): 07:00 CT = 08:00 ET (both standard time)
+    assert p("2026-12-10 07:00:00-06") == _et(2026, 12, 10, 8, 0)
+    # CDT (-05): 07:00 CDT = 08:00 EDT
+    assert p("2026-05-12 07:00:00-05") == _et(2026, 5, 12, 8, 0)
+    # CT stamp crossing midnight into the next ET day
+    got = p("2026-11-09 23:30:00-06")
+    assert got == _et(2026, 11, 10, 0, 30) and got.date() == date(2026, 11, 10)
+    # an offset-less or garbage stamp cannot be placed on the ET clock
+    assert p("2026-12-10 08:30:00") is None
+    assert p("not a date") is None
+    assert p("") is None and p(None) is None
+
+
+def test_fred_series_last_updated_et_parses_stamp_and_none_without_key(monkeypatch):
+    assert mc._fred_series_last_updated_et("CPIAUCNS", None) is None
+    monkeypatch.setattr(
+        requests, "get",
+        lambda *a, **k: _FakeResp(json_data={"seriess": [{"last_updated": "2026-12-10 07:31:00-06"}]}),
+    )
+    assert mc._fred_series_last_updated_et("CPIAUCNS", "key") == _et(2026, 12, 10, 8, 31)
+
+
+def test_same_day_released_helper_boundaries():
+    f = mc._same_day_released
+    d = _TODAY_RELEASE
+    assert f(_et(2026, 12, 10, 7, 43), d, "08:30") is False   # stamped before the release time
+    assert f(_et(2026, 12, 10, 8, 29), d, "08:30") is False
+    assert f(_et(2026, 12, 10, 8, 30), d, "08:30") is True    # at the release time
+    assert f(_et(2026, 12, 10, 8, 31), d, "08:30") is True
+    assert f(_et(2026, 12, 9, 15, 0), d, "08:30") is False    # earlier day
+    assert f(_et(2026, 12, 11, 9, 0), d, "08:30") is False    # later day (clock skew)
+    # fail safe: missing / unparseable stamp or time_et -> not released
+    assert f(None, d, "08:30") is False
+    assert f(_et(2026, 12, 10, 9, 0), d, None) is False
+    assert f(_et(2026, 12, 10, 9, 0), d, "") is False
+    assert f(_et(2026, 12, 10, 9, 0), d, "8.30am") is False
+
+
+def test_same_day_released_midnight_crossing_stamp_is_still_before_release_time():
+    # "2026-12-09 23:30:00-06" = 00:30 ET on the release day: right date, wrong time.
+    stamp = mc._parse_fred_stamp_et("2026-12-09 23:30:00-06")
+    assert stamp.date() == _TODAY_RELEASE
+    assert mc._same_day_released(stamp, _TODAY_RELEASE, "08:30") is False
+
+
+def test_same_day_released_dst_offsets_both_convert_correctly():
+    # CST: 07:31 CT = 08:31 ET -> released; 07:29 CT = 08:29 ET -> not
+    assert mc._same_day_released(mc._parse_fred_stamp_et("2026-12-10 07:31:00-06"), _TODAY_RELEASE, "08:30") is True
+    assert mc._same_day_released(mc._parse_fred_stamp_et("2026-12-10 07:29:00-06"), _TODAY_RELEASE, "08:30") is False
+    # CDT: same wall-clock rule on a summer release day
+    summer = date(2026, 7, 14)
+    assert mc._same_day_released(mc._parse_fred_stamp_et("2026-07-14 07:31:00-05"), summer, "08:30") is True
+    assert mc._same_day_released(mc._parse_fred_stamp_et("2026-07-14 07:29:00-05"), summer, "08:30") is False
+
+
+def test_fetch_fred_same_day_stamped_before_release_time_reads_as_future_event(monkeypatch):
+    # Updated earlier the same ET day (07:43 ET) than the 08:30 release: still the prior print.
+    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 12, 10, 7, 43))
+    ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE)
+    mc._fetch_fred("key", [ev], _TODAY_RELEASE)
+    assert ev["actual"] is None
+    assert ev["previous"] == "GDP QoQ Ann.: 4.00%"   # newest obs IS the prior print
+    assert ev["released"] is False
+    assert ev["drift_days"] is None
+    assert ev["released_at"] == "2026-12-10"          # "when FRED last updated", date only
+
+
+def test_fetch_fred_same_day_old_last_updated_reads_as_future_event(monkeypatch):
+    # FRED's newest obs (4.0) is still LAST month's print; last_updated is a month old.
+    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 11, 12))
+    ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE)
+    mc._fetch_fred("key", [ev], _TODAY_RELEASE)
+    assert ev["actual"] is None
+    assert ev["previous"] == "GDP QoQ Ann.: 4.00%"
+    assert ev["released"] is False
+    assert ev["drift_days"] is None
+    assert ev["released_at"] == "2026-11-12"
+
+
+def test_fetch_fred_same_day_unknown_last_updated_reads_as_not_released(monkeypatch):
+    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
+    ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE)
+    mc._fetch_fred("key", [ev], _TODAY_RELEASE)
+    assert ev["actual"] is None
+    assert ev["previous"] == "GDP QoQ Ann.: 4.00%"
+    assert ev["released"] is False
+    assert ev["drift_days"] is None
+    assert ev["released_at"] is None
+
+
+def test_fetch_fred_same_day_missing_time_et_fails_safe_to_not_released(monkeypatch):
+    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 12, 10, 9, 0))
+    ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE, time_et="")
+    mc._fetch_fred("key", [ev], _TODAY_RELEASE)
+    assert ev["actual"] is None and ev["released"] is False
+
+
+def test_fetch_fred_same_day_after_release_reads_as_past_event(monkeypatch):
+    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 12, 10, 8, 31))
+    ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE)
+    mc._fetch_fred("key", [ev], _TODAY_RELEASE)
+    assert ev["actual"] == "GDP QoQ Ann.: 4.00%"
+    assert ev["previous"] == "GDP QoQ Ann.: 3.00%"
+    assert ev["released"] is True
+    assert ev["drift_days"] == 0
+    assert ev["released_at"] == _TODAY_RELEASE.isoformat()
+
+
+def test_fetch_fred_same_day_no_key_leaves_event_unenriched(monkeypatch):
+    # No FRED key: _fred_obs returns [] (real function, no request made).
+    def _no_request(*a, **k):
+        raise AssertionError("no network call expected without a key")
+    monkeypatch.setattr(requests, "get", _no_request)
+    ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE)
+    before = dict(ev)
+    mc._fetch_fred(None, [ev], _TODAY_RELEASE)
+    assert ev == before
+
+
+def test_fetch_fred_past_and_future_unchanged_by_same_day_rule(monkeypatch):
+    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 11, 12))
+    past = _mk_event("GDP Advance Estimate", date(2026, 12, 9))
+    future = _mk_event("GDP Advance Estimate", date(2026, 12, 11))
+    mc._fetch_fred("key", [past, future], _TODAY_RELEASE)
+    assert past["actual"] == "GDP QoQ Ann.: 4.00%" and past["released"] is True
+    assert past["drift_days"] == (date(2026, 12, 9) - date(2026, 11, 12)).days
+    assert future["actual"] is None and future["released"] is False
+    assert future["previous"] == "GDP QoQ Ann.: 4.00%" and future["drift_days"] is None
+
+
+def test_macro_block_map_same_day_unreleased_blocks_before_0830_lifts_at_0830(monkeypatch):
+    from stock_analyzer import entry_eligibility as ee
+    # CPI series needs >= 13 obs for the YoY transform; the values don't matter here.
+    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [114.0 - i for i in range(14)])
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 11, 12))
+    ev = _mk_event("CPI Inflation", _TODAY_RELEASE, category="Inflation")
+    mc._fetch_fred("key", [ev], _TODAY_RELEASE)
+    assert ev["released"] is False and ev["actual"] is None
+    ev["date"] = _TODAY_RELEASE.isoformat()   # macro_block_map reads the ISO string
+    sectors = mc.affected_sectors("Inflation") - {"__ALL__"}
+    assert sectors, "Inflation must map to at least one sector for this test to mean anything"
+    sec = sorted(sectors)[0]
+    d = _TODAY_RELEASE
+    before = datetime(d.year, d.month, d.day, 8, 29)
+    at = datetime(d.year, d.month, d.day, 8, 30)
+    assert ee.macro_hold(sec, ee.macro_block_map([ev], d, before))
+    assert ee.macro_hold(sec, ee.macro_block_map([ev], d, at)) is None
+
+
+def test_macro_block_map_fomc_same_day_never_lifts():
+    from stock_analyzer import entry_eligibility as ee
+    d = _TODAY_RELEASE
+    ev = _mk_event("FOMC Rate Decision", d.isoformat(), category="Fed Policy", time_et="14:00")
+    late = datetime(d.year, d.month, d.day, 20, 0)
+    m = ee.macro_block_map([ev], d, late)
+    assert m["sectors"] == {"__ALL__"}
+    ev["released"] = True   # even a "released" FOMC stays held same-day
+    assert ee.macro_block_map([ev], d, late)["sectors"] == {"__ALL__"}
 
 
 # ─── build_macro_calendar ─────────────────────────────────────────────────────

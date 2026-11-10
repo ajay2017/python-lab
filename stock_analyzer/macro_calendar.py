@@ -16,6 +16,7 @@ Portfolio impact: maps each event category to affected sectors, then to the
 """
 
 from datetime import date as _date, datetime as _datetime, timedelta as _td
+import re as _re
 import pandas as _pd
 import pytz as _pytz
 
@@ -685,12 +686,9 @@ def _apply_transform(vals: list[float], transform: str, unit: str) -> str | None
     return None
 
 
-def _fred_series_last_updated(series_id: str, api_key: str | None) -> _date | None:
-    """
-    Return the date FRED last updated this series (proxy for the actual release
-    date), or None if unavailable. Used by the drift-detection pass to flag
-    when a static _STATIC date is out-of-sync with the real release schedule.
-    """
+def _fred_series_stamp(series_id: str, api_key: str | None) -> str | None:
+    """Raw FRED ``last_updated`` stamp for a series ("YYYY-MM-DD HH:MM:SS-HH",
+    Central time with a UTC offset), or None if unavailable."""
     if not api_key:
         return None
     from stock_analyzer import api_health as _ah
@@ -710,14 +708,84 @@ def _fred_series_last_updated(series_id: str, api_key: str | None) -> _date | No
         if not data:
             return None
         lu = (data[0].get("last_updated") or "").strip()
-        if not lu:
-            return None
-        # Format: "YYYY-MM-DD HH:MM:SS-HH"
-        return _date.fromisoformat(lu.split(" ")[0])
+        return lu or None
     except Exception as exc:
         _ah.record("fred", "error",
                    f"series meta {series_id}: {str(exc)[:120]}")
         return None
+
+
+def _fred_series_last_updated(series_id: str, api_key: str | None) -> _date | None:
+    """
+    Return the date FRED last updated this series (proxy for the actual release
+    date), or None if unavailable. Used by the drift-detection pass to flag
+    when a static _STATIC date is out-of-sync with the real release schedule.
+    """
+    lu = _fred_series_stamp(series_id, api_key)
+    if not lu:
+        return None
+    try:
+        # Format: "YYYY-MM-DD HH:MM:SS-HH"
+        return _date.fromisoformat(lu.split(" ")[0])
+    except Exception:
+        return None
+
+
+_FRED_STAMP_RE = _re.compile(
+    r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?([+-])(\d{2})(?::?(\d{2}))?$"
+)
+
+
+def _parse_fred_stamp_et(lu: str | None) -> _datetime | None:
+    """Parse a FRED stamp ("YYYY-MM-DD HH:MM:SS-HH", Central, with its UTC
+    offset) into a tz-aware America/New_York datetime. None on any failure
+    (including a stamp with no offset: the wall-clock time can't be placed)."""
+    if not lu:
+        return None
+    try:
+        m = _re.match(_FRED_STAMP_RE, lu.strip())
+        if not m:
+            return None
+        d_s, t_s, sign, hh, mm = m.groups()
+        minutes = int(hh) * 60 + int(mm or 0)
+        if sign == "-":
+            minutes = -minutes
+        naive = _datetime.fromisoformat(f"{d_s}T{t_s}")
+        aware = _pytz.FixedOffset(minutes).localize(naive)
+        return aware.astimezone(_pytz.timezone("America/New_York"))
+    except Exception:
+        return None
+
+
+def _fred_series_last_updated_et(series_id: str, api_key: str | None) -> _datetime | None:
+    """FRED's series last-updated stamp as a tz-aware America/New_York
+    datetime, or None if unavailable or unparseable. Sibling of
+    ``_fred_series_last_updated`` (which keeps only the stamp's date)."""
+    return _parse_fred_stamp_et(_fred_series_stamp(series_id, api_key))
+
+
+def _same_day_released(last_updated_et: _datetime | None, today: _date,
+                       time_et: str | None) -> bool:
+    """Whether a release scheduled for ``today`` has actually landed in FRED.
+
+    True only when FRED's last-updated stamp, in ET, falls on ``today`` AND its
+    ET wall-clock time is at or after the event's scheduled ``time_et``
+    ("HH:MM"). Before the release FRED's newest observation is still the prior
+    print, and a same-day stamp earlier than the release time is a different
+    update of the series (MacroSameDay). A missing / unparseable stamp or
+    ``time_et`` is False (fail safe: ``entry_eligibility.macro_block_map`` then
+    lifts the hold by the wall clock). ``today`` is the ET date passed in;
+    never read the clock here.
+    """
+    if last_updated_et is None or not time_et:
+        return False
+    try:
+        sched = _datetime.strptime(str(time_et).strip(), "%H:%M").time()
+    except ValueError:
+        return False
+    if last_updated_et.date() != today:
+        return False
+    return last_updated_et.time().replace(tzinfo=None) >= sched
 
 
 def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
@@ -729,18 +797,25 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
     For past events:    actual   = most recent released value,
                         previous = prior period value
 
+    A same-day event is treated as a past one only when FRED's series was
+    updated today (ET) at or after the event's release time
+    (``_same_day_released``); otherwise it reads as a future event (actual
+    None, previous = FRED's newest value).
+
     Also populates three drift/release-tracking fields on every FRED-mapped event:
       released_at  : date FRED last updated the series (release proxy), or None
-      released     : True if a past event has a populated actual value
+      released     : True for a past event with a FRED actual, or a same-day
+                     event FRED updated at or after its release time
       drift_days   : ev["date"] - released_at; positive means the static date
                      trails the actual release (e.g. static May 13 but FRED
                      released May 12 → drift_days = 1). Set only when both
-                     dates are known and the event is past or today.
+                     dates are known and the event is past, or same-day and
+                     confirmed released.
     """
     from stock_analyzer import api_health as _ah
 
     fetched: dict[str, list[float]] = {}
-    fetched_meta: dict[str, _date | None] = {}
+    fetched_meta: dict[str, _datetime | None] = {}
 
     for ev in events:
         name = ev.get("event", "")
@@ -768,8 +843,20 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
         current_val  = _apply_transform(obs,         cfg["transform"], cfg["unit"])
         previous_val = _apply_transform(obs_shifted, cfg["transform"], cfg["unit"])
 
+        # One series-meta fetch per unique series — cached in fetched_meta so a
+        # CPI calendar entry and a CPI macro signal don't both pay for it.
+        if series not in fetched_meta:
+            fetched_meta[series] = _fred_series_last_updated_et(series, fred_key)
+        last_updated = fetched_meta[series]
+
         label = cfg["label"]
-        if ev["date"] > today:
+        # A same-day event counts as released only once FRED has updated the
+        # series today; before the release FRED's newest obs is still the PRIOR
+        # print (MacroSameDay), so it must read like a future event.
+        _is_future = ev["date"] > today or (
+            ev["date"] == today and not _same_day_released(last_updated, today, ev.get("time_et"))
+        )
+        if _is_future:
             # Future event: the most recently released FRED value IS the "previous" print
             # (e.g. for May 13 CPI, obs[0] = March CPI YoY = the prior reading).
             # previous_val (obs[1:]) would be one period further back — too old.
@@ -783,17 +870,12 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
         ev["source"] = "static+fred" if ev.get("source") == "static" else ev.get("source", "static+fred")
 
         # ── Drift / release tracking ─────────────────────────────────────────
-        # One series-meta fetch per unique series — cached in fetched_meta so a
-        # CPI calendar entry and a CPI macro signal don't both pay for it.
-        if series not in fetched_meta:
-            fetched_meta[series] = _fred_series_last_updated(series, fred_key)
-        last_updated = fetched_meta[series]
         if last_updated:
-            ev["released_at"] = last_updated.isoformat()
-            if ev["date"] <= today:
+            ev["released_at"] = last_updated.date().isoformat()
+            if not _is_future:   # past, or same-day confirmed released
                 # Drift sign convention: positive = static date trails the real
                 # release (e.g. static = May 13, release = May 12 → +1).
-                ev["drift_days"] = (ev["date"] - last_updated).days
+                ev["drift_days"] = (ev["date"] - last_updated.date()).days
         # released flag — True iff a past event has a FRED-populated actual.
         # Future events stay False (release hasn't happened yet).
         ev["released"] = bool(ev["date"] <= today and ev.get("actual"))

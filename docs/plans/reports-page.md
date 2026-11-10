@@ -1,6 +1,6 @@
 # 📄 Reports as its own page (one home for every report)
 
-**Status (2026-11-10): STEP 1 BUILT** (F-276d; implementer build, Opus review cited in the commit; live check pending: nav position, two Account tabs, October −$642 / −8.47% on the new page, 🙈 Hide values). Step 2 next, after the owner sees step 1 live. Earlier the same day: PLANNED, owner chose option B. Step 1 next, after TJDate C2a is committed. Step 2 waits for the owner to see step 1 live. Owner decisions 2026-11-10: default view = Performance Review; rename the AI monthly report (step 2).
+**Status (2026-11-10): STEP 2 IN BUILD.** Step 1 SHIPPED `ec9ea0a` (F-276d) and VERIFIED LIVE by the owner the same day (nav position, two Account tabs, Last week −$532 / −7.67%, Last month October −$642 / −8.47% on $7,582 with Unexplained +$67 amber; 🙈 Hide values not yet seen). Owner decision for step 2 (2026-11-10): a read-only viewer keeps today's access, so the Reports page is no longer owner-only in the nav; Performance Review and Tax Report stay owner-only inside it, the two debriefs stay viewable. Earlier the same day: PLANNED, owner chose option B. Step 1 next, after TJDate C2a is committed. Step 2 waits for the owner to see step 1 live. Owner decisions 2026-11-10: default view = Performance Review; rename the AI monthly report (step 2).
 
 ## Why
 

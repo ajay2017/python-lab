@@ -1031,6 +1031,10 @@ _GATE_FILES = {
     # i.e. whether the Brief macro card / Pre-Event Playbook still show a pre-release
     # hold / reduce instruction; imported by the gate file act_today_view.
     "stock_analyzer/macro_release.py",
+    # Added 2026-11-10 (bug MacroSameDay): the static release dates, the sector impact
+    # map and the FRED released flag that decide the G-07 macro entry hold
+    # (entry_eligibility.macro_block_map) and the Brief's macro cards.
+    "stock_analyzer/macro_calendar.py",
     "stock_analyzer/snapshot_context.py",
     # Added 2026-10-17 (docs/plans/headline-relevance.md): whether a headline counts
     # toward a ticker at all; applied once in bundle_loader before every news consumer.
