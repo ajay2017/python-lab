@@ -1618,7 +1618,7 @@ LLM_REQUEST_TIMEOUT_SEC = 30
 # only how long we wait before grading. Safe to tune from observation.
 REC_SCORE_MIN_DAYS = 5
 
-# Minimum number of MATURED graded entries before the Monthly Intelligence Report
+# Minimum number of MATURED graded entries before the Monthly Decision Review (AI)
 # (F-4 / F-153) will narrate "entry quality" (question 0 — did the engine pick
 # well?). Below this the entry-quality section is suppressed with a "not enough
 # matured entries yet" note rather than narrating a trend off 1–2 data points.

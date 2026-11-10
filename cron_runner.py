@@ -128,7 +128,7 @@ _LANE_OUTAGE_TEXT: dict[str, tuple[str, str]] = {
                     "The weekly thesis review did NOT run."),
     "debrief":     ("weekly debrief",
                     "The weekly debrief was NOT produced."),
-    "monthly":     ("monthly intelligence report",
+    "monthly":     ("monthly decision review",
                     "The monthly report was NOT produced."),
     "maintenance": ("weekly data backfills",
                     "The weekly reference-data backfills did NOT run."),
@@ -3006,8 +3006,8 @@ def _run_debrief(now_et, force: bool) -> int:
 
 
 def _run_monthly_report(now_et, force: bool) -> int:
-    """First Sunday of the month: generate the monthly Portfolio Intelligence
-    Report (F-4) via LLM and email it. Runs after the weekly debrief in the same
+    """First Sunday of the month: generate the monthly Decision Review (AI)
+    (F-4) via LLM and email it. Runs after the weekly debrief in the same
     Sunday cron lane. v1 grades engine entry quality (Q0) + signal discipline (Q1).
     Inert without ANTHROPIC_API_KEY."""
     import datetime as _dt
@@ -3138,7 +3138,7 @@ def _run_monthly_report(now_et, force: bool) -> int:
     email_from = os.environ.get("ALERT_EMAIL_FROM", "").strip()
     if resend_key and email_to and email_from:
         html    = _notify.render_intelligence_email(result)
-        subject = f"DRISHTA Monthly Intelligence — {result['period_end']}"
+        subject = f"DRISHTA Monthly Decision Review — {result['period_end']}"
         ok, detail = _notify.send_email_resend(
             api_key=resend_key, sender=email_from, to=email_to, subject=subject, html=html,
         )

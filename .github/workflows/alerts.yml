@@ -20,7 +20,7 @@ on:
   workflow_dispatch:          # manual button (Actions tab → Run workflow)
     inputs:
       mode:
-        description: "Run mode: auto=derive from ET hour, scan=force mid-morning scan, intraday=force intraday pullback check, thesis=force weekly thesis review, debrief=force weekly portfolio debrief, monthly=force monthly intelligence report"
+        description: "Run mode: auto=derive from ET hour, scan=force mid-morning scan, intraday=force intraday pullback check, thesis=force weekly thesis review, debrief=force weekly portfolio debrief, monthly=force monthly decision review (F-4)"
         type: choice
         options: [auto, scan, intraday, thesis, debrief, monthly]
         default: auto

@@ -140,7 +140,7 @@ def monthly_hint(repaired_dates) -> "str | None":
             "account rows are cached per session for the day) and open Reports > "
             "Performance Review for those months (Custom period, or Last month when it "
             "is the month before this one), which recomputes it. Don't use Monthly "
-            "Portfolio Intelligence's Generate button: that report doesn't read account "
+            "Decision Review (AI)'s Generate Monthly Report button: that report doesn't read account "
             "rows, and the button saves a NEW trailing 4-week report that takes over its "
             "month's slot in the picker.")
 

@@ -149,7 +149,7 @@ _INVENTORY: tuple[_Store, ...] = (
     _Store("recommendations",           "Buy recommendations log",       "scan",      "daily",   False),
     _Store("sentiment_history",         "Sentiment snapshot",            "eod",       "daily",   False),
     _Store("weekly_debriefs",           "Weekly debrief",                "thesis",    "weekly",  False),
-    _Store("monthly_reports",           "Monthly intelligence report",   "thesis",    "monthly", False),
+    _Store("monthly_reports",           "Monthly decision review (AI)",  "thesis",    "monthly", False),
     _Store("thesis_reviews",            "AI thesis reviews",             "thesis",    "weekly",  False),
     # Existence-only on purpose. Its DDL is applied BY HAND, so until that
     # happens the broker lane logs a skip and 🏠 Home's drift banner silently

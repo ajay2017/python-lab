@@ -28,7 +28,7 @@ ROLE_DESCRIPTIONS = {
              "also uses this role, with the model picked in its own selector"),
     "deep": ("thesis reviews (🧠 AI Insights and the weekly cron), thesis drafts, "
              "earnings thesis updates, the weekly debrief and the monthly "
-             "intelligence report; the 🔎 Investigator also uses this role, with "
+             "decision review; the 🔎 Investigator also uses this role, with "
              "the model picked below"),
     "extract": ("analyst report extraction (feeds the Valuation pillar's "
                 "price-target fallback) and earnings playbook extraction "

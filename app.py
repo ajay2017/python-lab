@@ -3408,8 +3408,7 @@ with st.sidebar:
     # every other `is_readonly()` use in this app only disables a write
     # control, never removes a whole nav item.
     _OWNER_ONLY_PAGES = ("🔬 Model Lab", "🩺 System Trust", "🛑 The Road Not Taken",
-                         "⚙️ App Settings", "🎖️ Recommendation Outcomes",
-                         "📄 Reports")
+                         "⚙️ App Settings", "🎖️ Recommendation Outcomes")
     if db.is_readonly():
         _NAV_GROUPS = [
             (_g_label, [item for item in _g_items if item[1] not in _OWNER_ONLY_PAGES])
@@ -3987,7 +3986,7 @@ def _cached_analyst_coverage_recent() -> dict:
 # ── Signal-flow Sankey (shared) ──────────────────────────────────────────────
 # Builds the New-Positions → acted/missed → win/loss/flat Sankey figure from a
 # recommendations_history.signal_flow() dict. Shared by the Recommendations
-# History page and the AI Insights monthly report so the two can never drift.
+# History page and the 📄 Reports monthly decision review so the two can never drift.
 # Returns a go.Figure, or None when there's nothing to draw.
 def _signal_flow_sankey(flow: dict, title: str):
     _labels = [
@@ -12987,8 +12986,8 @@ if page == "🏠 Home":
             "portfolio data, active alerts, market indices and news."
         )
         st.caption(
-            "💡 For thesis health, weekly/monthly reflection, and analyst research, "
-            "see 🧠 AI Insights instead."
+            "💡 For thesis health and analyst research, see 🧠 AI Insights; for the "
+            "weekly / monthly reviews, see 📄 Reports."
         )
     _action_slot = _hdr_r.empty()
     _info_slot   = st.empty()
@@ -41978,33 +41977,40 @@ elif page == "💰 Account":
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "📄 Reports":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    # One Anthropic key read for the page (the Weekly Debrief and Monthly
+    # Decision Review branches both use it; a secrets read, no network).
+    _ai_api_key = _anthropic_key()
     st.title("📄 Reports")
     st.markdown(
         "**Which report answers what**\n"
-        "- **📈 Performance Review** (below): what your account did over a period, and why. "
+        "- **📈 Performance Review**: what your account did over a period, and why. "
         "Recomputed each time you open it; Last week, Last month, "
         "This/Last quarter, This tax year, Since tracking or Custom.\n"
-        "- **🧾 Tax Report** (below): realized short- and long-term gains by tax year, "
-        "with wash-sale flags.\n"
         "- **🗓️ Weekly Debrief**: an AI narrative of the week, using the same numbers as "
-        "Performance Review → Last week. In 🧠 AI Insights → 📅 Debriefs.\n"
-        "- **🧭 Monthly Portfolio Intelligence**: is the engine picking well, and do you act "
-        "on what it surfaces. Frozen once generated; it is not a returns report. "
-        "In 🧠 AI Insights → 📅 Debriefs."
+        "Performance Review → Last week.\n"
+        "- **🧭 Monthly Decision Review (AI)**: is the engine picking well, and do you act "
+        "on what it surfaces. Frozen once generated; it is not a returns report "
+        "(for the month's result, use Performance Review → Last month).\n"
+        "- **🧾 Tax Report**: realized short- and long-term gains by tax year, "
+        "with wash-sale flags."
     )
-    if st.button("🧠 Open AI Insights → Debriefs", key="_rpt_goto_ai_insights"):
-        st.session_state["_pending_page"] = "🧠 AI Insights"
-        st.rerun()
-    # 2026-11-10: moved here from the 💰 Account page's third tab. This page is
-    # owner-only in the nav (_OWNER_ONLY_PAGES), but keep the read-only guard as
-    # a backstop (the sidebar filter is not the only way to reach a page).
-    if db.is_readonly():
-        st.info("🔒 This page is owner-only and isn't available in read-only viewer mode.")
-    else:
-        _rpt_kind = st.radio(
-            "Report type", ["📈 Performance Review", "🧾 Tax Report"],
-            horizontal=True, key="_rpt_kind_radio",
+    # 2026-11-10: moved here from the 💰 Account page's third tab. Step 2 (same
+    # day) opened the page to the read-only viewer so they keep the Weekly
+    # Debrief and the monthly review they had on 🧠 AI Insights; Performance
+    # Review and Tax Report stay owner-only (guard below; the page is no longer
+    # in _OWNER_ONLY_PAGES, so this guard is the only thing hiding them).
+    _rpt_kind = st.radio(
+        "Report type",
+        ["📈 Performance Review", "🗓️ Weekly Debrief",
+         "🧭 Monthly Decision Review (AI)", "🧾 Tax Report"],
+        horizontal=True, key="_rpt_kind_radio",
+    )
+    if db.is_readonly() and _rpt_kind in ("📈 Performance Review", "🧾 Tax Report"):
+        st.info(
+            "🔒 Performance Review and Tax Report are owner-only and aren't "
+            "available in read-only viewer mode."
         )
+    else:
         if _rpt_kind == "📈 Performance Review":
             st.caption(
                 "A point-in-time, archivable snapshot for a date range — return "
@@ -42880,7 +42886,677 @@ elif page == "📄 Reports":
                                 file_name=f"period_report_{_perf_start}_{_perf_end}.md",
                                 mime="text/markdown", key="_pr_dl_md",
                             )
-        else:
+        elif _rpt_kind == "🗓️ Weekly Debrief":
+            # 2026-11-10 (docs/plans/reports-page.md step 2): moved here from
+            # 🧠 AI Insights → 📅 Debriefs. Open to a read-only viewer exactly as
+            # it was there (the save is refused by db.save_weekly_debrief).
+            from stock_analyzer import db as _ai_db
+            from stock_analyzer import debrief_advisor as _dba
+            try:
+                _thesis_reviews_df = _ai_db.load_thesis_reviews_or_none()  # None = couldn't load
+            except Exception:
+                _thesis_reviews_df = None
+            _open_tickers = set()
+            if "holdings_df" in st.session_state and not st.session_state.holdings_df.empty:
+                _open_tickers = set(st.session_state.holdings_df["Ticker"].astype(str).str.upper())
+            _wd_df = _ai_db.load_weekly_debriefs(limit=8)
+            # ── Weekly Portfolio Debrief ──────────────────────────────────────────────
+            st.subheader("📊 Weekly Portfolio Debrief")
+            st.markdown(
+                "A weekly retrospective: what happened to your portfolio, which signals "
+                "you acted on or ignored, and what behavioural patterns showed up."
+            )
+
+            # On-demand generation
+            if st.button("Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
+                         help="Generate a debrief for the last completed Mon–Sun week, using the "
+                              "same numbers as 📄 Reports → Performance Review → Last week."):
+                with st.spinner("Assembling data and calling AI..."):
+                    from stock_analyzer import period_inputs as _wd_pi
+
+                    # The last completed Mon-Sun week: ends on the same Sunday the Sunday
+                    # cron computes (resolve_period's last_week), so a weekday click lands
+                    # on the SAME week_ending and the upsert (UNIQUE on week_ending)
+                    # overwrites in place instead of creating a one-day-off duplicate.
+                    _wd_start, _wd_today = _pa_mod.resolve_period("last_week", _today_et())
+
+                    # Reuse the day-scoped cross-page caches when they are populated
+                    # (same keys Reports uses); otherwise let the helper load.
+                    _wd_snap_key = f"_account_daily_snapshots_full_cache_{_today_et().isoformat()}"
+                    _wd_flows_key = f"_account_flows_full_cache_{_today_et().isoformat()}"
+                    _wd_snap_c = st.session_state.get(_wd_snap_key)
+                    _wd_flows_c = st.session_state.get(_wd_flows_key)
+                    _wd_inputs = _wd_pi.load_engine_inputs(
+                        _ai_db, _wd_start, _wd_today,
+                        account_snapshots_df=_wd_snap_c if _wd_snap_c is not None else _wd_pi.LOAD,
+                        flows=_wd_flows_c if _wd_flows_c is not None else _wd_pi.LOAD,
+                    )
+                    if _wd_inputs["account_snapshots_df"] is not None:
+                        st.session_state[_wd_snap_key] = _wd_inputs["account_snapshots_df"]
+                    if _wd_inputs["flows"] is not None:
+                        st.session_state[_wd_flows_key] = _wd_inputs["flows"]
+
+                    _wd_failed = [
+                        _n for _k, _n in (("trades_df", "trade journal"),
+                                          ("account_snapshots_df", "account history"),
+                                          ("daily_snapshots_df", "daily price snapshots"))
+                        if _wd_inputs[_k] is None
+                    ]
+                    if _thesis_reviews_df is None:
+                        _wd_failed.append("thesis reviews")
+                    if _wd_failed:
+                        st.error(
+                            "Could not read " + ", ".join(_wd_failed) + " — the database may be "
+                            "unreachable. Try again in a moment."
+                        )
+                    else:
+                        _wd_recs = _ai_db.load_recommendations_or_none(
+                            start_date=_wd_start, end_date=_wd_today
+                        )
+                        _wd_all_recs = _ai_db.load_recommendations_or_none()
+                        if _wd_recs is None:
+                            st.warning(
+                                "Recommendations couldn't be read, so this debrief will say "
+                                "its entry signals are missing.")
+                        _wd_exit_sigs = _ai_db.load_exit_signals_or_none(
+                            days_back=_dba.signal_days_back(_today_et(), _wd_start))
+                        # Latest review per ticker, current holdings only (a thesis
+                        # that recovered, or a name since sold, is not "broken").
+                        # Holdings unknown (no session key) -> no filter, never
+                        # "filter everything out".
+                        _wd_broken = thesis_review_status.debrief_broken(
+                            _thesis_reviews_df,
+                            _open_tickers if "holdings_df" in st.session_state else None)
+
+                        # SPY closes by date (None on any failure -> SPY reads as unknown;
+                        # the account result stays independent of an SPY outage).
+                        _wd_spy_by_date = None
+                        try:
+                            _wd_spy_by_date = _wd_pi.spy_closes_by_date(_cached_spy("2y"))
+                        except Exception:
+                            _wd_spy_by_date = None
+
+                        _wd_core = _wd_pi.compute_period_core(
+                            _wd_inputs, _wd_start, _wd_today,
+                            spy_prices_by_date=_wd_spy_by_date,
+                            reference_leverage=LEVERAGE_REFERENCE_TARGET,
+                        )
+                        _wd_pkg = _dba.build_debrief_package(
+                            week_ending   = _wd_today,
+                            core          = _wd_core,
+                            recs_df       = _wd_recs,
+                            trades_df     = _wd_inputs["trades_df"],
+                            broken_theses = _wd_broken,
+                            all_recs_df   = _wd_all_recs,
+                            exit_signals_df = _wd_exit_sigs,
+                            exit_signals_unavailable = (_wd_exit_sigs is None),
+                            recs_unavailable = (_wd_recs is None),
+                        )
+                        _wd_result = _dba.generate_debrief(_wd_pkg, _ai_api_key)
+                        if _wd_result is None:
+                            st.error("AI debrief failed — LLM offline or the week's numbers could not be read.")
+                        else:
+                            _saved = _ai_db.save_weekly_debrief(_wd_result)
+                            if _saved:
+                                # Flash slot: survives the st.rerun() below (an un-rerun delta
+                                # is discarded), rendered-and-popped under the newest debrief.
+                                st.session_state["_wd_numbers_flash"] = {
+                                    "package": _wd_pkg,
+                                    "behind": _dba.numbers_behind(_wd_pkg, _wd_core),
+                                }
+                                st.success("Debrief generated and saved.")
+                                st.rerun()
+                            else:
+                                st.warning("Generated but save failed (DB offline) — showing inline:")
+                                if _wd_pkg.get("result_reason"):
+                                    st.info("Account result unknown — " + str(_wd_pkg["result_reason"]))
+                                if _wd_pkg.get("excluded_account_line"):
+                                    st.caption("⚠️ " + _wd_pkg["excluded_account_line"])
+                                for _lbl, _col in [
+                                    ("What happened", "section_facts"),
+                                    ("Decisions you made", "section_decisions"),
+                                    ("Patterns this week", "section_patterns"),
+                                    ("One thing to watch", "section_watchnext"),
+                                ]:
+                                    if _wd_result.get(_col):
+                                        st.markdown(f"**{_lbl}**")
+                                        st.markdown(_dba.escape_md_dollars(_wd_result[_col]))
+
+            # Display most recent debrief
+            if _wd_df.empty:
+                st.info(
+                    "No weekly debriefs yet. Click **Generate Now** to create one on-demand, "
+                    "or wait for the Sunday evening cron."
+                )
+            else:
+                _wd = _wd_df.iloc[0]
+                _wd_perf  = _wd.get("performance_pct")
+                _wd_spy   = _wd.get("spy_pct")
+                _wd_alpha = _wd.get("alpha_pct")
+                # Older rows (metrics_version NULL/1) were measured as equity positions,
+                # Mon->Fri; they stay viewable but are labelled and never trended.
+                _wd_cur = _dba.method_is_current(_wd.get("metrics_version"))
+
+                st.caption(
+                    f"Week ending {_wd.get('week_ending', '—')} · "
+                    # generated_at is stored in UTC; an evening run read as tomorrow
+                    f"generated {_dba.generated_et_date(_wd.get('generated_at'))}"
+                    + (" · ✉ emailed" if _wd.get("email_sent") else "")
+                    + ("" if _wd_cur else " · older method")
+                )
+
+                # Performance summary row
+                def _wd_fmt(v, suffix):
+                    return "unknown" if (v is None or v != v) else f"{v:+.1f}{suffix}"
+                if _wd_cur:
+                    _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
+                    _wd_col1.metric("Account %", _wd_fmt(_wd_perf, "%"))
+                    _wd_col2.metric("SPY %, same dates", _wd_fmt(_wd_spy, "%"))
+                    _wd_col3.metric("vs SPY (pp)", _wd_fmt(_wd_alpha, ""))
+                    st.caption(
+                        "Account change measured from the session before the week to its last "
+                        "account record — same figure as 📄 Reports → Performance Review → Last week. A "
+                        "leveraged account moves roughly its leverage times the holdings' own move; "
+                        "SPY is unlevered."
+                    )
+                elif _wd_perf is not None and _wd_perf == _wd_perf:
+                    _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
+                    _wd_col1.metric("Portfolio", _wd_fmt(_wd_perf, "%"))
+                    _wd_col2.metric("SPY", _wd_fmt(_wd_spy, "%"))
+                    _wd_col3.metric("Alpha", _wd_fmt(_wd_alpha, "%"))
+                    st.caption(
+                        "Older method: equity positions only, Monday–Friday — not comparable "
+                        "with later weeks."
+                    )
+                st.markdown("")
+
+                # Weekly alpha trajectory — are you beating SPY, week over week?
+                # Per-week alpha (portfolio − SPY) from the saved debriefs, oldest → newest.
+                # Current-method rows only: an older-method week is a different quantity.
+                _wt_all = _wd_df[_wd_df["alpha_pct"].notna()].copy() if "alpha_pct" in _wd_df.columns else _wd_df.iloc[0:0]
+                if "metrics_version" in _wt_all.columns:
+                    _wt = _wt_all[_wt_all["metrics_version"].apply(_dba.method_is_current)]
+                else:
+                    _wt = _wt_all.iloc[0:0]
+                _wt_old_n = len(_wt_all) - len(_wt)
+                if len(_wt) >= 2:
+                    _wt = _wt.iloc[::-1]   # load is newest-first; chart reads left→right in time
+                    _wt_x = [str(w)[:10] for w in _wt["week_ending"]]
+                    _wt_a = [float(a) for a in _wt["alpha_pct"]]
+                    _wt_fig = go.Figure(go.Bar(
+                        x=_wt_x, y=_wt_a,
+                        marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _wt_a],
+                        text=[f"{v:+.1f}" for v in _wt_a], textposition="outside",
+                    ))
+                    _wt_fig.update_layout(
+                        title=dict(text="Weekly alpha vs SPY (percentage points)", font=dict(size=13), x=0),
+                        height=240, margin=dict(l=8, r=8, t=36, b=8),
+                        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        yaxis=dict(title="Alpha (pp)", zeroline=True, zerolinecolor="#475569"),
+                        xaxis=dict(title=None), showlegend=False,
+                    )
+                    st.plotly_chart(_wt_fig, width="stretch")
+                    _wt_beat = sum(1 for v in _wt_a if v > 0)
+                    st.caption(
+                        f"Account return minus SPY, per week — green = beat the market. "
+                        f"You beat SPY in **{_wt_beat} of {len(_wt_a)}** tracked week(s). "
+                        f"This is the trend the metrics above show for just the latest week."
+                        + (f" {_wt_old_n} earlier week(s) used the older method and aren't shown."
+                           if _wt_old_n > 0 else "")
+                    )
+                    st.markdown("")
+                elif _wt_old_n > 0:
+                    st.caption(
+                        f"{_wt_old_n} earlier week(s) used the older method and aren't shown — "
+                        "the weekly trend appears once two weeks use the current method."
+                    )
+
+                for _wd_label, _wd_col in [
+                    ("What happened", "section_facts"),
+                    ("Decisions you made", "section_decisions"),
+                    ("Patterns this week", "section_patterns"),
+                    ("One thing to watch", "section_watchnext"),
+                ]:
+                    if _wd.get(_wd_col):
+                        st.markdown(f"**{_wd_label}**")
+                        st.markdown(_dba.escape_md_dollars(_wd.get(_wd_col)))
+                        st.markdown("")
+
+            # Numbers behind the debrief just generated (flash slot, popped so it shows once).
+            _wd_flash = st.session_state.pop("_wd_numbers_flash", None)
+            if _wd_flash:
+                _wdf_pkg, _wdf_beh = _wd_flash["package"], _wd_flash["behind"]
+                # The unknown-result reason must survive the rerun, so it lives in the flash.
+                if _wdf_pkg.get("result_reason"):
+                    st.info("Account result unknown — " + str(_wdf_pkg["result_reason"]))
+                if _wdf_pkg.get("excluded_account_line"):
+                    st.caption("⚠️ " + _wdf_pkg["excluded_account_line"])
+                with st.expander("Numbers behind this debrief (as generated)", expanded=True):
+                    st.caption(
+                        f"Account change measured {_wdf_pkg.get('return_d0') or _wdf_pkg.get('d0')} close → "
+                        f"{_wdf_pkg.get('return_d1') or _wdf_pkg.get('d1')} close."
+                    )
+                    _wdf_wf = _wdf_pkg.get("waterfall")
+                    _wdf_wf = _wdf_wf if isinstance(_wdf_wf, dict) else {}
+                    for _wdf_lbl, _wdf_key in (
+                        ("Price moves on positions held through", "held_through"),
+                        ("Last-day moves on positions sold", "sold_leg"),
+                        ("First-day moves on positions bought", "bought_leg"),
+                        ("Same-day round trips", "round_trip"),
+                        ("Deposits / withdrawals", "flows_net"),
+                        ("Dividends", "dividends"),
+                        ("Margin interest posted", "interest"),
+                        ("Fees", "fees"),
+                        ("Unexplained", "unexplained"),
+                    ):
+                        st.markdown(f"{_wdf_lbl}: {_m_usd(_wdf_wf.get(_wdf_key), md=True)}")
+                    st.markdown(
+                        f"Net equity change: {_m_usd(_wdf_pkg.get('equity_change'), md=True)}"
+                    )
+                    _wdf_lev = _wdf_pkg.get("max_leverage")   # same figure Reports' caveat uses
+                    if _wdf_lev is not None and _wdf_lev > 1:
+                        st.caption(
+                            f"⚠️ At up to {_wdf_lev:.1f}x leverage this week, your return moves "
+                            "roughly that many times the holdings' own move — SPY is unlevered."
+                        )
+                    if _wdf_beh["legs"]:
+                        st.dataframe(
+                            pd.DataFrame([
+                                {"Ticker": _l["ticker"], "Shape": _l["shape"] or "—",
+                                 "P&L": _m_usd(_l["total"]),
+                                 "Measured": "yes" if _l["measured"] else "not measured"}
+                                for _l in _wdf_beh["legs"]
+                            ]),
+                            hide_index=True, width="stretch",
+                        )
+                        st.caption(
+                            f"Sum of the legs {_m_usd(_wdf_beh['legs_sum'], md=True)} vs the engine's positions "
+                            f"total {_m_usd(_wdf_beh['pos_total'], md=True)} — "
+                            + ("they match." if _wdf_beh["legs_match"] else "they do NOT match.")
+                        )
+                    if _wdf_pkg.get("closed_positions"):
+                        st.caption("Closed this week: " + ", ".join(_wdf_pkg["closed_positions"]))
+                    if _wdf_pkg.get("unmeasured"):
+                        st.caption("Not measured (P&L not included): " + ", ".join(_wdf_pkg["unmeasured"]))
+
+        elif _rpt_kind == "🧭 Monthly Decision Review (AI)":
+            # 2026-11-10 (docs/plans/reports-page.md step 2): moved here from
+            # 🧠 AI Insights → 📅 Debriefs; renamed from "Monthly Portfolio
+            # Intelligence" (label only: F-4, monthly_reports and the cron are
+            # unchanged). Open to a read-only viewer exactly as it was there.
+            from stock_analyzer import db as _ai_db
+            from stock_analyzer import intelligence_report as _ir
+            from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED as _MR_MIN_GRADED
+            _mr_df = _ai_db.load_monthly_reports(limit=12)
+            # ── Monthly Decision Review (AI) (F-4) ────────────────────────────────────
+            st.subheader("🧭 Monthly Decision Review (AI)")
+            st.markdown(
+                "A monthly retrospective on **how decisions were made** — is the engine "
+                "picking well (entry quality), and do you act on what it surfaces (signal "
+                "discipline)? It surfaces patterns; it never changes a gate."
+            )
+
+            if st.button("Generate Monthly Report", key="_mr_generate_btn", disabled=not _ai_api_key,
+                         help="Generate a decision review for the trailing ~4 weeks from recommendation history."):
+                with st.spinner("Assembling scorecard and calling AI..."):
+                    from stock_analyzer.market_time import today_et as _mr_today_et
+                    from stock_analyzer.market_time import most_recent_sunday as _mr_most_recent_sunday
+
+                    # Anchored to the most recent Sunday, not the raw click date — a
+                    # weekday click must land on the SAME period_end the Sunday cron
+                    # would compute, or the upsert (UNIQUE on period_end) creates a
+                    # one-day-off duplicate row instead of overwriting in place. See
+                    # market_time.most_recent_sunday docstring.
+                    _mr_end   = _mr_most_recent_sunday(_mr_today_et())
+                    _mr_start = _mr_end - timedelta(days=28)
+                    # _or_none (not the lenient loader, whose "is None" branch
+                    # below was dead code -- load_recommendations() never
+                    # actually returns None) so classify_recommendations_read can
+                    # tell a DB outage apart from a genuine "nothing recorded
+                    # yet" — same class as the Weekly Debrief fix above.
+                    _mr_recs  = _ai_db.load_recommendations_or_none(start_date=_mr_start, end_date=_mr_end)
+                    _mr_status = _ir.classify_recommendations_read(_mr_recs)
+                    if _mr_status == "outage":
+                        st.error(
+                            "Could not read recommendation history — the database "
+                            "may be unreachable. Try again in a moment."
+                        )
+                    elif _mr_status == "empty":
+                        st.warning(
+                            "No recommendations recorded in the trailing 4 weeks yet. As Today's "
+                            "Brief surfaces picks day after day, this report will fill in."
+                        )
+                    else:
+                        _mr_trades = st.session_state.get("trades_df", pd.DataFrame())
+
+                        # Current prices for the rec tickers (marks open BUYs + missed-rec gains).
+                        _mr_prices: dict = {}
+                        _mr_tickers = sorted({
+                            str(t).strip().upper()
+                            for t in _mr_recs["ticker"].dropna().tolist() if str(t).strip()
+                        })
+                        if _mr_tickers:
+                            try:
+                                _mpx = fetch_live_prices(_mr_tickers, realtime=False)
+                                _mr_prices = {
+                                    t: float(d.get("price", 0))
+                                    for t, d in (_mpx or {}).items() if d and d.get("price")
+                                }
+                            except Exception:
+                                _mr_prices = {}
+
+                        # SPY close-by-date for the regime/alpha benchmark.
+                        _mr_spy_by_date: dict = {}
+                        try:
+                            _mr_spy_hist = _cached_spy("6mo")
+                            if _mr_spy_hist is not None and not _mr_spy_hist.empty and "Close" in _mr_spy_hist.columns:
+                                for _sidx, _srow in _mr_spy_hist.iterrows():
+                                    _sd = _sidx.date() if hasattr(_sidx, "date") else None
+                                    try:
+                                        _sc = float(_srow["Close"])
+                                    except (TypeError, ValueError):
+                                        _sc = None
+                                    if _sd is not None and _sc and _sc > 0:
+                                        _mr_spy_by_date[_sd] = _sc
+                        except Exception:
+                            _mr_spy_by_date = {}
+
+                        # Recent weekly debriefs for the trajectory line.
+                        _mr_weekly: list = []
+                        try:
+                            _mr_wdf = _ai_db.load_weekly_debriefs(limit=5)
+                            if _mr_wdf is not None and not _mr_wdf.empty:
+                                _mr_weekly = _mr_wdf.to_dict("records")
+                        except Exception:
+                            _mr_weekly = []
+
+                        _mr_pkg = _ir.build_report_package(
+                            period_start=_mr_start, period_end=_mr_end,
+                            recs_df=_mr_recs, trades_df=_mr_trades,
+                            current_prices=_mr_prices, spy_close_by_date=_mr_spy_by_date,
+                            weekly_rows=_mr_weekly, min_graded=_MR_MIN_GRADED,
+                        )
+                        _mr_result = _ir.generate_report(_mr_pkg, _ai_api_key)
+                        if _mr_result is None:
+                            st.error("AI report failed — LLM offline, or no recommendations to analyse.")
+                        else:
+                            if not _mr_pkg.get("q0_ready"):
+                                st.caption(
+                                    f"Note: only {_mr_pkg['n_graded']} matured graded entr(ies) — "
+                                    f"entry-quality grading firms up at {_MR_MIN_GRADED}+."
+                                )
+                            _mr_saved = _ai_db.save_monthly_report(_mr_result)
+                            if _mr_saved:
+                                st.success("Monthly report generated and saved.")
+                                st.rerun()
+                            else:
+                                st.warning("Generated but save failed (DB offline) — showing inline:")
+                                for _lbl, _col in [
+                                    ("Entry quality", "section_entry_quality"),
+                                    ("Signal discipline", "section_signal_discipline"),
+                                    ("Pattern & focus", "section_patterns"),
+                                ]:
+                                    if _mr_result.get(_col):
+                                        st.markdown(f"**{_lbl}**")
+                                        st.markdown(_mr_result[_col])
+
+            # Display most recent report
+            if _mr_df.empty:
+                st.info(
+                    "No monthly reports yet. Click **Generate Monthly Report** for an on-demand "
+                    "run, or wait for the first-Sunday-of-month cron (needs the monthly reports "
+                    "table — run the DDL in Supabase to activate)."
+                )
+            else:
+                # Month-by-month archive: one entry per calendar month (the row with the latest
+                # period_end in each month wins, since an on-demand re-run within a month would
+                # otherwise duplicate), newest first. _mr_df is ordered period_end DESC, so the
+                # first row seen per month key is that month's latest. Labelled by the month
+                # most of the report's window falls in (report_labels), not its end date's.
+                from stock_analyzer.report_labels import (
+                    period_label as _period_label, period_month_key as _period_month_key,
+                    generated_et_date as _generated_et_date,
+                )
+                _mr_opts: list = []
+                _mr_seen: set = set()
+                for _ri in range(len(_mr_df)):
+                    try:
+                        _pe = pd.to_datetime(_mr_df.iloc[_ri].get("period_end"))
+                        _ps = _mr_df.iloc[_ri].get("period_start")
+                        _key = _period_month_key(_ps, _pe)
+                        _lbl = _period_label(_ps, _pe)
+                        if _key is None or _lbl is None:
+                            _key, _lbl = (_pe.year, _pe.month), _pe.strftime("%B %Y")
+                    except Exception:
+                        _key, _lbl = (_ri,), f"Report {_ri + 1}"
+                    if _key in _mr_seen:
+                        continue
+                    _mr_seen.add(_key)
+                    _mr_opts.append((_lbl, _ri))
+
+                if len(_mr_opts) > 1:
+                    # Harden the variable-options widget: drop a stored selection that has aged
+                    # out of the window (a month falling past limit=12), else Streamlit raises on
+                    # an out-of-range persisted value (feedback_streamlit_widget_options_state).
+                    if st.session_state.get("_mr_period_select") not in range(len(_mr_opts)):
+                        st.session_state.pop("_mr_period_select", None)
+                    _mr_sel_i = st.selectbox(
+                        "Report month", options=list(range(len(_mr_opts))),
+                        format_func=lambda i: _mr_opts[i][0], key="_mr_period_select",
+                        help="Browse past monthly reports. Each is frozen exactly as it was generated.",
+                    )
+                    _mr_idx = _mr_opts[_mr_sel_i][1]
+                else:
+                    _mr_idx = _mr_opts[0][1] if _mr_opts else 0
+
+                _mr = _mr_df.iloc[_mr_idx]
+                _mr_alpha = _mr.get("engine_alpha_pct")
+
+                st.caption(
+                    f"Period {_mr.get('period_start', '—')} → {_mr.get('period_end', '—')} · "
+                    f"generated {_generated_et_date(_mr.get('generated_at')) or str(_mr.get('generated_at', ''))[:10]} ET"
+                    + (" · ✉ emailed" if _mr.get("email_sent") else "")
+                )
+
+                # Visuals come from ONE snapshot so the header, Sankey, band bar and missed bar
+                # can never disagree. Prefer the FROZEN snapshot saved with the report (immutable,
+                # and needs no price fetch); fall back to a LIVE recompute for reports saved
+                # before freezing — via the SAME pure helper, so both paths render identically.
+                from stock_analyzer.recommendations_history import report_viz_snapshot as _mr_vizfn
+
+                _mr_viz = None
+                _mr_frozen = False
+                _raw_viz = _mr.get("viz_json")
+                if isinstance(_raw_viz, float):          # NaN placeholder for a missing jsonb cell
+                    _raw_viz = None
+                if isinstance(_raw_viz, str):
+                    try:
+                        _raw_viz = json.loads(_raw_viz)
+                    except Exception:
+                        _raw_viz = None
+                if isinstance(_raw_viz, dict) and _raw_viz.get("flow"):
+                    _mr_viz, _mr_frozen = _raw_viz, True
+
+                if _mr_viz is None:
+                    # Live fallback: rebuild the enriched recs over the report's window, then the
+                    # shared snapshot. Fail-soft — any failure just hides the visuals.
+                    from stock_analyzer.recommendations_history import (
+                        match_recs_to_trades as _mrm, compute_outcomes as _mrco,
+                    )
+                    from stock_analyzer.constants import REC_SCORE_MIN_DAYS as _MR_MINDAYS
+                    _mr_en2: list = []
+                    try:
+                        _mr_ps_d = pd.to_datetime(_mr.get("period_start")).date() if _mr.get("period_start") else None
+                        _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else date.today()
+                        _mr_recs2 = _ai_db.load_recommendations(start_date=_mr_ps_d, end_date=_mr_pe_d)
+                        if _mr_recs2 is not None and not _mr_recs2.empty:
+                            _mr_tr2 = st.session_state.get("trades_df", pd.DataFrame())
+                            _mr_tk2 = sorted({
+                                str(t).strip().upper()
+                                for t in _mr_recs2["ticker"].dropna().tolist() if str(t).strip()
+                            })
+                            _mr_px2: dict = {}
+                            try:
+                                _p2 = fetch_live_prices(_mr_tk2, realtime=False) if _mr_tk2 else {}
+                                _mr_px2 = {t: float(d.get("price", 0)) for t, d in (_p2 or {}).items() if d and d.get("price")}
+                            except Exception:
+                                _mr_px2 = {}
+                            _mr_spy2: dict = {}
+                            try:
+                                _h2 = _cached_spy("6mo")
+                                if _h2 is not None and not _h2.empty and "Close" in _h2.columns:
+                                    for _i2, _r2 in _h2.iterrows():
+                                        _d2 = _i2.date() if hasattr(_i2, "date") else None
+                                        try:
+                                            _c2 = float(_r2["Close"])
+                                        except (TypeError, ValueError):
+                                            _c2 = None
+                                        if _d2 is not None and _c2 and _c2 > 0:
+                                            _mr_spy2[_d2] = _c2
+                            except Exception:
+                                _mr_spy2 = {}
+                            _mr_en2 = _mrco(
+                                _mrm(_mr_recs2, _mr_tr2), _mr_px2, today=_mr_pe_d,
+                                spy_close_by_date=_mr_spy2, min_days=_MR_MINDAYS,
+                            )
+                    except Exception:
+                        _mr_en2 = []
+                    if _mr_en2:
+                        try:
+                            _mr_viz = _mr_vizfn(_mr_en2, rec_types=("new_pick",))
+                        except Exception:
+                            _mr_viz = None
+
+                _mr_flow = _mr_viz.get("flow") if _mr_viz else None
+
+                # Headline counts: DISTINCT New-Position tickers (matches the Sankey). Fall back
+                # to the saved scalar counts only if no snapshot could be produced.
+                _mr_acted_n  = _mr_flow["n_acted"]  if _mr_flow else _mr.get("acted_count")
+                _mr_missed_n = _mr_flow["n_missed"] if _mr_flow else _mr.get("missed_count")
+
+                def _mr_colour(v):
+                    try:
+                        return "#22c55e" if v is not None and float(v) >= 0 else "#ef4444"
+                    except (TypeError, ValueError):
+                        return "#94a3b8"
+
+                _mrc1, _mrc2, _mrc3 = st.columns(3)
+                with _mrc1:
+                    st.markdown(
+                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Engine alpha (acted)</div>"
+                        f"<div style='font-size:1.4em;font-weight:700;color:{_mr_colour(_mr_alpha)}'>"
+                        f"{'N/A' if _mr_alpha is None else f'{float(_mr_alpha):+.1f}%'}</div></div>",
+                        unsafe_allow_html=True,
+                    )
+                with _mrc2:
+                    st.markdown(
+                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Acted on (names)</div>"
+                        f"<div style='font-size:1.4em;font-weight:700'>{_mr_acted_n if _mr_acted_n is not None else '—'}</div></div>",
+                        unsafe_allow_html=True,
+                    )
+                with _mrc3:
+                    st.markdown(
+                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Not acted (names)</div>"
+                        f"<div style='font-size:1.4em;font-weight:700'>{_mr_missed_n if _mr_missed_n is not None else '—'}</div></div>",
+                        unsafe_allow_html=True,
+                    )
+                st.caption(
+                    "Counts are **distinct New-Position tickers** this period — a name surfaced "
+                    "across many days counts once (not daily surfacings). "
+                    + ("Frozen as generated, so the report reads the same whenever you open it."
+                       if _mr_frozen
+                       else "Recomputed live (saved before report-freezing was added).")
+                )
+                st.markdown("")
+
+                # Decision-flow Sankey (Q1 anchor) — the surfaced → acted/missed → outcome
+                # loop the whole report is built on. Same flow that drives the counts above.
+                if _mr_flow and _mr_flow["n_total"] > 0:
+                    _mr_sk = _signal_flow_sankey(
+                        _mr_flow,
+                        "This month's signal flow — New Positions → acted / missed → outcome",
+                    )
+                    if _mr_sk is not None:
+                        st.plotly_chart(_mr_sk, width="stretch")
+                        st.caption(
+                            "New Positions to Initiate this period → acted / missed → outcome "
+                            "(distinct by ticker, matured only). Same engine as Recommendations "
+                            "History, scoped to this report's window."
+                        )
+
+                # Narrative
+                for _mr_label, _mr_col in [
+                    ("Entry quality", "section_entry_quality"),
+                    ("Signal discipline", "section_signal_discipline"),
+                    ("Pattern & focus", "section_patterns"),
+                ]:
+                    if _mr.get(_mr_col):
+                        st.markdown(f"**{_mr_label}**")
+                        st.markdown(_mr.get(_mr_col))
+                        st.markdown("")
+
+                # Q0 evidence — average alpha by composite band. Does higher conviction
+                # actually deliver higher alpha? From the same snapshot (scoped to new_pick).
+                _mr_bands = _mr_viz.get("bands") if _mr_viz else None
+                if _mr_bands and len(_mr_bands) >= 2:
+                    _mb_x = [b["band"] for b in _mr_bands]
+                    _mb_y = [b["avg_alpha"] for b in _mr_bands]
+                    _mb_fig = go.Figure(go.Bar(
+                        x=_mb_x, y=_mb_y,
+                        marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _mb_y],
+                        text=[f"{v:+.1f}" for v in _mb_y], textposition="outside",
+                    ))
+                    _mb_fig.update_layout(
+                        title=dict(text="Entry quality — avg alpha by composite band (pp vs SPY)",
+                                   font=dict(size=13), x=0),
+                        height=240, margin=dict(l=8, r=8, t=36, b=8),
+                        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        yaxis=dict(title="Avg alpha (pp)", zeroline=True, zerolinecolor="#475569"),
+                        xaxis=dict(title=None), showlegend=False,
+                    )
+                    st.plotly_chart(_mb_fig, width="stretch")
+                    st.caption(
+                        "Higher-conviction bands *should* sit higher. If Strong Buy (≥75) trails "
+                        "Buy (65–74), the engine's top tier underperformed this period — the "
+                        "narrative above flags whether that's worth your own review."
+                    )
+                    st.markdown("")
+
+                # Q1 evidence — missed-opportunity ranked bar (named, ranked magnitudes —
+                # the one thing a Sankey can't show). From the same snapshot.
+                _mr_miss = _mr_viz.get("missed") if _mr_viz else None
+                if _mr_miss:
+                    _mr_sp = _mr_viz.get("missed_split", {})
+                    st.markdown("**🎯 What you skipped this period**")
+                    _mr_bo = sorted(_mr_miss, key=lambda r: r["outcome_pct"], reverse=True)
+                    _mr_sel = sorted(
+                        _mr_bo[:8] + [r for r in _mr_bo[-8:] if id(r) not in {id(x) for x in _mr_bo[:8]}],
+                        key=lambda r: r["outcome_pct"],
+                    )
+                    _mr_xc = [r["outcome_pct"] for r in _mr_sel]
+                    _mr_yc = [r["ticker"] for r in _mr_sel]
+                    _mr_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _mr_xc]
+                    _mr_fig = go.Figure(go.Bar(
+                        x=_mr_xc, y=_mr_yc, orientation="h", marker_color=_mr_cc,
+                        text=[f"{v:+.1f}%" for v in _mr_xc], textposition="outside",
+                    ))
+                    _mr_fig.update_layout(
+                        height=max(200, 40 + 24 * len(_mr_sel)),
+                        margin=dict(l=8, r=24, t=10, b=8), template="plotly_dark",
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
+                        yaxis=dict(title=None), showlegend=False,
+                    )
+                    st.plotly_chart(_mr_fig, width="stretch")
+                    st.caption(
+                        f"Of **{_mr_sp.get('n_distinct', len(_mr_miss))}** name(s) surfaced as **New Positions to Initiate** "
+                        f"but never acted on this period: **{_mr_sp.get('n_winners', 0)}** rose (missed), "
+                        f"**{_mr_sp.get('n_dodged', 0)}** fell (dodged). Green = rose after surfacing; red = fell. "
+                        "Awareness-only buy-candidates are excluded. Full ranked table + per-$1k "
+                        "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
+                    )
+
+        elif _rpt_kind == "🧾 Tax Report":
             _rpt_trades_df = db.load_trades_or_none()
             _rpt_years = _tax_report.available_tax_years(_rpt_trades_df)
             _rpt_year_options = _rpt_years if _rpt_years else [_today_et().year]
@@ -44527,7 +45203,7 @@ The app's intelligence is computed live in your browser — so it can only reach
                     Coverage     [label="Analyst Coverage\\nIdeas Inbox — Wall St. vs engine\\nper-firm facts from your paste" shape=box style="rounded,filled" fillcolor=white]
                     ThesisReview [label="Thesis Review\\nINTACT · WEAKENING · BROKEN\\nweekly + post-earnings checkpoint" shape=box style="rounded,filled" fillcolor=white]
                     Debrief      [label="Weekly Debrief\\nPortfolio narrative vs market\\nevery Sunday · on demand" shape=box style="rounded,filled" fillcolor=white]
-                    Monthly      [label="Monthly Report\\nEntry quality · signal discipline\\nfrozen artifact per calendar month" shape=box style="rounded,filled" fillcolor=white]
+                    Monthly      [label="Monthly Decision Review (AI)\\nEntry quality · signal discipline\\nfrozen artifact per calendar month" shape=box style="rounded,filled" fillcolor=white]
                     Snapshot     [label="AI Snapshot\\nOn-demand portfolio narrative\\nClaude · OpenAI · Gemini · Groq" shape=box style="rounded,filled" fillcolor=white]
                 }
 
@@ -44587,9 +45263,9 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🎯 Post-earnings Thesis Checkpoint** — Within 14 days of a held position reporting earnings, a prompt surfaces on AI Insights → Positions. Claude compares the result (actual vs estimated EPS, beat/miss, surprise %) against your thesis and suggests INTACT / WEAKENING / BROKEN. Confirming the suggestion writes a timestamped review row tagged as an earnings checkpoint. Suggestion-only — never auto-saves or auto-changes a recommendation.
 
-- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Uses the same numbers as 📄 Reports → Performance Review → Last week; your account's net-equity change vs SPY over the same dates.
+- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Lives on the 📄 Reports page, and uses the same numbers as 📄 Reports → Performance Review → Last week; your account's net-equity change vs SPY over the same dates.
 
-- **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
+- **🧭 Monthly Decision Review (AI) — "is the engine picking well, and am I acting well?"** Lives on the 📄 Reports page. A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
 - **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A position whose label changed since the last day it was scored auto-expands with a **"🆕 Changed since your last visit"** badge, so a real tier shift can't get missed just because this tab only recomputes once per trading day. Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears in the "⚠️ Alerts" group near the top of 🏠 Home (alongside Day Shock, price cross-check, and the other awareness banners) when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
 
@@ -44609,7 +45285,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **📅 Catalyst-Specific Stress — "which upcoming EVENT threatens this book most?"** Right below the scenario above, on the same tab, click **📅 Generate catalyst-specific stress** to check whether any upcoming HIGH-impact macro event (within 14 days) or one of your own holdings' earnings reports overlaps the same structural weak points. Broad, sector-wide events like FOMC and GDP releases are deliberately excluded from this ranking — they threaten everything equally, so they can't point to a SPECIFIC vulnerability. If neither a macro event nor an earnings report has real overlap with your weak points, this says so plainly rather than manufacturing a concern — but only on a fully-measured correlation matrix; otherwise it says the result isn't verified, since which names count as weak points depends on that matrix. The narrative itself is likewise only generated and saved on a fully-measured matrix. **Awareness only: the event-driven twin of the scenario above, never a new stress calculation, never a gate.**
 
-- **🤖 AI Snapshot** — On-demand, point-in-time portfolio narrative generated live from your holdings, active alerts, market indices, and news, plus Today's Brief calls. Its “what the app is telling you today” list is copied from Today's Brief (not written by the AI), and the AI narrative is instructed not to add trades. Your choice of provider: Claude, OpenAI, Gemini, or Groq. Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For cadence-driven reflection (thesis health, weekly/monthly review), use 🧠 AI Insights instead.
+- **🤖 AI Snapshot** — On-demand, point-in-time portfolio narrative generated live from your holdings, active alerts, market indices, and news, plus Today's Brief calls. Its “what the app is telling you today” list is copied from Today's Brief (not written by the AI), and the AI narrative is instructed not to add trades. Your choice of provider: Claude, OpenAI, Gemini, or Groq. Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For cadence-driven reflection, use 🧠 AI Insights (thesis health) or 📄 Reports (the Weekly Debrief and 🧭 Monthly Decision Review (AI)) instead.
 
 ---
 
@@ -44676,7 +45352,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 
 Setup is a one-time, three-step process shown on the page itself (it needs a free SnapTrade Personal API Key and one Railway environment variable pair — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.
 
-**8. 📄 Reports (owner-only) — its own page in the left menu (MAIN, right below 💰 Account), with two report types.**
+**8. 📄 Reports — its own page in the left menu (MAIN, right below 💰 Account), with four report types:** 📈 Performance Review (opens first) and 🧾 Tax Report, owner-only and described below, plus the 🗓️ Weekly Debrief and the 🧭 Monthly Decision Review (AI), which a read-only viewer can also open (see the 🧠 AI section of this guide).
 
 **Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ violation / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
 
@@ -44695,7 +45371,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🧾 Summary** — the cockpit: one screen that answers "is the book safe, what must I do today, and is anything drifting" without visiting another page. Six zones, in order of urgency. **① Book Safety** (top, colour-coded) — leverage ×, margin cushion, distance to a margin call, and whether your share counts still match the broker. Awareness only; it never changes a recommendation. It shows a grey **"not verified"** rather than green when your cash balance hasn't been loaded — an unmeasured book and a debt-free book are not the same thing, and it won't guess. Broker drift likewise distinguishes **In sync** (checked, matches), **Clean, dated** (matched when last captured, but that snapshot is old), **Trades pending** (differences explained by trades you logged since), and **Not checked** (unknown). When leverage is elevated above your own reference level **and** equity has fallen meaningfully from its recent high, a note states the measured split — how much of the rise came from equity shrinking versus the margin loan itself growing — plus how much smaller the book (or how much more cash) would bring leverage back to your reference. It never tells you to sell or trim anything; it states the two facts together because nothing else in the app does. **② Today** — 5 KPI tiles: Portfolio Value (+ 45-day sparkline), Unrealized P&L, Today's P&L (Home's Tier-B figure when available, else an honestly-labelled held-mark), **Today's Movers** (the 3 biggest moves either way; a name with no quote is reported unpriced, never as a flat 0%), and Avg Score against the buy threshold. The movers tile **renames itself "Last session's movers"** on a weekend, a holiday, or before the open — the change is measured against the previous close, so it only means "today" once today's session has begun. **③ Act Today** — bucketed as **EXIT · TRIM · WATCH** so you can tell an alarm's *nature* at a glance, then **one row per item** (badge · ticker · why · composite score), worst first. Below it a purple banner names any tickers under an active reduce/exit call whose ADD suggestions are being suppressed app-wide. Same source as Home, so it can never under-report. When there's a live EXIT or TRIM item and this engine's own protective track record is measurably running early, a small note appears above the rows stating the measured number (e.g. "historically run early... average N pp... worth confirming before you act, not a reason to ignore the call") — a factual disclosure of a real, tracked pattern, never a reason by itself to override the call. **④ Portfolio Health** — four cards: Risk Posture (falls back to counting the protective calls in today's Brief when the fragility dial can't be computed, and says "not computed" rather than an all-clear if that's missing too), Thesis Integrity (**names** the weakening tickers, not just a count), Diversification, and Active Vetoes. All four say "not checked" rather than "none" when they genuinely don't know. **⑤ Horizon** — three cards: 🎯 Engine Track Record (whether acting on the app's calls has beaten the S&P, offence and defence, alongside what the calls you *skipped* returned so the headline can't read as pure skill), 🔔 Catalyst Watch (which holdings report and when, flagged 🚫 when the name is also under a reduce call), and 📋 Portfolio Thesis (this week's five standing claims, each marked held or shifted). The full ledger with last week's comparison stays in the collapsed expander below. **"Alert level" there is not the same thing as "Risk Posture" above it** — alert level counts danger-level alerts, risk posture reads the market regime, so the two can legitimately differ. **⑥ Top Positions** — your 6 largest by weight: score coloured by the same Buy/Hold/Sell bands the rest of the app uses, a weight bar scaled to your single-name cap, an inline EXIT/TRIM/CAP badge, and ⚡ on a same-day shock. A footer counts how many rose, fell, or had no quote. The full Holdings table is one click away in an expander. Reads what Home already computed this session — visit 🏠 Home first if this page says it needs today's Brief.
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above).
-- **📄 Reports** (owner-only) — every report in one place: **📈 Performance Review** (opens first: a point-in-time return-vs-SPY / recs-and-gates / trade-behavior / leverage-and-risk-drift snapshot for a picked period) and **🧾 Tax Report** (realized short-term/long-term gains by tax year, wash-sale flags), both with CSV/Markdown export, plus a guide to the 🗓️ Weekly Debrief and 🧭 Monthly Portfolio Intelligence in 🧠 AI Insights.
+- **📄 Reports** — every report in one place: **📈 Performance Review** (opens first: a point-in-time return-vs-SPY / recs-and-gates / trade-behavior / leverage-and-risk-drift snapshot for a picked period), the **🗓️ Weekly Debrief** (an AI narrative of the week), the **🧭 Monthly Decision Review (AI)** (is the engine picking well, and do you act on what it surfaces) and the **🧾 Tax Report** (realized short-term/long-term gains by tax year, wash-sale flags). Performance Review and Tax Report are owner-only and have CSV/Markdown export; the two AI reports are also open to a read-only viewer.
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R). On a name you already hold, Analysis never decides an add: it shows Grow Today's add call for today (add / paused with the reason / no add call / not available — open 🏠 Home) and offers a size and 📒 Add only when Grow Today is calling the add. If your holdings couldn't be checked (or a holding couldn't be priced), no share count is shown.
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
@@ -44714,7 +45390,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🧭 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY**, shown as 🎯 Add (a high-conviction name with a tailwind; it carries no share count — for an add and its size, check 📈 Analysis, which shows Grow Today's call; within 3 days of the release it isn't shown as an add: it reads WATCH if a WATCH rule applies, otherwise HOLD), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
-- **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, and a “what the app is telling you today” list copied from Today's Brief (the AI narrative is instructed not to add trades; it is paused while the Brief is offline). Pick your own AI provider (Claude/OpenAI/Gemini/Groq). Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
+- **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, and a “what the app is telling you today” list copied from Today's Brief (the AI narrative is instructed not to add trades; it is paused while the Brief is offline). Pick your own AI provider (Claude/OpenAI/Gemini/Groq). Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For thesis health see 🧠 AI Insights; for the weekly / monthly reviews see 📄 Reports.
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer with two independent sections. **Forward Volatility Forecaster** (Phase 1) tests whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. **Earnings-Move Magnitude** (Phase 2) tests whether the app's own already-live pre-earnings sizing heuristic beats a naive "assume it moves like its own past prints" baseline, per held ticker around its scheduled print — unsigned magnitude only, never a directional call, and no "upcoming, not yet matured" preview (an outcome is only ever shown after it's known). Both sections feed **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. Each section's skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated.
 - **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — 6 write paths: the buy recommendations log, the Grow Today gate suppression ledger, the Watchlist Ready-to-Enter log, and the 3 Watchlist/Rebalancer/Analysis gate-ledger capture sites added 2026-09-13 — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.** Below the checks, **🤖 AI models** lists which model each AI role runs on and where that choice comes from (code default, ⚙️ App Settings, or an environment variable), whether the app's API key can use it, and this app process's calls, errors and fallbacks per role (cron runs happen in their own processes and aren't counted). Under it, a **Portfolio Investigator — AI provider** section lets you choose which AI model the 🔎 Investigator tab (🧠 AI Insights) uses — separate from 🤖 AI Snapshot's own provider choice, not shared or inherited. Only a model that's already passed a required accuracy check is offered.
 - **🛑 The Road Not Taken** — owner-only, not shown in read-only viewer mode. Grades the app's own restraint: every time a gate held back a pick, an add, or downgraded a call, this page shows what the forward return vs SPY over the following ~30 trading days would have been — did the app's caution help or hurt? Covers 14 gates: the original 8 inside Grow Today (macro/sector filters, single-name ceiling, drift conflict, cooldown, early-deterioration WATCH, bear-day tone) plus 6 more — a Rebalancer ADD suppression, a Watchlist ENTER_NOW downgrade to NEAR_ENTRY (sector, beta, or unvalidated R:R — 3 separate gates), and an Analysis add-to-position suppression on a breached stop. A downgrade and an outright suppression are graded as distinct claims (a downgraded name still rendered, just weaker), never blended together. Per gate, not aggregate, and a gate shows no verdict at all ("building") until enough matured, priced, distinct-ticker calls have accrued — expect every gate to read "building" for the first couple of months, longer for the 6 gates added 2026-09-13. **A pure retrospective measurement — it never changes what the engine recommends, gates, or sizes**, today or in the future.
@@ -44722,7 +45398,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **⚙️ App Settings** — owner-only, not shown in read-only viewer mode. Lets you curate the three ticker-roster lists the engine reads — the Grow Today scan universe, the Movers discovery net, and the Diversification candidate roster — from inside the app instead of by editing code. **Edits the engine's INPUT SET, never a decision rule**: no gate, threshold, scoring weight, or `COMPOSITE_BUY` lives here or is ever editable through this page. The database is the single source of truth for these lists — if it's unreachable, the affected page shows "unavailable" rather than silently falling back to a frozen list. Every save is validated (a typo'd symbol blocks the save, never saves with a warning) and versioned in an append-only history, the same way git records why an investment threshold changed. **🤖 AI models** (bottom of the page) picks which model runs three AI roles: **fast** (the pre-market stance, the multi-agent debates, 💬 Ask and the other short narratives), **deep** (thesis reviews and drafts, the weekly debrief, the monthly report) and **extract** (analyst-report and earnings-playbook extraction, which you still review in a preview before saving). For each: **Check model** confirms your API key can use it and shows its effort levels; **Test role** sends one real request shaped like that role's strictest real use and shows the stop reason, tokens, time taken, approximate cost and whether the reply has the format the app reads; **Save** unlocks only after a passing test of that exact model and effort; **Reset to code default** undoes it. Below them, **Decision roles (eval-gated)** lets you switch the three roles whose output feeds the composite's news sentiment, the Act Today / Review news filter and the Pre-Mortem trigger (your R-Multiple declared stop): **score**, **filter** and **extract_trigger**. Because a wrong model there would move scores or hide warnings, Save needs more than a passing Test role: a passing **eval** of that exact model and effort, which you run from a shell with the command the page shows (for score and filter it compares the new model with the current one on your own stored news scores and headlines, and must be recent and measured against the model in effect now; for extract_trigger it checks the new model against labelled examples and your past trades). A **score** switch takes effect at 00:00 UTC on the date shown before you save (normally the next one), so a day's scores aren't split between two models in normal operation; you can't save another score switch while one is pending. The broker ticker lookup (extract_strong) stays fixed in code and is listed read-only. Picking a model changes no rule, and until you save one every role stays on its code default.
 
 - **If the database is unreachable, most pages deliberately refuse to load.** You'll see a red banner saying your portfolio is *not* shown, with a **🔄 Retry connection** button. This is on purpose: rendering an empty portfolio would look like you hold nothing, which is a worse lie than showing nothing at all. Two pages stay open — **🩺 System Trust** (to diagnose it) and **📖 User Guide** (this page) — because neither displays any of your holdings, so neither can mislead you. The app retries by itself every 30 seconds and recovers on its own once the database is back; the button retries immediately. If only your *watchlist* or *trade history* is unreadable, you get an amber warning instead and the app keeps working — your holdings are still correct, but history-driven pages (🎯 My Edge, 🧾 Prior Trades) may look emptier than they are.
-- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets, a **Consensus-Ladder Performance** panel showing average forward return by rating tier — Strong Buy vs Buy vs Hold vs Mixed vs Sell — to test whether that spread is actually earned, with each tier also benchmarked against SPY over the same window, plus an **Engine vs Analyst Calibration** matrix showing who was right when your saved research and the engine's composite disagreed at save time), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history, a past recommendation's outcome, or your current position (e.g. "how many trades did I make last week and what was the gain/loss on each," "why did AAPL lose money after being recommended," "what's my current position in DELL," "how is my portfolio doing overall," or "what sector am I heaviest in") and get an answer sourced from what's actually on record or your already-loaded holdings — never a new engine verdict or gate; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). A position/portfolio/sector question needs your holdings loaded this session (open 🏠 Home first if you haven't); anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot that includes the engine's own reasoning, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.) **Owner-only:** the **🔎 Investigator** tab, next to Ask, is a different kind of tool — not a smarter Ask, but a multi-step investigation that composes several already-reviewed analysis functions to answer an open-ended question the way a research pass would (e.g. "how concentrated is my current portfolio by sector?", "how has my protective EXIT/TRIM alpha performed against SPY?", or "is my own buy instinct beating the app's picks?"), rather than looking up one fact. Every step it runs is shown in an expander, every report ends with a mandatory caveats section, and it can only ever call functions from a fixed, already-reviewed toolbox — it will tell you plainly when a question is outside that toolbox rather than guessing. Read-only and awareness-only, like Ask — it never changes a recommendation, a gate, or a trade. Choose which AI model it uses on 🩺 System Trust (only a model that's passed a required accuracy check is offered); if none is configured yet, the tab tells you so.
+- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking (the Weekly Debrief and the 🧭 Monthly Decision Review (AI) are on the 📄 Reports page), plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets, a **Consensus-Ladder Performance** panel showing average forward return by rating tier — Strong Buy vs Buy vs Hold vs Mixed vs Sell — to test whether that spread is actually earned, with each tier also benchmarked against SPY over the same window, plus an **Engine vs Analyst Calibration** matrix showing who was right when your saved research and the engine's composite disagreed at save time), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history, a past recommendation's outcome, or your current position (e.g. "how many trades did I make last week and what was the gain/loss on each," "why did AAPL lose money after being recommended," "what's my current position in DELL," "how is my portfolio doing overall," or "what sector am I heaviest in") and get an answer sourced from what's actually on record or your already-loaded holdings — never a new engine verdict or gate; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). A position/portfolio/sector question needs your holdings loaded this session (open 🏠 Home first if you haven't); anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot that includes the engine's own reasoning, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.) **Owner-only:** the **🔎 Investigator** tab, next to Ask, is a different kind of tool — not a smarter Ask, but a multi-step investigation that composes several already-reviewed analysis functions to answer an open-ended question the way a research pass would (e.g. "how concentrated is my current portfolio by sector?", "how has my protective EXIT/TRIM alpha performed against SPY?", or "is my own buy instinct beating the app's picks?"), rather than looking up one fact. Every step it runs is shown in an expander, every report ends with a mandatory caveats section, and it can only ever call functions from a fixed, already-reviewed toolbox — it will tell you plainly when a question is outside that toolbox rather than guessing. Read-only and awareness-only, like Ask — it never changes a recommendation, a gate, or a trade. Choose which AI model it uses on 🩺 System Trust (only a model that's passed a required accuracy check is offered); if none is configured yet, the tab tells you so.
 """
             )
 
@@ -44767,7 +45443,7 @@ The toggle above the panels recalculates and re-sorts by the chosen cadence:
         with st.expander("📜 Recommendations History — the engine's report card", expanded=False):
             st.markdown(
                 """
-The **📜 Recommendations History** page is a **rules-based audit trail** (no AI) of every signal the app has surfaced, graded after the fact against what actually happened. It's the raw data the Monthly Intelligence Report narrates.
+The **📜 Recommendations History** page is a **rules-based audit trail** (no AI) of every signal the app has surfaced, graded after the fact against what actually happened. It's the raw data the 🧭 Monthly Decision Review (AI) narrates.
 
 - **The scorecard** matches each past recommendation to your trades to see whether you **acted** on it, then grades the outcome on **alpha** — its return *minus the market's* over the same window. (Beating the market in a down month is a win; trailing it in an up month isn't — raw return alone would credit or blame you for the market's move, not your selection.) It rolls up by conviction band and by cross-check verdict, and only grades picks old enough to have a meaningful outcome.
 - **🎯 Missed Opportunity** answers *"which names did I skip, and what did it cost?"* — names that surfaced as *New Positions to Initiate* but you never bought, ranked by how they did. To stay honest, magnitudes are shown **per $1,000** (you can't buy every name, so it never claims "your portfolio would have gained X%"). Names the app *steered you away from* (the awareness only "more buy candidates") are excluded — skipping those was correct, not a miss.
@@ -45079,6 +45755,13 @@ elif page == "🧠 AI Insights":
         "💡 For a live, point-in-time narrative of your book right now, see "
         "🤖 AI Snapshot on 🏠 Home instead."
     )
+    st.caption(
+        "🗓️ The Weekly Debrief and 🧭 Monthly Decision Review (AI) are now on the "
+        "📄 Reports page."
+    )
+    if st.button("📄 Open Reports", key="_ai_goto_reports"):
+        st.session_state["_pending_page"] = "📄 Reports"
+        st.rerun()
 
     _ai_api_key = _anthropic_key()
 
@@ -45132,11 +45815,9 @@ elif page == "🧠 AI Insights":
             if _t not in _review_by_ticker:
                 _review_by_ticker[_t] = _rv
 
-    from stock_analyzer import debrief_advisor as _dba
+    # Weekly Debrief / Monthly Decision Review moved to 📄 Reports (2026-11-10);
+    # these two loads only feed the status header below.
     _wd_df = _ai_db.load_weekly_debriefs(limit=8)
-
-    from stock_analyzer import intelligence_report as _ir
-    from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED as _MR_MIN_GRADED
     _mr_df = _ai_db.load_monthly_reports(limit=12)
 
     from stock_analyzer import analyst_intel as _ai_intel
@@ -45241,8 +45922,8 @@ elif page == "🧠 AI Insights":
     st.markdown("---")
 
     # ── Cadence tabs ───────────────────────────────────────────────────────────────────────────
-    _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score, _ai_tab_rt, _ai_tab_dlog, _ai_tab_ask, _ai_tab_inv = st.tabs(
-        ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard", "⚠️ Red Team", "⚔️ Debate Log", "💬 Ask", "🔎 Investigator"]
+    _ai_tab_pos, _ai_tab_res, _ai_tab_score, _ai_tab_rt, _ai_tab_dlog, _ai_tab_ask, _ai_tab_inv = st.tabs(
+        ["🩺 Positions", "🏦 Research", "📊 Scorecard", "⚠️ Red Team", "⚔️ Debate Log", "💬 Ask", "🔎 Investigator"]
     )
 
     with _ai_tab_pos:
@@ -45662,657 +46343,6 @@ elif page == "🧠 AI Insights":
                                     st.rerun()
                                 else:
                                     st.error("Save failed — DB offline or no BUY trade found for this ticker.")
-
-
-    with _ai_tab_deb:
-        # ── Weekly Portfolio Debrief ──────────────────────────────────────────────
-        st.subheader("📊 Weekly Portfolio Debrief")
-        st.markdown(
-            "A weekly retrospective: what happened to your portfolio, which signals "
-            "you acted on or ignored, and what behavioural patterns showed up."
-        )
-
-        # On-demand generation
-        if st.button("Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
-                     help="Generate a debrief for the last completed Mon–Sun week, using the "
-                          "same numbers as 📄 Reports → Performance Review → Last week."):
-            with st.spinner("Assembling data and calling AI..."):
-                from stock_analyzer import period_inputs as _wd_pi
-
-                # The last completed Mon-Sun week: ends on the same Sunday the Sunday
-                # cron computes (resolve_period's last_week), so a weekday click lands
-                # on the SAME week_ending and the upsert (UNIQUE on week_ending)
-                # overwrites in place instead of creating a one-day-off duplicate.
-                _wd_start, _wd_today = _pa_mod.resolve_period("last_week", _today_et())
-
-                # Reuse the day-scoped cross-page caches when they are populated
-                # (same keys Reports uses); otherwise let the helper load.
-                _wd_snap_key = f"_account_daily_snapshots_full_cache_{_today_et().isoformat()}"
-                _wd_flows_key = f"_account_flows_full_cache_{_today_et().isoformat()}"
-                _wd_snap_c = st.session_state.get(_wd_snap_key)
-                _wd_flows_c = st.session_state.get(_wd_flows_key)
-                _wd_inputs = _wd_pi.load_engine_inputs(
-                    _ai_db, _wd_start, _wd_today,
-                    account_snapshots_df=_wd_snap_c if _wd_snap_c is not None else _wd_pi.LOAD,
-                    flows=_wd_flows_c if _wd_flows_c is not None else _wd_pi.LOAD,
-                )
-                if _wd_inputs["account_snapshots_df"] is not None:
-                    st.session_state[_wd_snap_key] = _wd_inputs["account_snapshots_df"]
-                if _wd_inputs["flows"] is not None:
-                    st.session_state[_wd_flows_key] = _wd_inputs["flows"]
-
-                _wd_failed = [
-                    _n for _k, _n in (("trades_df", "trade journal"),
-                                      ("account_snapshots_df", "account history"),
-                                      ("daily_snapshots_df", "daily price snapshots"))
-                    if _wd_inputs[_k] is None
-                ]
-                if _thesis_reviews_df is None:
-                    _wd_failed.append("thesis reviews")
-                if _wd_failed:
-                    st.error(
-                        "Could not read " + ", ".join(_wd_failed) + " — the database may be "
-                        "unreachable. Try again in a moment."
-                    )
-                else:
-                    _wd_recs = _ai_db.load_recommendations_or_none(
-                        start_date=_wd_start, end_date=_wd_today
-                    )
-                    _wd_all_recs = _ai_db.load_recommendations_or_none()
-                    if _wd_recs is None:
-                        st.warning(
-                            "Recommendations couldn't be read, so this debrief will say "
-                            "its entry signals are missing.")
-                    _wd_exit_sigs = _ai_db.load_exit_signals_or_none(
-                        days_back=_dba.signal_days_back(_today_et(), _wd_start))
-                    # Latest review per ticker, current holdings only (a thesis
-                    # that recovered, or a name since sold, is not "broken").
-                    # Holdings unknown (no session key) -> no filter, never
-                    # "filter everything out".
-                    _wd_broken = thesis_review_status.debrief_broken(
-                        _thesis_reviews_df,
-                        _open_tickers if "holdings_df" in st.session_state else None)
-
-                    # SPY closes by date (None on any failure -> SPY reads as unknown;
-                    # the account result stays independent of an SPY outage).
-                    _wd_spy_by_date = None
-                    try:
-                        _wd_spy_by_date = _wd_pi.spy_closes_by_date(_cached_spy("2y"))
-                    except Exception:
-                        _wd_spy_by_date = None
-
-                    _wd_core = _wd_pi.compute_period_core(
-                        _wd_inputs, _wd_start, _wd_today,
-                        spy_prices_by_date=_wd_spy_by_date,
-                        reference_leverage=LEVERAGE_REFERENCE_TARGET,
-                    )
-                    _wd_pkg = _dba.build_debrief_package(
-                        week_ending   = _wd_today,
-                        core          = _wd_core,
-                        recs_df       = _wd_recs,
-                        trades_df     = _wd_inputs["trades_df"],
-                        broken_theses = _wd_broken,
-                        all_recs_df   = _wd_all_recs,
-                        exit_signals_df = _wd_exit_sigs,
-                        exit_signals_unavailable = (_wd_exit_sigs is None),
-                        recs_unavailable = (_wd_recs is None),
-                    )
-                    _wd_result = _dba.generate_debrief(_wd_pkg, _ai_api_key)
-                    if _wd_result is None:
-                        st.error("AI debrief failed — LLM offline or the week's numbers could not be read.")
-                    else:
-                        _saved = _ai_db.save_weekly_debrief(_wd_result)
-                        if _saved:
-                            # Flash slot: survives the st.rerun() below (an un-rerun delta
-                            # is discarded), rendered-and-popped under the newest debrief.
-                            st.session_state["_wd_numbers_flash"] = {
-                                "package": _wd_pkg,
-                                "behind": _dba.numbers_behind(_wd_pkg, _wd_core),
-                            }
-                            st.success("Debrief generated and saved.")
-                            st.rerun()
-                        else:
-                            st.warning("Generated but save failed (DB offline) — showing inline:")
-                            if _wd_pkg.get("result_reason"):
-                                st.info("Account result unknown — " + str(_wd_pkg["result_reason"]))
-                            if _wd_pkg.get("excluded_account_line"):
-                                st.caption("⚠️ " + _wd_pkg["excluded_account_line"])
-                            for _lbl, _col in [
-                                ("What happened", "section_facts"),
-                                ("Decisions you made", "section_decisions"),
-                                ("Patterns this week", "section_patterns"),
-                                ("One thing to watch", "section_watchnext"),
-                            ]:
-                                if _wd_result.get(_col):
-                                    st.markdown(f"**{_lbl}**")
-                                    st.markdown(_dba.escape_md_dollars(_wd_result[_col]))
-
-        # Display most recent debrief
-        if _wd_df.empty:
-            st.info(
-                "No weekly debriefs yet. Click **Generate Now** to create one on-demand, "
-                "or wait for the Sunday evening cron."
-            )
-        else:
-            _wd = _wd_df.iloc[0]
-            _wd_perf  = _wd.get("performance_pct")
-            _wd_spy   = _wd.get("spy_pct")
-            _wd_alpha = _wd.get("alpha_pct")
-            # Older rows (metrics_version NULL/1) were measured as equity positions,
-            # Mon->Fri; they stay viewable but are labelled and never trended.
-            _wd_cur = _dba.method_is_current(_wd.get("metrics_version"))
-
-            st.caption(
-                f"Week ending {_wd.get('week_ending', '—')} · "
-                # generated_at is stored in UTC; an evening run read as tomorrow
-                f"generated {_dba.generated_et_date(_wd.get('generated_at'))}"
-                + (" · ✉ emailed" if _wd.get("email_sent") else "")
-                + ("" if _wd_cur else " · older method")
-            )
-
-            # Performance summary row
-            def _wd_fmt(v, suffix):
-                return "unknown" if (v is None or v != v) else f"{v:+.1f}{suffix}"
-            if _wd_cur:
-                _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
-                _wd_col1.metric("Account %", _wd_fmt(_wd_perf, "%"))
-                _wd_col2.metric("SPY %, same dates", _wd_fmt(_wd_spy, "%"))
-                _wd_col3.metric("vs SPY (pp)", _wd_fmt(_wd_alpha, ""))
-                st.caption(
-                    "Account change measured from the session before the week to its last "
-                    "account record — same figure as 📄 Reports → Performance Review → Last week. A "
-                    "leveraged account moves roughly its leverage times the holdings' own move; "
-                    "SPY is unlevered."
-                )
-            elif _wd_perf is not None and _wd_perf == _wd_perf:
-                _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
-                _wd_col1.metric("Portfolio", _wd_fmt(_wd_perf, "%"))
-                _wd_col2.metric("SPY", _wd_fmt(_wd_spy, "%"))
-                _wd_col3.metric("Alpha", _wd_fmt(_wd_alpha, "%"))
-                st.caption(
-                    "Older method: equity positions only, Monday–Friday — not comparable "
-                    "with later weeks."
-                )
-            st.markdown("")
-
-            # Weekly alpha trajectory — are you beating SPY, week over week?
-            # Per-week alpha (portfolio − SPY) from the saved debriefs, oldest → newest.
-            # Current-method rows only: an older-method week is a different quantity.
-            _wt_all = _wd_df[_wd_df["alpha_pct"].notna()].copy() if "alpha_pct" in _wd_df.columns else _wd_df.iloc[0:0]
-            if "metrics_version" in _wt_all.columns:
-                _wt = _wt_all[_wt_all["metrics_version"].apply(_dba.method_is_current)]
-            else:
-                _wt = _wt_all.iloc[0:0]
-            _wt_old_n = len(_wt_all) - len(_wt)
-            if len(_wt) >= 2:
-                _wt = _wt.iloc[::-1]   # load is newest-first; chart reads left→right in time
-                _wt_x = [str(w)[:10] for w in _wt["week_ending"]]
-                _wt_a = [float(a) for a in _wt["alpha_pct"]]
-                _wt_fig = go.Figure(go.Bar(
-                    x=_wt_x, y=_wt_a,
-                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _wt_a],
-                    text=[f"{v:+.1f}" for v in _wt_a], textposition="outside",
-                ))
-                _wt_fig.update_layout(
-                    title=dict(text="Weekly alpha vs SPY (percentage points)", font=dict(size=13), x=0),
-                    height=240, margin=dict(l=8, r=8, t=36, b=8),
-                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    yaxis=dict(title="Alpha (pp)", zeroline=True, zerolinecolor="#475569"),
-                    xaxis=dict(title=None), showlegend=False,
-                )
-                st.plotly_chart(_wt_fig, width="stretch")
-                _wt_beat = sum(1 for v in _wt_a if v > 0)
-                st.caption(
-                    f"Account return minus SPY, per week — green = beat the market. "
-                    f"You beat SPY in **{_wt_beat} of {len(_wt_a)}** tracked week(s). "
-                    f"This is the trend the metrics above show for just the latest week."
-                    + (f" {_wt_old_n} earlier week(s) used the older method and aren't shown."
-                       if _wt_old_n > 0 else "")
-                )
-                st.markdown("")
-            elif _wt_old_n > 0:
-                st.caption(
-                    f"{_wt_old_n} earlier week(s) used the older method and aren't shown — "
-                    "the weekly trend appears once two weeks use the current method."
-                )
-
-            for _wd_label, _wd_col in [
-                ("What happened", "section_facts"),
-                ("Decisions you made", "section_decisions"),
-                ("Patterns this week", "section_patterns"),
-                ("One thing to watch", "section_watchnext"),
-            ]:
-                if _wd.get(_wd_col):
-                    st.markdown(f"**{_wd_label}**")
-                    st.markdown(_dba.escape_md_dollars(_wd.get(_wd_col)))
-                    st.markdown("")
-
-        # Numbers behind the debrief just generated (flash slot, popped so it shows once).
-        _wd_flash = st.session_state.pop("_wd_numbers_flash", None)
-        if _wd_flash:
-            _wdf_pkg, _wdf_beh = _wd_flash["package"], _wd_flash["behind"]
-            # The unknown-result reason must survive the rerun, so it lives in the flash.
-            if _wdf_pkg.get("result_reason"):
-                st.info("Account result unknown — " + str(_wdf_pkg["result_reason"]))
-            if _wdf_pkg.get("excluded_account_line"):
-                st.caption("⚠️ " + _wdf_pkg["excluded_account_line"])
-            with st.expander("Numbers behind this debrief (as generated)", expanded=True):
-                st.caption(
-                    f"Account change measured {_wdf_pkg.get('return_d0') or _wdf_pkg.get('d0')} close → "
-                    f"{_wdf_pkg.get('return_d1') or _wdf_pkg.get('d1')} close."
-                )
-                _wdf_wf = _wdf_pkg.get("waterfall")
-                _wdf_wf = _wdf_wf if isinstance(_wdf_wf, dict) else {}
-                for _wdf_lbl, _wdf_key in (
-                    ("Price moves on positions held through", "held_through"),
-                    ("Last-day moves on positions sold", "sold_leg"),
-                    ("First-day moves on positions bought", "bought_leg"),
-                    ("Same-day round trips", "round_trip"),
-                    ("Deposits / withdrawals", "flows_net"),
-                    ("Dividends", "dividends"),
-                    ("Margin interest posted", "interest"),
-                    ("Fees", "fees"),
-                    ("Unexplained", "unexplained"),
-                ):
-                    st.markdown(f"{_wdf_lbl}: {_m_usd(_wdf_wf.get(_wdf_key), md=True)}")
-                st.markdown(
-                    f"Net equity change: {_m_usd(_wdf_pkg.get('equity_change'), md=True)}"
-                )
-                _wdf_lev = _wdf_pkg.get("max_leverage")   # same figure Reports' caveat uses
-                if _wdf_lev is not None and _wdf_lev > 1:
-                    st.caption(
-                        f"⚠️ At up to {_wdf_lev:.1f}x leverage this week, your return moves "
-                        "roughly that many times the holdings' own move — SPY is unlevered."
-                    )
-                if _wdf_beh["legs"]:
-                    st.dataframe(
-                        pd.DataFrame([
-                            {"Ticker": _l["ticker"], "Shape": _l["shape"] or "—",
-                             "P&L": _m_usd(_l["total"]),
-                             "Measured": "yes" if _l["measured"] else "not measured"}
-                            for _l in _wdf_beh["legs"]
-                        ]),
-                        hide_index=True, width="stretch",
-                    )
-                    st.caption(
-                        f"Sum of the legs {_m_usd(_wdf_beh['legs_sum'], md=True)} vs the engine's positions "
-                        f"total {_m_usd(_wdf_beh['pos_total'], md=True)} — "
-                        + ("they match." if _wdf_beh["legs_match"] else "they do NOT match.")
-                    )
-                if _wdf_pkg.get("closed_positions"):
-                    st.caption("Closed this week: " + ", ".join(_wdf_pkg["closed_positions"]))
-                if _wdf_pkg.get("unmeasured"):
-                    st.caption("Not measured (P&L not included): " + ", ".join(_wdf_pkg["unmeasured"]))
-
-        st.divider()
-
-        # ── Monthly Portfolio Intelligence (F-4) ──────────────────────────────────
-        st.subheader("🧭 Monthly Portfolio Intelligence")
-        st.markdown(
-            "A monthly retrospective on **how decisions were made** — is the engine "
-            "picking well (entry quality), and do you act on what it surfaces (signal "
-            "discipline)? It surfaces patterns; it never changes a gate."
-        )
-
-        if st.button("Generate Monthly Report", key="_mr_generate_btn", disabled=not _ai_api_key,
-                     help="Generate an intelligence report for the trailing ~4 weeks from recommendation history."):
-            with st.spinner("Assembling scorecard and calling AI..."):
-                from stock_analyzer.market_time import today_et as _mr_today_et
-                from stock_analyzer.market_time import most_recent_sunday as _mr_most_recent_sunday
-
-                # Anchored to the most recent Sunday, not the raw click date — a
-                # weekday click must land on the SAME period_end the Sunday cron
-                # would compute, or the upsert (UNIQUE on period_end) creates a
-                # one-day-off duplicate row instead of overwriting in place. See
-                # market_time.most_recent_sunday docstring.
-                _mr_end   = _mr_most_recent_sunday(_mr_today_et())
-                _mr_start = _mr_end - timedelta(days=28)
-                # _or_none (not the lenient loader, whose "is None" branch
-                # below was dead code -- load_recommendations() never
-                # actually returns None) so classify_recommendations_read can
-                # tell a DB outage apart from a genuine "nothing recorded
-                # yet" — same class as the Weekly Debrief fix above.
-                _mr_recs  = _ai_db.load_recommendations_or_none(start_date=_mr_start, end_date=_mr_end)
-                _mr_status = _ir.classify_recommendations_read(_mr_recs)
-                if _mr_status == "outage":
-                    st.error(
-                        "Could not read recommendation history — the database "
-                        "may be unreachable. Try again in a moment."
-                    )
-                elif _mr_status == "empty":
-                    st.warning(
-                        "No recommendations recorded in the trailing 4 weeks yet. As Today's "
-                        "Brief surfaces picks day after day, this report will fill in."
-                    )
-                else:
-                    _mr_trades = st.session_state.get("trades_df", pd.DataFrame())
-
-                    # Current prices for the rec tickers (marks open BUYs + missed-rec gains).
-                    _mr_prices: dict = {}
-                    _mr_tickers = sorted({
-                        str(t).strip().upper()
-                        for t in _mr_recs["ticker"].dropna().tolist() if str(t).strip()
-                    })
-                    if _mr_tickers:
-                        try:
-                            _mpx = fetch_live_prices(_mr_tickers, realtime=False)
-                            _mr_prices = {
-                                t: float(d.get("price", 0))
-                                for t, d in (_mpx or {}).items() if d and d.get("price")
-                            }
-                        except Exception:
-                            _mr_prices = {}
-
-                    # SPY close-by-date for the regime/alpha benchmark.
-                    _mr_spy_by_date: dict = {}
-                    try:
-                        _mr_spy_hist = _cached_spy("6mo")
-                        if _mr_spy_hist is not None and not _mr_spy_hist.empty and "Close" in _mr_spy_hist.columns:
-                            for _sidx, _srow in _mr_spy_hist.iterrows():
-                                _sd = _sidx.date() if hasattr(_sidx, "date") else None
-                                try:
-                                    _sc = float(_srow["Close"])
-                                except (TypeError, ValueError):
-                                    _sc = None
-                                if _sd is not None and _sc and _sc > 0:
-                                    _mr_spy_by_date[_sd] = _sc
-                    except Exception:
-                        _mr_spy_by_date = {}
-
-                    # Recent weekly debriefs for the trajectory line.
-                    _mr_weekly: list = []
-                    try:
-                        _mr_wdf = _ai_db.load_weekly_debriefs(limit=5)
-                        if _mr_wdf is not None and not _mr_wdf.empty:
-                            _mr_weekly = _mr_wdf.to_dict("records")
-                    except Exception:
-                        _mr_weekly = []
-
-                    _mr_pkg = _ir.build_report_package(
-                        period_start=_mr_start, period_end=_mr_end,
-                        recs_df=_mr_recs, trades_df=_mr_trades,
-                        current_prices=_mr_prices, spy_close_by_date=_mr_spy_by_date,
-                        weekly_rows=_mr_weekly, min_graded=_MR_MIN_GRADED,
-                    )
-                    _mr_result = _ir.generate_report(_mr_pkg, _ai_api_key)
-                    if _mr_result is None:
-                        st.error("AI report failed — LLM offline, or no recommendations to analyse.")
-                    else:
-                        if not _mr_pkg.get("q0_ready"):
-                            st.caption(
-                                f"Note: only {_mr_pkg['n_graded']} matured graded entr(ies) — "
-                                f"entry-quality grading firms up at {_MR_MIN_GRADED}+."
-                            )
-                        _mr_saved = _ai_db.save_monthly_report(_mr_result)
-                        if _mr_saved:
-                            st.success("Monthly report generated and saved.")
-                            st.rerun()
-                        else:
-                            st.warning("Generated but save failed (DB offline) — showing inline:")
-                            for _lbl, _col in [
-                                ("Entry quality", "section_entry_quality"),
-                                ("Signal discipline", "section_signal_discipline"),
-                                ("Pattern & focus", "section_patterns"),
-                            ]:
-                                if _mr_result.get(_col):
-                                    st.markdown(f"**{_lbl}**")
-                                    st.markdown(_mr_result[_col])
-
-        # Display most recent report
-        if _mr_df.empty:
-            st.info(
-                "No monthly reports yet. Click **Generate Monthly Report** for an on-demand "
-                "run, or wait for the first-Sunday-of-month cron (needs the monthly reports "
-                "table — run the DDL in Supabase to activate)."
-            )
-        else:
-            # Month-by-month archive: one entry per calendar month (the row with the latest
-            # period_end in each month wins, since an on-demand re-run within a month would
-            # otherwise duplicate), newest first. _mr_df is ordered period_end DESC, so the
-            # first row seen per month key is that month's latest. Labelled by the month
-            # most of the report's window falls in (report_labels), not its end date's.
-            from stock_analyzer.report_labels import (
-                period_label as _period_label, period_month_key as _period_month_key,
-                generated_et_date as _generated_et_date,
-            )
-            _mr_opts: list = []
-            _mr_seen: set = set()
-            for _ri in range(len(_mr_df)):
-                try:
-                    _pe = pd.to_datetime(_mr_df.iloc[_ri].get("period_end"))
-                    _ps = _mr_df.iloc[_ri].get("period_start")
-                    _key = _period_month_key(_ps, _pe)
-                    _lbl = _period_label(_ps, _pe)
-                    if _key is None or _lbl is None:
-                        _key, _lbl = (_pe.year, _pe.month), _pe.strftime("%B %Y")
-                except Exception:
-                    _key, _lbl = (_ri,), f"Report {_ri + 1}"
-                if _key in _mr_seen:
-                    continue
-                _mr_seen.add(_key)
-                _mr_opts.append((_lbl, _ri))
-
-            if len(_mr_opts) > 1:
-                # Harden the variable-options widget: drop a stored selection that has aged
-                # out of the window (a month falling past limit=12), else Streamlit raises on
-                # an out-of-range persisted value (feedback_streamlit_widget_options_state).
-                if st.session_state.get("_mr_period_select") not in range(len(_mr_opts)):
-                    st.session_state.pop("_mr_period_select", None)
-                _mr_sel_i = st.selectbox(
-                    "Report month", options=list(range(len(_mr_opts))),
-                    format_func=lambda i: _mr_opts[i][0], key="_mr_period_select",
-                    help="Browse past monthly reports. Each is frozen exactly as it was generated.",
-                )
-                _mr_idx = _mr_opts[_mr_sel_i][1]
-            else:
-                _mr_idx = _mr_opts[0][1] if _mr_opts else 0
-
-            _mr = _mr_df.iloc[_mr_idx]
-            _mr_alpha = _mr.get("engine_alpha_pct")
-
-            st.caption(
-                f"Period {_mr.get('period_start', '—')} → {_mr.get('period_end', '—')} · "
-                f"generated {_generated_et_date(_mr.get('generated_at')) or str(_mr.get('generated_at', ''))[:10]} ET"
-                + (" · ✉ emailed" if _mr.get("email_sent") else "")
-            )
-
-            # Visuals come from ONE snapshot so the header, Sankey, band bar and missed bar
-            # can never disagree. Prefer the FROZEN snapshot saved with the report (immutable,
-            # and needs no price fetch); fall back to a LIVE recompute for reports saved
-            # before freezing — via the SAME pure helper, so both paths render identically.
-            from stock_analyzer.recommendations_history import report_viz_snapshot as _mr_vizfn
-
-            _mr_viz = None
-            _mr_frozen = False
-            _raw_viz = _mr.get("viz_json")
-            if isinstance(_raw_viz, float):          # NaN placeholder for a missing jsonb cell
-                _raw_viz = None
-            if isinstance(_raw_viz, str):
-                try:
-                    _raw_viz = json.loads(_raw_viz)
-                except Exception:
-                    _raw_viz = None
-            if isinstance(_raw_viz, dict) and _raw_viz.get("flow"):
-                _mr_viz, _mr_frozen = _raw_viz, True
-
-            if _mr_viz is None:
-                # Live fallback: rebuild the enriched recs over the report's window, then the
-                # shared snapshot. Fail-soft — any failure just hides the visuals.
-                from stock_analyzer.recommendations_history import (
-                    match_recs_to_trades as _mrm, compute_outcomes as _mrco,
-                )
-                from stock_analyzer.constants import REC_SCORE_MIN_DAYS as _MR_MINDAYS
-                _mr_en2: list = []
-                try:
-                    _mr_ps_d = pd.to_datetime(_mr.get("period_start")).date() if _mr.get("period_start") else None
-                    _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else date.today()
-                    _mr_recs2 = _ai_db.load_recommendations(start_date=_mr_ps_d, end_date=_mr_pe_d)
-                    if _mr_recs2 is not None and not _mr_recs2.empty:
-                        _mr_tr2 = st.session_state.get("trades_df", pd.DataFrame())
-                        _mr_tk2 = sorted({
-                            str(t).strip().upper()
-                            for t in _mr_recs2["ticker"].dropna().tolist() if str(t).strip()
-                        })
-                        _mr_px2: dict = {}
-                        try:
-                            _p2 = fetch_live_prices(_mr_tk2, realtime=False) if _mr_tk2 else {}
-                            _mr_px2 = {t: float(d.get("price", 0)) for t, d in (_p2 or {}).items() if d and d.get("price")}
-                        except Exception:
-                            _mr_px2 = {}
-                        _mr_spy2: dict = {}
-                        try:
-                            _h2 = _cached_spy("6mo")
-                            if _h2 is not None and not _h2.empty and "Close" in _h2.columns:
-                                for _i2, _r2 in _h2.iterrows():
-                                    _d2 = _i2.date() if hasattr(_i2, "date") else None
-                                    try:
-                                        _c2 = float(_r2["Close"])
-                                    except (TypeError, ValueError):
-                                        _c2 = None
-                                    if _d2 is not None and _c2 and _c2 > 0:
-                                        _mr_spy2[_d2] = _c2
-                        except Exception:
-                            _mr_spy2 = {}
-                        _mr_en2 = _mrco(
-                            _mrm(_mr_recs2, _mr_tr2), _mr_px2, today=_mr_pe_d,
-                            spy_close_by_date=_mr_spy2, min_days=_MR_MINDAYS,
-                        )
-                except Exception:
-                    _mr_en2 = []
-                if _mr_en2:
-                    try:
-                        _mr_viz = _mr_vizfn(_mr_en2, rec_types=("new_pick",))
-                    except Exception:
-                        _mr_viz = None
-
-            _mr_flow = _mr_viz.get("flow") if _mr_viz else None
-
-            # Headline counts: DISTINCT New-Position tickers (matches the Sankey). Fall back
-            # to the saved scalar counts only if no snapshot could be produced.
-            _mr_acted_n  = _mr_flow["n_acted"]  if _mr_flow else _mr.get("acted_count")
-            _mr_missed_n = _mr_flow["n_missed"] if _mr_flow else _mr.get("missed_count")
-
-            def _mr_colour(v):
-                try:
-                    return "#22c55e" if v is not None and float(v) >= 0 else "#ef4444"
-                except (TypeError, ValueError):
-                    return "#94a3b8"
-
-            _mrc1, _mrc2, _mrc3 = st.columns(3)
-            with _mrc1:
-                st.markdown(
-                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Engine alpha (acted)</div>"
-                    f"<div style='font-size:1.4em;font-weight:700;color:{_mr_colour(_mr_alpha)}'>"
-                    f"{'N/A' if _mr_alpha is None else f'{float(_mr_alpha):+.1f}%'}</div></div>",
-                    unsafe_allow_html=True,
-                )
-            with _mrc2:
-                st.markdown(
-                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Acted on (names)</div>"
-                    f"<div style='font-size:1.4em;font-weight:700'>{_mr_acted_n if _mr_acted_n is not None else '—'}</div></div>",
-                    unsafe_allow_html=True,
-                )
-            with _mrc3:
-                st.markdown(
-                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Not acted (names)</div>"
-                    f"<div style='font-size:1.4em;font-weight:700'>{_mr_missed_n if _mr_missed_n is not None else '—'}</div></div>",
-                    unsafe_allow_html=True,
-                )
-            st.caption(
-                "Counts are **distinct New-Position tickers** this period — a name surfaced "
-                "across many days counts once (not daily surfacings). "
-                + ("Frozen as generated, so the report reads the same whenever you open it."
-                   if _mr_frozen
-                   else "Recomputed live (saved before report-freezing was added).")
-            )
-            st.markdown("")
-
-            # Decision-flow Sankey (Q1 anchor) — the surfaced → acted/missed → outcome
-            # loop the whole report is built on. Same flow that drives the counts above.
-            if _mr_flow and _mr_flow["n_total"] > 0:
-                _mr_sk = _signal_flow_sankey(
-                    _mr_flow,
-                    "This month's signal flow — New Positions → acted / missed → outcome",
-                )
-                if _mr_sk is not None:
-                    st.plotly_chart(_mr_sk, width="stretch")
-                    st.caption(
-                        "New Positions to Initiate this period → acted / missed → outcome "
-                        "(distinct by ticker, matured only). Same engine as Recommendations "
-                        "History, scoped to this report's window."
-                    )
-
-            # Narrative
-            for _mr_label, _mr_col in [
-                ("Entry quality", "section_entry_quality"),
-                ("Signal discipline", "section_signal_discipline"),
-                ("Pattern & focus", "section_patterns"),
-            ]:
-                if _mr.get(_mr_col):
-                    st.markdown(f"**{_mr_label}**")
-                    st.markdown(_mr.get(_mr_col))
-                    st.markdown("")
-
-            # Q0 evidence — average alpha by composite band. Does higher conviction
-            # actually deliver higher alpha? From the same snapshot (scoped to new_pick).
-            _mr_bands = _mr_viz.get("bands") if _mr_viz else None
-            if _mr_bands and len(_mr_bands) >= 2:
-                _mb_x = [b["band"] for b in _mr_bands]
-                _mb_y = [b["avg_alpha"] for b in _mr_bands]
-                _mb_fig = go.Figure(go.Bar(
-                    x=_mb_x, y=_mb_y,
-                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _mb_y],
-                    text=[f"{v:+.1f}" for v in _mb_y], textposition="outside",
-                ))
-                _mb_fig.update_layout(
-                    title=dict(text="Entry quality — avg alpha by composite band (pp vs SPY)",
-                               font=dict(size=13), x=0),
-                    height=240, margin=dict(l=8, r=8, t=36, b=8),
-                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    yaxis=dict(title="Avg alpha (pp)", zeroline=True, zerolinecolor="#475569"),
-                    xaxis=dict(title=None), showlegend=False,
-                )
-                st.plotly_chart(_mb_fig, width="stretch")
-                st.caption(
-                    "Higher-conviction bands *should* sit higher. If Strong Buy (≥75) trails "
-                    "Buy (65–74), the engine's top tier underperformed this period — the "
-                    "narrative above flags whether that's worth your own review."
-                )
-                st.markdown("")
-
-            # Q1 evidence — missed-opportunity ranked bar (named, ranked magnitudes —
-            # the one thing a Sankey can't show). From the same snapshot.
-            _mr_miss = _mr_viz.get("missed") if _mr_viz else None
-            if _mr_miss:
-                _mr_sp = _mr_viz.get("missed_split", {})
-                st.markdown("**🎯 What you skipped this period**")
-                _mr_bo = sorted(_mr_miss, key=lambda r: r["outcome_pct"], reverse=True)
-                _mr_sel = sorted(
-                    _mr_bo[:8] + [r for r in _mr_bo[-8:] if id(r) not in {id(x) for x in _mr_bo[:8]}],
-                    key=lambda r: r["outcome_pct"],
-                )
-                _mr_xc = [r["outcome_pct"] for r in _mr_sel]
-                _mr_yc = [r["ticker"] for r in _mr_sel]
-                _mr_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _mr_xc]
-                _mr_fig = go.Figure(go.Bar(
-                    x=_mr_xc, y=_mr_yc, orientation="h", marker_color=_mr_cc,
-                    text=[f"{v:+.1f}%" for v in _mr_xc], textposition="outside",
-                ))
-                _mr_fig.update_layout(
-                    height=max(200, 40 + 24 * len(_mr_sel)),
-                    margin=dict(l=8, r=24, t=10, b=8), template="plotly_dark",
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
-                    yaxis=dict(title=None), showlegend=False,
-                )
-                st.plotly_chart(_mr_fig, width="stretch")
-                st.caption(
-                    f"Of **{_mr_sp.get('n_distinct', len(_mr_miss))}** name(s) surfaced as **New Positions to Initiate** "
-                    f"but never acted on this period: **{_mr_sp.get('n_winners', 0)}** rose (missed), "
-                    f"**{_mr_sp.get('n_dodged', 0)}** fell (dodged). Green = rose after surfacing; red = fell. "
-                    "Awareness-only buy-candidates are excluded. Full ranked table + per-$1k "
-                    "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
-                )
 
 
     with _ai_tab_res:

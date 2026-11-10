@@ -1681,7 +1681,7 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
 
 
 def render_intelligence_email(report: dict) -> str:
-    """Render the monthly Portfolio Intelligence Report as a professional HTML
+    """Render the monthly Decision Review (AI) (F-4) as a professional HTML
     email (light-mode-first; same template family as render_debrief_email)."""
     period_start = str(report.get("period_start", "—"))[:10]
     period_end   = str(report.get("period_end", "—"))[:10]
@@ -1741,7 +1741,7 @@ def render_intelligence_email(report: dict) -> str:
         # Header band
         "<div style='background:linear-gradient(135deg,#1e3a5f 0%,#1e40af 100%);padding:28px 28px 22px'>"
         "<div style='font-size:1.35em;font-weight:800;color:#ffffff;letter-spacing:-0.01em'>"
-        "DRISHTA Monthly Intelligence</div>"
+        "DRISHTA Monthly Decision Review</div>"
         f"<div style='color:#93c5fd;font-size:0.82em;margin-top:4px'>"
         f"{period_start} → {period_end} &nbsp;·&nbsp; Generated {generated_at}</div></div>"
         # Body

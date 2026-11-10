@@ -241,7 +241,7 @@ python-lab/
     ├── portfolio_qa.py             Portfolio Q&A retrospective Q&A over trade history (💬 Ask tab); parse_question + lookup + narrate_answer
     ├── severity.py                 Canonical severity DISPLAY vocabulary (ACT_NOW / ELEVATED / WATCH / STEADY; display-only, no gate tokens)
     ├── headless_alert_engine.py    Headless alert computation for the cron: protective signals (stops / EXIT / risk-off), reactive pullback, EOD snapshot
-    ├── notify.py                   Email rendering (weekly debrief / monthly intelligence / pullback / protective) + Resend delivery
+    ├── notify.py                   Email rendering (weekly debrief / monthly decision review (F-4) / pullback / protective) + Resend delivery
     ├── db.py                       Supabase ops (holdings/watchlist/trades/manual_stops); trade-replay; fractional shares; reference-table persistence; income-events CSV import (F-268: save_income_events_from_csv); load_snaptrade_income_events now also selects snaptrade_txn_id (CSV vs broker dedup)
     ├── system_health.py            System proprioception — pipeline-trust health checks (Phase 1, F-235). Owner-only diagnostic; every function is read-only/informing, changes no gate/recommendation/composite/threshold. Pull-based/render-time — never depends on its own background job having run; answers "can I trust what the app told me today?" for 🩺 System Trust
     └── api_health.py               API call health event recording

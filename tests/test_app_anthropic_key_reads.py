@@ -1,4 +1,4 @@
-"""P1-f: app.py's 16 Anthropic-specific key reads go through the shared helpers.
+"""P1-f: app.py's 17 Anthropic-specific key reads go through the shared helpers.
 
 Out of scope: the multi-provider pickers (AI Snapshot's _AI_PROVIDERS, the
 Investigator's provider config) read secrets_path / env_var for whichever provider is
@@ -94,4 +94,6 @@ def test_helpers_defined_before_first_use():
 def test_full_order_site_count():
     # 13 + System Trust's AI-models key check (P2-d, models.list only) + App
     # Settings' AI models section (P2-c: models.list / models.retrieve and Test role)
-    assert len(_calls_to("_anthropic_key")) == 15
+    # + the 📄 Reports page (2026-11-10: the Weekly Debrief / Monthly Decision Review
+    # moved there from AI Insights, which keeps its own read for its other tabs)
+    assert len(_calls_to("_anthropic_key")) == 16
