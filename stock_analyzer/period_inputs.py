@@ -1,7 +1,7 @@
 """
 Shared input loading + core computation for the period report engine.
 
-One helper that 💰 Account -> Reports (app.py), the in-app Weekly Debrief
+One helper that 📄 Reports (app.py), the in-app Weekly Debrief
 "Generate Now" button (app.py) and the Sunday cron's `_run_debrief`
 (cron_runner.py) ALL call, so the three can never read different inputs or
 run the engine with different arguments.

@@ -2760,7 +2760,7 @@ def _run_thesis(now_et, force: bool) -> int:
 def _run_debrief(now_et, force: bool) -> int:
     """Sunday evening: generate weekly portfolio debrief via LLM and email it.
     Runs after thesis reviews in the same Sunday cron slot. Numbers come from the
-    period_attribution engine (the same figures as 💰 Account → Reports → Last
+    period_attribution engine (the same figures as 📄 Reports → Performance Review → Last
     week); the lane runs whenever the engine's inputs are readable -- there is no
     minimum-snapshot-days floor."""
     global _LAST_LANE_FAILURE_DETAIL

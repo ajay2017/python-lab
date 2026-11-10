@@ -1,6 +1,6 @@
 """C8: the Sunday Weekly Debrief email's "Where the money went" block.
 
-The block is the SAME rows as 💰 Account → Reports → Last week
+The block is the SAME rows as 📄 Reports → Performance Review → Last week
 (`period_attribution.waterfall_rows`, built once in the debrief package) formatted
 with the same `usd_plain(value, plus=not total)` the page's `_m_usd` wraps, minus
 the privacy mask.  These tests drive the real engine -> package -> email chain."""

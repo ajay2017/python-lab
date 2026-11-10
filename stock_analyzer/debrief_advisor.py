@@ -24,7 +24,7 @@ from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
 _SYSTEM_PROMPT = """You are a disciplined portfolio advisor helping an individual investor reflect on the past week. Write a structured weekly debrief in four sections. Be factual, concise, and neutral — observation not judgement. Write in second person ("Your portfolio..."). Plain language, no jargon. Target 400–500 words total.
 
 Section 1 — WHAT HAPPENED (2–3 sentences):
-State the account result: your account (net equity) moved X% ($Y) from the <d0> close to the <d1> close; SPY moved Z% over the same dates. If leverage is given, say once that at about L× leverage the account moves roughly L times the holdings' own move while SPY is unlevered — never call the gap skill. If the account result is unknown, say so in one sentence with the reason given; never estimate. Name contributors/detractors with their $: a position sold this week shows the move up to the sale, one bought this week the move from its buy price. If names are listed as not measured, say their P&L isn't included. If margin interest is listed as not recorded for a month, say the interest line may be understated. Do not speculate about the unexplained remainder. This is the same figure as 💰 Account → Reports → Last week. Facts only.
+State the account result: your account (net equity) moved X% ($Y) from the <d0> close to the <d1> close; SPY moved Z% over the same dates. If leverage is given, say once that at about L× leverage the account moves roughly L times the holdings' own move while SPY is unlevered — never call the gap skill. If the account result is unknown, say so in one sentence with the reason given; never estimate. Name contributors/detractors with their $: a position sold this week shows the move up to the sale, one bought this week the move from its buy price. If names are listed as not measured, say their P&L isn't included. If margin interest is listed as not recorded for a month, say the interest line may be understated. Do not speculate about the unexplained remainder. This is the same figure as 📄 Reports → Performance Review → Last week. Facts only.
 
 Section 2 — DECISIONS YOU MADE (bullet list):
 For each actionable signal surfaced this week — both new-position entry signals AND protective WATCH/TRIM/EXIT signals — did the investor act or not, and what happened to the name by week-end? Be specific. When a conviction tier (Strong Buy / Buy) is given for an entry signal, name it.
@@ -347,7 +347,7 @@ def build_debrief_package(
 
     core:         `period_inputs.compute_period_core(...)` -- {recon, leverage,
                   account_return, account_rows_excluded} for the Mon-Sun week ending `week_ending`;
-                  the SAME engine and figures as 💰 Account -> Reports -> Last
+                  the SAME engine and figures as 📄 Reports -> Performance Review -> Last
                   week.  None = the engine inputs could not be read (offline).
     recs_df:      DataFrame of recommendations surfaced during the week.
     trades_df:    DataFrame of all trades (to detect acted-on signals).
@@ -758,7 +758,7 @@ def _format_prompt(package: dict) -> str:
     if package.get("performance_pct") is not None:
         r0, r1 = package.get("return_d0") or d0, package.get("return_d1") or d1
         lines.append(f"Account change measured {r0} close to {r1} close (net equity, flow-adjusted;"
-                     " the same figure as the Account page's Reports tab, Last week):")
+                     " the same figure as 📄 Reports → Performance Review → Last week):")
         lines.append(f"  Account change: {_pct(package.get('performance_pct'))}"
                      + (f" ({_usd_plain(package['equity_change'])})"
                         if package.get("dates_agree") and package.get("equity_change") is not None else ""))

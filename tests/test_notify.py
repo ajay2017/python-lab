@@ -668,7 +668,7 @@ def test_v2_email_tiles_label_account_spy_and_vs_spy_pp():
 def test_v2_footnote_names_reports_and_leverage_sentence():
     html = notify.render_debrief_email(_v2(), period=_PERIOD)
     assert "net-equity change, flow-adjusted" in html
-    assert "Reports → Last week" in html
+    assert "Reports → Performance Review → Last week" in html
     assert "At up to 2.4&times; leverage" in html and "SPY is unlevered" in html
 
 

@@ -3829,8 +3829,8 @@ silently drift onto a renamed/removed model.
 
 ### `stock_analyzer/tax_report.py`
 
-Phase 1 of the 📄 Reports feature (F-276) — realized-gains tax report, rendered as a third tab
-("📄 Reports") on 💰 Account. Pure, no Streamlit imports.
+Phase 1 of the 📄 Reports feature (F-276) — realized-gains tax report, rendered on the 📄 Reports
+page (a tab on 💰 Account until 2026-11-10, F-276d). Pure, no Streamlit imports.
 
 **`build_realized_lot_ledger(trades_df, tax_year, today=None) -> dict | None`** — a FIFO
 closed-lot replay, deliberately a SEPARATE implementation from `tax_advisor._build_open_lots`,
@@ -3869,7 +3869,7 @@ Offline (`trades_df is None`) and genuinely-empty-year are distinct return state
 shaped-empty dict (`rows: []`, all totals `0.0`, `reconciles=True`) — never collapsed.
 `available_tax_years(trades_df)` backs the tab's year selector (distinct ET-converted years among
 non-SPLIT SELL rows, descending). `format_ledger_csv`/`format_ledger_markdown` are pure
-formatting helpers so `app.py`'s Reports tab stays render-only wiring.
+formatting helpers so `app.py`'s 📄 Reports page stays render-only wiring.
 
 Awareness/archival only — issues no recommendation, gates nothing, adds no new constant (reuses
 `TAX_STCG_THRESHOLD_DAYS`/`TAX_WASH_SALE_DAYS`). Not a `_GATE_FILES` member. Voluntary Opus
@@ -3879,7 +3879,7 @@ Awareness/archival only — issues no recommendation, gates nothing, adds no new
 ### `stock_analyzer/performance_review.py`
 
 Phase 2 of the 📄 Reports feature (F-276b) — the Performance Review, a second radio option inside
-the same "📄 Reports" tab on 💰 Account. Pure, no Streamlit imports; all I/O (trades, rec/gate
+the same 📄 Reports page (F-276d). Pure, no Streamlit imports; all I/O (trades, rec/gate
 rows, snapshot DataFrames, SPY price map) injected by the `app.py` caller.
 
 **Hard architectural rule, verified not just designed:** `build_review(...)` is pure SYNTHESIS,

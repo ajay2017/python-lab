@@ -1419,7 +1419,7 @@ def render_watchlist_entries_email(
 
 def _money_block(pkg: dict) -> str:
     """The Weekly Debrief email's "Where the money went" table: EXACTLY the rows
-    💰 Account → Reports → Last week shows (`period_attribution.waterfall_rows`,
+    📄 Reports → Performance Review → Last week shows (`period_attribution.waterfall_rows`,
     built once in the debrief package), formatted with the same
     `period_attribution.usd_plain(value, plus=not total)` the page's `_m_usd` wraps --
     minus the privacy mask.  "" when there are no rows (engine offline / no period)."""
@@ -1584,7 +1584,7 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
                 + "</tr></table>"
                 "<p style='font-size:0.72em;color:#9ca3af;margin:0 0 20px;text-align:center'>"
                 "Your account's net-equity change, flow-adjusted — the same figure as "
-                "💰 Account → Reports → Last week."
+                "📄 Reports → Performance Review → Last week."
                 + lev_sentence +
                 "</p>"
             )
