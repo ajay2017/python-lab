@@ -41987,7 +41987,8 @@ elif page == "📄 Reports":
         "Recomputed each time you open it; Last week, Last month, "
         "This/Last quarter, This tax year, Since tracking or Custom.\n"
         "- **🗓️ Weekly Debrief**: an AI narrative of the week, using the same numbers as "
-        "Performance Review → Last week.\n"
+        "Performance Review → Last week. A saved debrief keeps the figures it was generated "
+        "with; the page says when they differ from Performance Review → Last week.\n"
         "- **🧭 Monthly Decision Review (AI)**: is the engine picking well, and do you act "
         "on what it surfaces. Frozen once generated; it is not a returns report "
         "(for the month's result, use Performance Review → Last month).\n"
@@ -43053,12 +43054,38 @@ elif page == "📄 Reports":
                     _wd_col1.metric("Account %", _wd_fmt(_wd_perf, "%"))
                     _wd_col2.metric("SPY %, same dates", _wd_fmt(_wd_spy, "%"))
                     _wd_col3.metric("vs SPY (pp)", _wd_fmt(_wd_alpha, ""))
-                    st.caption(
-                        "Account change measured from the session before the week to its last "
-                        "account record — same figure as 📄 Reports → Performance Review → Last week. A "
-                        "leveraged account moves roughly its leverage times the holdings' own move; "
-                        "SPY is unlevered."
+                    # A stored debrief is a dated artifact: if the account record behind it
+                    # was repaired (or a flow recorded) after it was generated, or it is for
+                    # another week than Performance Review → Last week shows now, say so
+                    # instead of claiming it matches (debrief_freshness). Same day-scoped
+                    # caches and the same row-exclusion inputs as Performance Review.
+                    from stock_analyzer import debrief_freshness as _wd_fresh_mod
+                    _wd_fday = _today_et().isoformat()
+                    _wd_fsnap_key = f"_account_daily_snapshots_full_cache_{_wd_fday}"
+                    _wd_fflows_key = f"_account_flows_full_cache_{_wd_fday}"
+                    if st.session_state.get(_wd_fsnap_key) is None:
+                        st.session_state[_wd_fsnap_key] = db.load_account_daily_snapshots()
+                    if st.session_state.get(_wd_fflows_key) is None:
+                        # the None-returning loader, as Performance Review uses
+                        st.session_state[_wd_fflows_key] = db.load_account_flows_for_dedup_check()
+                    try:
+                        _wd_fexcl = _art_mod.exclude_stale_rows(
+                            st.session_state[_wd_fsnap_key], db.load_trades_or_none())[1]
+                        _wd_fexcl_dates = [_x.get("snapshot_date") for _x in _wd_fexcl]
+                    except Exception:
+                        _wd_fexcl_dates = None   # couldn't check -> the claim is dropped
+                    _wd_fresh = _wd_fresh_mod.stored_debrief_freshness(
+                        _wd.get("generated_at"), _wd.get("week_ending"),
+                        st.session_state[_wd_fsnap_key],
+                        current_week_ending=_pa_mod.resolve_period("last_week", _today_et())[1],
+                        excluded_dates=_wd_fexcl_dates,
+                        flows_rows=st.session_state[_wd_fflows_key],
                     )
+                    _wd_stale_msg = _wd_fresh_mod.stale_warning_text(
+                        _wd_fresh, _dba.generated_et_date(_wd.get("generated_at")))
+                    if _wd_stale_msg:
+                        st.warning(_wd_stale_msg)
+                    st.caption(_wd_fresh_mod.account_caption(_wd_fresh))
                 elif _wd_perf is not None and _wd_perf == _wd_perf:
                     _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
                     _wd_col1.metric("Portfolio", _wd_fmt(_wd_perf, "%"))
@@ -43605,14 +43632,7 @@ elif page == "📄 Reports":
 
                     _rpt_table_rows = []
                     for _rr in _rpt_ledger["rows"]:
-                        _rr_ws = _rr.get("wash_sale_status")
-                        _rr_ws_label = _rr_ws.get("status") if isinstance(_rr_ws, dict) else "—"
-                        if _rr_ws_label == "violation":
-                            _rr_ws_label = "⛔ violation"
-                        elif _rr_ws_label == "pending":
-                            _rr_ws_label = "⏳ pending"
-                        elif _rr_ws_label == "clean":
-                            _rr_ws_label = "✅ clean"
+                        _rr_ws_label = _tax_report.wash_sale_label(_rr)
                         _rpt_table_rows.append({
                             "Ticker": _rr["ticker"],
                             "Buy Date": _rr["buy_date"] or "—",
@@ -45263,7 +45283,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🎯 Post-earnings Thesis Checkpoint** — Within 14 days of a held position reporting earnings, a prompt surfaces on AI Insights → Positions. Claude compares the result (actual vs estimated EPS, beat/miss, surprise %) against your thesis and suggests INTACT / WEAKENING / BROKEN. Confirming the suggestion writes a timestamped review row tagged as an earnings checkpoint. Suggestion-only — never auto-saves or auto-changes a recommendation.
 
-- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Lives on the 📄 Reports page, and uses the same numbers as 📄 Reports → Performance Review → Last week; your account's net-equity change vs SPY over the same dates.
+- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Lives on the 📄 Reports page, and uses the same numbers as 📄 Reports → Performance Review → Last week when it is generated; your account's net-equity change vs SPY over the same dates. A saved debrief keeps the figures it was generated with, and the page says when they differ from Performance Review → Last week (for example after the account record was repaired, or when it is for an earlier week).
 
 - **🧭 Monthly Decision Review (AI) — "is the engine picking well, and am I acting well?"** Lives on the 📄 Reports page. A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
@@ -45354,7 +45374,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 
 **8. 📄 Reports — its own page in the left menu (MAIN, right below 💰 Account), with four report types:** 📈 Performance Review (opens first) and 🧾 Tax Report, owner-only and described below, plus the 🗓️ Weekly Debrief and the 🧭 Monthly Decision Review (AI), which a read-only viewer can also open (see the 🧠 AI section of this guide).
 
-**Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ violation / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
+**Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ wash sale (loss deferred, all or part) / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
 
 **Performance Review:** pick a period (Last week — the last completed Mon–Sun — Last month, This quarter, Last quarter, This tax year, Since tracking once your account history covers enough, or a custom date range) for a point-in-time, downloadable snapshot. **At the top: a data-trust strip, then "1 · Period result" and "3 · Leverage & margin"** (see the paragraph below). Everything described next sits under a **"More from this period"** expander: **Account Return vs SPY** (your real account return, read from your recorded account value just before the period started and at its end, adjusted for any deposits/withdrawals in between, next to SPY's return over those SAME dates — a "Month by month" expander breaks it down by calendar month; shown only when your daily account history covers the start of the period, otherwise withheld with a note on what sub-range IS covered); **Return on Capital Cycled Through Closed Trades** (realized P&L divided by the summed cost basis of every closed lot that period — capital reused across several round trips is counted once per trade, so this reads closer to an average per-trade return than a period return, and it's **not your account's own return**; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎖️ Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); **Risk Discipline** (R-Multiple — closed trades' realized P&L measured against the planned risk at entry, reconstructed from the app's ATR-baseline or your own saved risk plan; per-trade detail always shown, plus mean/median/worst-loss stats once enough matured episodes exist); and **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing risk-snapshot history; the old leverage-cushion drift now lives in section 3). Downloads as CSV or Markdown, same as the Tax Report.
 

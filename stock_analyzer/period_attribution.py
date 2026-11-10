@@ -651,9 +651,13 @@ def _usd(x) -> str:
     reads a pair as LaTeX."""
     if x is None or not math.isfinite(x):
         return "unknown"   # NaN/inf would raise in round(); unknown, never a crash
-    if round(abs(x)) == 0:
-        return "\\$0"   # never "-\$0" for a sub-dollar rounding residue
     sign = "-" if x < 0 else ""
+    if round(abs(x)) == 0:
+        if abs(x) >= _CENT_TOL:
+            # a sub-dollar figure the strip flags (amber at >= half a cent)
+            # must show its cents, or "Unexplained $0" sits beside a warning
+            return f"{sign}\\${abs(x):,.2f}"
+        return "\\$0"   # never "-\$0" for a sub-cent rounding residue
     return f"{sign}\\${abs(x):,.0f}"
 
 
@@ -909,13 +913,17 @@ def format_period_markdown(report: dict) -> str:
 
 def usd_plain(x, *, plus: bool = False) -> str:
     """Dollars for st.metric / dataframe cells (NOT markdown): sign BEFORE the
-    `$` ("-$1,314"), "unknown" for None, "$0" inside half a cent.  `plus`
-    prefixes gains with "+"."""
+    `$` ("-$1,314"), "unknown" for None, "$0" inside half a cent.  A sub-dollar
+    figure at or above half a cent shows its cents ("$0.38"), the same rule as
+    `_usd`, so a flagged residue never reads "$0".  `plus` prefixes gains with
+    "+"."""
     if x is None or not math.isfinite(x):
         return "unknown"   # NaN/inf would raise in round(); unknown, never a crash
-    if abs(x) < _CENT_TOL or round(abs(x)) == 0:
-        return "$0"   # incl. a sub-dollar residue that would print "-$0"
+    if abs(x) < _CENT_TOL:
+        return "$0"   # never a signed zero for a sub-cent residue
     sign = "-" if x < 0 else ("+" if plus else "")
+    if round(abs(x)) == 0:
+        return f"{sign}${abs(x):,.2f}"   # sub-dollar but visible: show the cents
     return f"{sign}${abs(x):,.0f}"
 
 

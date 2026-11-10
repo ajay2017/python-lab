@@ -77,10 +77,11 @@ def test_page_calls_the_engine_once_each():
                "format_period_markdown"):
         assert len(_attr_calls("_pa_mod", fn)) == 1, fn
     # resolve_period: once in the Reports block, once more in the Weekly Debrief's Generate Now
-    # (C7), which sits after it in the file
+    # (C7), which sits after it in the file, and a third time where the stored debrief is shown
+    # (debrief_freshness: the week Performance Review -> Last week resolves to NOW), after both
     debrief_line = next(i for i, ln in enumerate(_SRC.splitlines(), 1) if 'key="_wd_generate_btn"' in ln)
     rp = _attr_calls("_pa_mod", "resolve_period")
-    assert len(rp) == 2 and len([c for c in rp if c.lineno < debrief_line]) == 1
+    assert len(rp) == 3 and len([c for c in rp if c.lineno < debrief_line]) == 1
     # and the helper itself runs each engine function exactly once
     core = _pi_func("compute_period_core")
     assert len(_calls_in(core, "reconcile_period")) == 1
@@ -253,6 +254,8 @@ def test_mask_usd_removes_escaped_dollars_only():
     assert pa.mask_usd("Unexplained -\\$57 (0.7%)") == "Unexplained •••••• (0.7%)"
     assert "$" not in pa.mask_usd("cushion \\$2,410 and \\$1,000.50")
     assert pa.mask_usd("Account records 5/5") == "Account records 5/5"
+    # sub-dollar cents (pa._usd now prints them beside a warn chip) are masked too
+    assert pa.mask_usd("Unexplained -\\$0.38 (0.0%)") == "Unexplained •••••• (0.0%)"
 
 
 def _ok_recon(**over):

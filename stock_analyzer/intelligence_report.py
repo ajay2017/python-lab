@@ -50,7 +50,7 @@ This report judges BEHAVIOUR and ENGINE QUALITY over roughly the past month. It 
 Background you must use correctly:
 - Every position the investor holds began as a recommendation that cleared the app's gates and scored above the entry threshold (composite ≥ {COMPOSITE_BUY}), surfacing as a high-conviction "New Position to Initiate." So the engine's pick quality is the foundation everything else sits on.
 - A recommendation's quality is judged on ALPHA — its return minus SPY over the same window. Beating the market in a down month is a win; trailing it in an up month is not. Lead with alpha, not raw return.
-- "Acted on" means the investor actually traded the name; "missed" means it surfaced but they did not. The "missed-return gap" is the RAW-return gap (average missed return minus average acted return), not an alpha figure; positive means ignored names returned more than the ones acted on (money left on the table). Quote it as a raw-return gap, never as alpha.
+- "Acted on" means the investor actually traded the name; "missed" means it surfaced but they did not. The "skipped-minus-acted average return gap" is the RAW-return gap (average missed return minus average acted return), not an alpha figure; positive means ignored names returned more than the ones acted on (money left on the table). Quote it as a raw-return gap, never as alpha.
 
 Write EXACTLY three sections with these bold headers and nothing before the first header:
 
@@ -316,7 +316,7 @@ def _format_prompt(package: dict) -> str:
         f"  Action rate: {package['action_rate']:.0f}%" if package.get("action_rate") is not None else "  Action rate: N/A",
         f"  Avg outcome — acted: {_pct(package.get('avg_acted_pct'))} · missed: {_pct(package.get('avg_missed_pct'))}",
         f"  Avg ALPHA vs SPY — acted: {_pct(package.get('avg_acted_alpha'))} · missed: {_pct(package.get('avg_missed_alpha'))}",
-        f"  Missed-return gap (RAW return, not alpha; missed minus acted; positive = money left on the table): {_pct(package.get('missed_alpha'))}",
+        f"  Skipped-minus-acted average return gap (raw return, NOT alpha; skipped minus acted; positive = the skipped names did better): {_pct(package.get('missed_alpha'))}",
     ]
     if package.get("best"):
         b = package["best"]

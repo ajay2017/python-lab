@@ -1147,13 +1147,25 @@ def test_format_prompt_decision_quality_block_only_when_truthy():
     assert "Decision quality" not in da._format_prompt(_base_package())
     package = _base_package(decision_quality_month={
         "month_str": "2026-07", "grade_letter": "B", "composite_score": 72.0,
-        "trade_count": 8, "win_rate": 0.6, "profit_factor": 1.8,
+        "trade_count": 8, "win_rate": 60.0, "profit_factor": 1.8,
     })
     text_present = da._format_prompt(package)
     assert "Decision quality — 2026-07 month to date (8 trades):" in text_present
     assert "Grade: B (composite 72/100)" in text_present
     assert "Win rate: 60%" in text_present
     assert "Profit factor: 1.80" in text_present
+
+
+def test_format_prompt_win_rate_is_percent_not_multiplied():
+    """decision_quality.win_rate is already in percent (16.7 = 16.7%); the
+    prompt must read "17%", never "1670%"."""
+    package = _base_package(decision_quality_month={
+        "month_str": "2026-07", "grade_letter": "C", "composite_score": 50.0,
+        "trade_count": 6, "win_rate": 16.7, "profit_factor": 0.5,
+    })
+    text = da._format_prompt(package)
+    assert "Win rate: 17%" in text
+    assert "1670%" not in text
 
 
 # ─── _parse_response ──────────────────────────────────────────────────────────

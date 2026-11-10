@@ -268,6 +268,52 @@ def test_wash_sale_status_is_none_for_a_gain():
     assert ledger["rows"][0]["wash_sale_status"] is None
 
 
+# ── wash-sale display labels (a wash sale is a deferred loss, not a violation) ─
+
+def test_wash_sale_label_violation_reads_loss_deferred():
+    row = {"wash_sale_status": {"status": "violation", "rebuy_date": "2024-06-10",
+                                "days_after": 9}, "gain": -50.0}
+    assert tr.wash_sale_label(row) == "⛔ wash sale (loss deferred, all or part)"
+    assert tr.wash_sale_label(row, emoji=False) == "wash sale (loss deferred, all or part)"
+    assert "violation" not in tr.wash_sale_label(row)
+
+
+def test_wash_sale_label_pending_and_clean_keep_their_wording():
+    assert tr.wash_sale_label({"wash_sale_status": {"status": "pending"}, "gain": -1.0}) == "⏳ pending"
+    assert tr.wash_sale_label({"wash_sale_status": {"status": "clean"}, "gain": -1.0}) == "✅ clean"
+    assert tr.wash_sale_label({"wash_sale_status": {"status": "clean"}, "gain": -1.0},
+                              emoji=False) == "clean"
+
+
+def test_wash_sale_label_gain_is_na_and_unknown_gain_stays_dash():
+    assert tr.wash_sale_label({"wash_sale_status": None, "gain": 100.0}) == "n/a (gain)"
+    assert tr.wash_sale_label({"wash_sale_status": None, "gain": 0.0}) == "n/a (gain)"
+    # firing controls: a loss with no status, or an unknown gain, is not "n/a (gain)"
+    assert tr.wash_sale_label({"wash_sale_status": None, "gain": -0.01}) == "—"
+    assert tr.wash_sale_label({"wash_sale_status": None, "gain": None}) == "—"
+    assert tr.wash_sale_label({}) == "—"
+    assert tr.wash_sale_label(None) == "—"
+
+
+def test_exports_use_the_display_label_not_the_internal_status():
+    sale_date = date(2024, 6, 1)
+    rows = [
+        _row(1, "WSV", "BUY", 10, 50.0, when=date(2024, 1, 1)),
+        _row(2, "WSV", "SELL", 10, 40.0, cost_basis=50.0, realized_pnl=-100.0, when=sale_date),
+        _row(3, "WSV", "BUY", 10, 41.0, when=sale_date + timedelta(days=5)),
+        _row(4, "WSG", "BUY", 10, 50.0, when=date(2024, 1, 1)),
+        _row(5, "WSG", "SELL", 10, 60.0, cost_basis=50.0, realized_pnl=100.0,
+             when=sale_date),
+    ]
+    ledger = tr.build_realized_lot_ledger(_df(rows), 2024, today=sale_date + timedelta(days=60))
+    csv = tr.format_ledger_csv(ledger).set_index("ticker")["wash_sale_status"].to_dict()
+    assert csv["WSV"] == "wash sale (loss deferred, all or part)"
+    assert csv["WSG"] == "n/a (gain)"
+    md = tr.format_ledger_markdown(ledger)
+    assert "wash sale (loss deferred, all or part)" in md and "n/a (gain)" in md
+    assert "violation" not in md
+
+
 # ── SPLIT holding-period inheritance ─────────────────────────────────────────
 
 def test_split_inherits_original_buy_date_and_pro_rates_cost():

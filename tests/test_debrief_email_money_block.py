@@ -151,6 +151,19 @@ def test_losses_are_red_gains_green_zero_default():
     assert "color:#dc2626" in tds[0] and "color:#059669" in tds[1] and "color" not in tds[2]
 
 
+def test_sub_dollar_rows_show_cents_with_their_colour():
+    # a sub-dollar residue reads "$0.38", not "$0", and keeps its red / green cue
+    pkg = {"result_status": "ok", "d0": "a", "d1": "b",
+           "waterfall_rows": [
+               {"label": "l", "value": -0.38, "indent": False, "total": False, "breakdown": False, "note": ""},
+               {"label": "g", "value": 0.38, "indent": False, "total": False, "breakdown": False, "note": ""},
+               {"label": "z", "value": 0.004, "indent": False, "total": False, "breakdown": False, "note": ""}]}
+    html = notify.render_debrief_email({"metrics_version": 2, "performance_pct": 1.0}, period=pkg)
+    assert [c[1] for c in _cells(html)] == ["-$0.38", "+$0.38", "$0"]
+    tds = re.findall(r"<td style='[^']*text-align:right;([^']*)'>", html.split("Where the money went")[1])
+    assert "color:#dc2626" in tds[0] and "color:#059669" in tds[1] and "color" not in tds[2]
+
+
 def test_indent_breakdown_and_total_styling_and_notes():
     core, t = _core()
     html = _email(_pkg(core, t))

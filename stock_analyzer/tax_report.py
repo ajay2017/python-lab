@@ -275,6 +275,29 @@ def available_tax_years(trades_df: pd.DataFrame | None) -> list[int]:
     return years
 
 
+def wash_sale_label(row: dict, *, emoji: bool = True) -> str:
+    """Display label for one lot's wash-sale status. The internal status value
+    stays "violation" (it is `tax_advisor.wash_sale_violation_after_harvest`'s
+    contract); a wash sale is a DEFERRED loss, not a violation, so the reader
+    sees "wash sale (loss deferred, all or part)". A lot with no status reads "n/a (gain)"
+    when it is a gain (the rule only applies to realized losses), else "—"
+    (gain unknown). `emoji=False` is the plain form for CSV / Markdown exports."""
+    ws = (row or {}).get("wash_sale_status")
+    status = ws.get("status") if isinstance(ws, dict) else None
+    if status == "violation":
+        return ("⛔ " if emoji else "") + "wash sale (loss deferred, all or part)"
+    if status == "pending":
+        return ("⏳ " if emoji else "") + "pending"
+    if status == "clean":
+        return ("✅ " if emoji else "") + "clean"
+    if status:
+        return str(status)
+    gain = (row or {}).get("gain")
+    if gain is not None and gain >= 0:
+        return "n/a (gain)"
+    return "—"
+
+
 def format_ledger_csv(ledger: dict) -> pd.DataFrame:
     """One row per closed lot, flattened for CSV export."""
     cols = ["ticker", "buy_date", "sell_date", "shares", "proceeds", "cost",
@@ -284,7 +307,7 @@ def format_ledger_csv(ledger: dict) -> pd.DataFrame:
         return pd.DataFrame(columns=cols)
     out = []
     for r in rows:
-        ws = r.get("wash_sale_status")
+        _lbl = wash_sale_label(r, emoji=False)
         out.append({
             "ticker":           r.get("ticker"),
             "buy_date":         r.get("buy_date"),
@@ -295,7 +318,7 @@ def format_ledger_csv(ledger: dict) -> pd.DataFrame:
             "gain":             r.get("gain"),
             "days_held":        r.get("days_held"),
             "term":             r.get("term"),
-            "wash_sale_status": ws.get("status") if isinstance(ws, dict) else None,
+            "wash_sale_status": None if _lbl == "—" else _lbl,
         })
     return pd.DataFrame(out, columns=cols)
 
@@ -335,8 +358,7 @@ def format_ledger_markdown(ledger: dict) -> str:
     if not rows:
         lines.append("| — | — | — | — | — | — | — | — | — | — |")
     for r in rows:
-        ws = r.get("wash_sale_status")
-        ws_label = ws.get("status") if isinstance(ws, dict) else "—"
+        ws_label = wash_sale_label(r, emoji=False)
         cost = r.get("cost")
         gain = r.get("gain")
         cost_str = f"${cost:,.2f}" if cost is not None else "—"

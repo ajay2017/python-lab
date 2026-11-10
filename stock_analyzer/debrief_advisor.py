@@ -905,7 +905,7 @@ def _format_prompt(package: dict) -> str:
         lines.append(f"Decision quality — {dq['month_str']} month to date ({dq['trade_count']} trades):")
         lines.append(f"  Grade: {dq['grade_letter']} (composite {dq['composite_score']:.0f}/100)")
         if dq.get("win_rate") is not None:
-            lines.append(f"  Win rate: {dq['win_rate']*100:.0f}%")
+            lines.append(f"  Win rate: {dq['win_rate']:.0f}%")  # already in percent
         if dq.get("profit_factor") is not None:
             lines.append(f"  Profit factor: {dq['profit_factor']:.2f}")
 
