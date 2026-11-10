@@ -37,6 +37,11 @@ from stock_analyzer.constants import SNAPTRADE_REQUEST_TIMEOUT_SEC
 from stock_analyzer.market_time import today_et
 from stock_analyzer.providers.yfinance_provider import _call_with_timeout
 
+# One page of activities: `get_account_activities` makes a single request with this
+# `limit` and does not page, so a result this long may be a truncated window
+# (the cron withholds its completed-sync stamp then).
+ACTIVITIES_PAGE_LIMIT = 1000
+
 try:
     import streamlit as st
 except Exception:
@@ -217,7 +222,7 @@ def get_account_activities(account_id: str, lookback_days: int):
                 "start_date": start.isoformat(),
                 "end_date": end.isoformat(),
                 "offset": 0,
-                "limit": 1000,
+                "limit": ACTIVITIES_PAGE_LIMIT,
             },
             SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )

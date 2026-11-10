@@ -568,19 +568,27 @@ def test_shares_short_when_broker_shows_more_that_day():
     fills = [fill("A", "CSCO", "BUY", 5, 103.50, date(2026, 11, 4)),    # price differs: no MATCH
              fill("B", "CSCO", "BUY", 3, 102.00, date(2026, 11, 4))]
     f = tec.pending_fill_findings(e, fills)
-    assert kinds(f) == ["SHARES_SHORT"]
-    assert f[0]["severity"] == "tick" and f[0]["txn_ids"] == ["A", "B"]
-    assert f[0]["fill_date"] == date(2026, 11, 4)
-    assert f[0]["text"] == ("8 shares of CSCO BUY in Robinhood fills not yet matched to the "
-                            "journal are dated Wed Nov 4, more than the 5 you entered")
+    # C2b: the 5-share fill at another price is also a PRICE_DIFFERS tick
+    assert kinds(f) == ["PRICE_DIFFERS", "SHARES_SHORT"]
+    short = f[1]
+    assert short["severity"] == "tick" and short["txn_ids"] == ["A", "B"]
+    assert short["fill_date"] == date(2026, 11, 4)
+    assert short["text"] == ("8 shares of CSCO BUY in Robinhood fills not yet matched to the "
+                             "journal are dated Wed Nov 4, more than the 5 you entered")
+    # with no same-size fill it is SHARES_SHORT alone
+    only = tec.pending_fill_findings(
+        e, [fill("A", "CSCO", "BUY", 6, 103.50, date(2026, 11, 4)),
+            fill("B", "CSCO", "BUY", 3, 102.00, date(2026, 11, 4))])
+    assert kinds(only) == ["SHARES_SHORT"]
 
 
 def test_shares_equal_or_fewer_that_day_is_not_short():
     e = entry("CSCO", "BUY", 8, 103.00, date(2026, 11, 4))
     assert tec.pending_fill_findings(
         e, [fill("A", "CSCO", "BUY", 5, 103.50, date(2026, 11, 4))]) == []     # fewer
-    assert tec.pending_fill_findings(
-        e, [fill("A", "CSCO", "BUY", 8, 150.00, date(2026, 11, 4))]) == []     # equal, price off: C5's job
+    # equal shares at another price is not SHARES_SHORT; since C2b it is PRICE_DIFFERS
+    assert kinds(tec.pending_fill_findings(
+        e, [fill("A", "CSCO", "BUY", 8, 150.00, date(2026, 11, 4))])) == ["PRICE_DIFFERS"]
 
 
 def test_match_same_day_carries_the_txn_id_and_is_info():
@@ -836,7 +844,7 @@ def test_a_shortfall_that_already_existed_is_not_blamed_on_the_new_sell():
 
 
 def test_journal_none_or_unreadable_is_an_info_finding_never_silent():
-    want = {"kind": "SELL_REPLAY_UNCHECKED", "severity": "info",
+    want = {"kind": "SELL_REPLAY_UNCHECKED", "severity": "info", "group": "time",
             "text": "Couldn't check this SELL against the order of your journal's trades."}
     assert tec.sell_replay_finding(None, "OKTA", 5, "2026-11-05T14:00:00-05:00") == want
     assert tec.sell_replay_finding("nope", "OKTA", 5, "2026-11-05T14:00:00-05:00") == want

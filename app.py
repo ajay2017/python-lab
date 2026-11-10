@@ -169,8 +169,6 @@ from stock_analyzer.constants import (
     RR_FAVOURABLE_MIN,
     RR_MARGINAL_MIN,
     TRADE_PRICE_SANITY_FLOOR,
-    TRADE_PRICE_SANITY_RATIO_LOW,
-    TRADE_PRICE_SANITY_RATIO_HIGH,
     TRADE_DUP_SUBMIT_WINDOW_SEC,
     ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS,
     WATCHLIST_STALE_DAYS,
@@ -30896,6 +30894,73 @@ elif page == "📒 Trade Journal":
 
     _TJ_ENTRY_UNCHECKED = "Couldn't check the date and time."
 
+    # TJDate C2b: the price-band and Robinhood-fill findings for a MANUAL entry.
+    # Orchestration only (fetch, then hand to the pure checks in
+    # stock_analyzer/trade_entry_checks.py, which make every decision). Each half has
+    # its own guard so a failure becomes an info finding saying it wasn't checked,
+    # never a silent clean. -> {"findings": [...], "link": None | {"txn_id", "pending_id"}}
+    # where `link` is the one Robinhood fill this entry matched exactly (its id is
+    # stored on the record and its pending import flips to logged on Confirm).
+    def _tj_price_broker_stage(_rec, _tk, _act, _sh, _px, _journal):
+        _out_f, _link = [], None
+        _d = trade_time.et_trade_date(_rec.get("traded_at"))
+        try:
+            _bar_sr, _bar_hist = None, None
+            if trade_entry_checks.price_check_needs_bar(_d, _today_et()):
+                _bar_sr = _cached_session_range(_tk, _d.isoformat())
+                try:
+                    _bar_hist = _unadjusted_history_or_raise(
+                        _tk, trade_entry_checks.price_check_history_period())
+                except Exception:
+                    _bar_hist = None
+            _bar, _bar_why = trade_entry_checks.bar_for_price_check(
+                _d, _today_et(), _bar_hist, _bar_sr)
+            _band = trade_entry_checks.price_band_finding(
+                _px, _d, _bar, _today_et(), now_et=_now_et(), unchecked_reason=_bar_why)
+            _pf = trade_entry_checks.price_band_entry_finding(_band, _px, _d)
+            if _pf is not None:
+                _out_f.append(_pf)
+        except Exception:
+            _out_f.append(trade_entry_checks.price_check_failed_finding())
+        try:
+            # No DB: nothing to compare with and nothing claimed. A config row that
+            # says anything but connected: the owner isn't using the sync, no line.
+            _bk_cfg = db.load_snaptrade_config() if db.has_db() else False
+            if _bk_cfg is None:
+                _out_f.append(trade_entry_checks.broker_unchecked_finding())
+            elif _bk_cfg is not False and _bk_cfg.get("status") == "connected":
+                _bk_fills = trade_entry_checks.unlinked_fills(
+                    db.load_snaptrade_pending_fills_or_none(
+                        trade_entry_checks.fills_since(_d).isoformat()),
+                    _journal)
+                _bk_entry = {"ticker": _tk, "action": _act, "shares": _sh, "price": _px,
+                             "trade_date": _d}
+                _bk_f = trade_entry_checks.pending_fill_findings(_bk_entry, _bk_fills)
+                if _bk_f is None:
+                    _out_f.append(trade_entry_checks.broker_unchecked_finding())
+                else:
+                    _out_f.extend(_bk_f)
+                    for _m in _bk_f:
+                        if _m["kind"] == trade_entry_checks.KIND_MATCH_SAME_DAY and _m["txn_ids"]:
+                            _link = {"txn_id": _m["txn_ids"][0],
+                                     "pending_id": trade_entry_checks.pending_id_for_txn(
+                                         _bk_fills, _m["txn_ids"][0])}
+                            break
+                    if not _bk_f and not trade_entry_checks.has_same_day_fill(
+                            _bk_entry, _bk_fills):
+                        # Freshness qualifies an ABSENCE of findings only (and not
+                        # when the day's fills were compared and reconciled); never
+                        # worded as "matches Robinhood".
+                        _bk_cov = trade_entry_checks.broker_coverage_finding(
+                            trade_entry_checks.broker_check_coverage(
+                                _d, db.load_snaptrade_txn_synced_at_or_none()))
+                        if _bk_cov is not None:
+                            _out_f.append(_bk_cov)
+        except Exception:
+            _link = None
+            _out_f.append(trade_entry_checks.broker_unchecked_finding())
+        return {"findings": _out_f, "link": _link}
+
     # ── SELL confirmation card ─────────────────────────────────────────────
     _pending_sell = st.session_state.get("_tj_pending_sell")
     if _pending_sell:
@@ -30965,7 +31030,8 @@ elif page == "📒 Trade Journal":
             _ps_saved = db.save_trade(_pending_sell)
             st.session_state.pop("_budget_trades_cache", None)
             if _ps_saved or not db.has_db():
-                _ps_broker_pid = st.session_state.pop("_tj_pending_broker_id", None)
+                _ps_broker_pid = trade_confirm.pending_import_to_flip(
+                    st.session_state.pop("_tj_pending_broker_id", None), _pending_sell)
                 if _ps_broker_pid is not None:
                     db.mark_snaptrade_pending_import_logged(_ps_broker_pid)
                     st.session_state.pop("_tj_broker_prefill", None)
@@ -31152,7 +31218,8 @@ elif page == "📒 Trade Journal":
             _pb_saved = db.save_trade(_pending_buy)
             st.session_state.pop("_budget_trades_cache", None)
             if _pb_saved or not db.has_db():
-                _pb_broker_pid = st.session_state.pop("_tj_pending_broker_id", None)
+                _pb_broker_pid = trade_confirm.pending_import_to_flip(
+                    st.session_state.pop("_tj_pending_broker_id", None), _pending_buy)
                 if _pb_broker_pid is not None:
                     db.mark_snaptrade_pending_import_logged(_pb_broker_pid)
                     st.session_state.pop("_tj_broker_prefill", None)
@@ -31564,7 +31631,7 @@ elif page == "📒 Trade Journal":
         else:
             st.caption("Sanity-check overrides — tick only when intentionally logging a backfill, historical, or unusual trade:")
             st.checkbox(
-                "Allow unusual price (±50% off market — historical/split-adjusted/delisted)",
+                trade_entry_checks.price_sanity_override_label(),
                 key="_tj_override_price",
                 help="Skips the price-typo guard (e.g. $0.01 vs $565). Use for backfills or split-adjusted entries.",
             )
@@ -32062,10 +32129,10 @@ elif page == "📒 Trade Journal":
                 if _market_price:
                     _mp_delta_str = ""
                     try:
-                        _mp_ratio = price_val / _market_price
-                        if _mp_ratio < 0.5 or _mp_ratio > 2.0:
+                        _mp_san = trade_entry_checks.price_sanity(price_val, _market_price)
+                        if _mp_san["hint"]:
                             _mp_delta_str = (
-                                f" <span style='color:#fca5a5'>· ⚠ {(_mp_ratio-1)*100:+.0f}% off market</span>"
+                                f" <span style='color:#fca5a5'>· ⚠ {(_mp_san['ratio']-1)*100:+.0f}% off market</span>"
                             )
                     except Exception:
                         pass
@@ -32207,23 +32274,22 @@ elif page == "📒 Trade Journal":
             _override_sell   = st.session_state.get("_tj_override_sell", False)
             _mp_check   = _market_price_for(ticker_input) if ticker_input else None
             _price_block_reason: str | None = None
-            if price_val < TRADE_PRICE_SANITY_FLOOR and not _override_price:
+            _tj_san = trade_entry_checks.price_sanity(price_val, _mp_check)
+            if _tj_san["kind"] == "floor" and not _override_price:
                 _price_block_reason = (
                     f"Entered price <b>${price_val:.2f}</b> is below "
                     f"${TRADE_PRICE_SANITY_FLOOR:.2f} — almost "
                     "always a typo. Confirm the price, or tick "
                     "<b>'Allow unusual price'</b> above the form and resubmit."
                 )
-            elif _mp_check and _mp_check > 0 and not _override_price:
-                _ratio = price_val / _mp_check
-                if _ratio < TRADE_PRICE_SANITY_RATIO_LOW or _ratio > TRADE_PRICE_SANITY_RATIO_HIGH:
-                    _price_block_reason = (
-                        f"Entered price <b>${price_val:.2f}</b> is "
-                        f"<b>{(_ratio-1)*100:+.0f}%</b> off the current market price "
-                        f"<b>${_mp_check:,.2f}</b> — looks like a typo. Confirm "
-                        "the price, or tick <b>'Allow unusual price'</b> above the "
-                        "form (e.g. for a historical backfill) and resubmit."
-                    )
+            elif _tj_san["kind"] == "ratio" and not _override_price:
+                _price_block_reason = (
+                    f"Entered price <b>${price_val:.2f}</b> is "
+                    f"<b>{(_tj_san['ratio']-1)*100:+.0f}%</b> off the current market price "
+                    f"<b>${_mp_check:,.2f}</b> — looks like a typo. Confirm "
+                    "the price, or tick <b>'Allow unusual price'</b> above the "
+                    "form (e.g. for a historical backfill) and resubmit."
+                )
 
             # ── Ticker existence check ───────────────────────────────────────
             # _market_price_for returns None when no source (held positions,
@@ -32666,6 +32732,7 @@ elif page == "📒 Trade Journal":
                 # entries keep their locked date and get only the date-in-words line.
                 _entry_stage = {"findings": [], "logging_as": ""}
                 _entry_ok = True
+                _tj_match_link = None       # C2b: the Robinhood fill a manual entry matched
                 if _is_broker_trade:
                     if "traded_at" in record:
                         try:
@@ -32713,10 +32780,19 @@ elif page == "📒 Trade Journal":
                                 _entry_sr = trade_entry_checks.sell_replay_unchecked_finding()
                             if _entry_sr is not None:
                                 _entry_f.append(_entry_sr)
+                        # TJDate C2b: price band, then the Robinhood fills (the card
+                        # reads time, replay, price, broker). Each half guards itself.
+                        _entry_pb = _tj_price_broker_stage(
+                            record, ticker_input, action, shares_val, price_val, _dup_journal)
+                        _entry_f.extend(_entry_pb["findings"])
+                        _tj_match_link = _entry_pb["link"]
+                        if _tj_match_link is not None:
+                            record["broker_txn_id"] = _tj_match_link["txn_id"]
                 if _entry_ok:
                     try:
                         _dup_check = trade_confirm.find_duplicate_entries(
-                            record, _dup_journal, broker_path=_is_broker_trade)
+                            record, _dup_journal,
+                            broker_path=_is_broker_trade or bool(record.get("broker_txn_id")))
                     except Exception:
                         _dup_check = None       # confirm card shows "couldn't check"
                     if action == "SELL":
@@ -32731,7 +32807,19 @@ elif page == "📒 Trade Journal":
                     # never sent to save_trade) — the snaptrade_pending_imports row
                     # to flip to 'logged' once this record actually saves.
                     if _is_broker_trade:
-                        st.session_state["_tj_pending_broker_id"] = _broker_prefill.get("pending_id")
+                        st.session_state["_tj_pending_broker_id"] = {
+                            "pending_id": _broker_prefill.get("pending_id"),
+                            "txn_id": _broker_prefill.get("snaptrade_txn_id")}
+                    elif _tj_match_link is not None and _tj_match_link["pending_id"] is not None:
+                        # C2b: a manual entry that matched a Robinhood fill exactly
+                        # flips that pending import to logged on Confirm.
+                        st.session_state["_tj_pending_broker_id"] = {
+                            "pending_id": _tj_match_link["pending_id"],
+                            "txn_id": _tj_match_link["txn_id"]}
+                    else:
+                        # A stale id from an abandoned card must never be flipped
+                        # by an unrelated manual entry.
+                        st.session_state.pop("_tj_pending_broker_id", None)
                     st.rerun()
 
 
@@ -45405,7 +45493,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Awareness only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap. The **beta card**, when your portfolio beta breaches its target, states the exact dollar figure needed to trim your top contributor back to target (not a rough percentage), discloses whether that trim also improves or worsens your margin/leverage exposure (a margin-funded ADD can make the beta *number* look better while your actual exposure against your equity gets *worse* — the app now says so explicitly), and — inside a **"📊 Rank Defensive-Beta Candidates"** expander — ranks real defensive-sector candidates by how much beta relief they'd actually provide, disclosing (never hiding) when a candidate is below the app's normal Buy gate or structurally can't reach target at all. It never issues a buy call below that gate — ranking and disclosure only, the decision stays yours.
 - **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English, and (further down the same tab) a **Hidden Same-Bet Detector** — an on-demand check for positions that look diversified by sector and price correlation but secretly bet on the same underlying assumption, classifying each finding as unverified/possible/confirmed against the correlation data above. **🧭 Signal Coherence** (a 5th tab) mechanically joins three existing per-ticker surfaces — the composite score's own direction, the weekly Thesis Review status, and the most recent Bull/Bear debate verdict — and surfaces only names where they genuinely disagree; no synthesized explanation, just the raw signals side by side. Explicitly directional, not precise. Awareness only — never gates or reorders; composite score still decides which name to act on.
 - **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; signal-driven actions; the headline at the top states what to do: a red **⛔ Act first** when a stop is breached, naming Today's Brief only when the Brief lists that breach (otherwise "the stop rule says sell at the next open"); an ℹ️ note, a 🟢 alert line and no danger count when the live price has recovered above the stop; an amber **🔴 danger alerts below — review each** for other danger alerts; and the green all-clear only when there is nothing to act on and no warning) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations, plus a trim card for a danger-tier correlated pair you hold, when both names are scored). If the correlation sample behind a pair is too thin or couldn't be confirmed, no trim is recommended — the pair appears under **Correlated pairs — trim withheld** instead, and the Daily Brief keeps add-to-winner suggestions on both names paused. Likewise the green "well balanced" line only shows when the correlation check behind it is verified. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it, each dismissible for the session (a dismissed alert reappears if the target/floor changes or a new one fires, so nothing is silently suppressed permanently). Note: weight-*target* rebalancing (drift vs. a target allocation %) lives on 🥧 Portfolio Overview's ⚖️ Rebalancing tab — a different feature from this page's score-driven actions.
-- **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**; pick the trade date and, when asked, the fill time in Eastern Time from Robinhood. Before 9:30 AM ET on a trading day the date starts blank, so you choose between yesterday's after-hours fill and today's pre-market fill, and the fill time is required. During market hours a blank time records the moment you press Record; on a past date the time is optional (blank places it at 4:00 PM ET) unless you already logged that ticker that day. The confirm card spells out the date and time it will record ("Logging as …"), asks for a tick on a weekend or holiday date or a time outside regular hours (extended-hours fills are fine), and refuses a time in the future or a SELL that would be replayed before the BUY covering it. A wrong date can't auto-match your broker's own record and keeps showing up as an unmatched transaction in 💰 Account → Broker Sync. Backdating a Buy shows the same "🔮 Retrospective Pre-Mortem" framing broker-imported trades use — the pre-mortem is still required, just honestly reframed since the trade already happened), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
+- **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**; pick the trade date and, when asked, the fill time in Eastern Time from Robinhood. Before 9:30 AM ET on a trading day the date starts blank, so you choose between yesterday's after-hours fill and today's pre-market fill, and the fill time is required. During market hours a blank time records the moment you press Record; on a past date the time is optional (blank places it at 4:00 PM ET) unless you already logged that ticker that day. The confirm card spells out the date and time it will record ("Logging as …"), asks for a tick on a weekend or holiday date or a time outside regular hours (extended-hours fills are fine), and refuses a time in the future or a SELL that would be replayed before the BUY covering it. It also checks the price against that day's trading range ("so far" for today until the close) and asks for the same tick when it sits outside; it says so when it couldn't check (no price data, an older trade, or a stock split since). It compares the entry with Robinhood fills still waiting in Pending Imports: an identical fill that day is linked to the entry and leaves Pending Imports once you confirm; the same size at a different price, or the same order dated a different day, asks for the tick. With nothing to flag it tells you whether Robinhood's fills for that date had synced yet; it never says the entry matches Robinhood. A wrong date can't auto-match your broker's own record and keeps showing up as an unmatched transaction in 💰 Account → Broker Sync. Backdating a Buy shows the same "🔮 Retrospective Pre-Mortem" framing broker-imported trades use — the pre-mortem is still required, just honestly reframed since the trade already happened), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
 - **🪞 Trade Review** — behavioural retrospective on every recorded trade, over a selectable look-back window (2wk/30d/60d/90d/all-time). Categorizes each trade *App-Followed* (aligned with the app's recommendation), *Deviated* (external info/discretionary), or *Discretionary* (neither recorded) — inferred from the Journal columns, no manual tagging — and flags panic-window trades (made on a day the S&P 500 closed ≤ -1.5%) plus a vs-SPY benchmark per trade. **💡 What the Data Says** turns the raw numbers into a verdict, concrete findings, and one next move. **📈 Performance Trends** charts cumulative P&L and rolling win rate over the window. **⚖ Risk Discipline** checks position-size discipline against your single-name ceiling and sector mix. **🎯 Course-Correction Recommendations** and a **📜 Per-Trade Scorecard** round it out for drilling into individual trades.
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🧭 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).

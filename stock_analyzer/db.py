@@ -739,8 +739,11 @@ the user acted on it):
         status                    text not null default 'disconnected',
         connected_at              timestamptz,
         last_full_sync_at         timestamptz,
+        last_txn_sync_at          timestamptz,   -- last COMPLETED transaction sync (TJDate C2b)
         constraint snaptrade_config_single_row check (id = 1)
     );
+    -- Existing installs: docs/sql/snaptrade-config-txn-sync.sql (idempotent).
+    alter table public.snaptrade_config add column if not exists last_txn_sync_at timestamptz;
     alter table public.snaptrade_config enable row level security;
     drop policy if exists "Allow all (service role)" on public.snaptrade_config;
     create policy "Allow all (service role)" on public.snaptrade_config
@@ -6563,6 +6566,56 @@ def save_snaptrade_config(status: str, brokerage_authorization_id: str | None = 
         return False
 
 
+def load_snaptrade_txn_synced_at_or_none() -> "datetime | None":
+    """When the `broker` cron last COMPLETED its transaction sync (step ②), as a
+    tz-aware datetime, or None.
+
+    None = no DB, any read error (including the `last_txn_sync_at` column not
+    existing yet: docs/sql/snaptrade-config-txn-sync.sql), no config row, or a
+    null value, so the caller says "no completed sync on record" rather than
+    claiming a comparison. Selects ONLY that column, on purpose: adding it to
+    `load_snaptrade_config`'s select would make the whole Account page read fail
+    until the DDL is applied. Never raises.
+    """
+    if not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("snaptrade_config")
+            .select("last_txn_sync_at")
+            .eq("id", 1).limit(1).execute().data
+        )
+        if not rows:
+            return None
+        v = rows[0].get("last_txn_sync_at")
+        if not v:
+            return None
+        ts = pd.to_datetime(v, utc=True, errors="coerce", format="ISO8601")
+        if ts is None or pd.isna(ts):
+            return None
+        return ts.to_pydatetime()
+    except Exception:
+        return None
+
+
+def save_snaptrade_txn_synced_at(iso: str) -> bool:
+    """Stamp `snaptrade_config.last_txn_sync_at` (id=1) with `iso` once the cron's
+    transaction sync completed cleanly. Writes only that column (plus the id), so
+    it can't clobber the connection state. Best-effort bookkeeping: False on any
+    failure (no DB, read-only viewer, the column missing, a write error), never
+    raises. Read-only-viewer gated like `save_snaptrade_config` (costs the
+    headless cron nothing)."""
+    if is_readonly(): return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    try:
+        _client().table("snaptrade_config").upsert(
+            {"id": 1, "last_txn_sync_at": str(iso)}, on_conflict="id").execute()
+        return True
+    except Exception:
+        return False
+
+
 # snaptrade_pending_imports: a notification/reminder queue, NEVER a source of
 # truth (Option A trade-log flow — see plan doc). A row here becomes a real
 # `trades` row only when the user completes the Log Trade form.
@@ -6586,6 +6639,42 @@ def load_snaptrade_pending_imports(status: str = "pending") -> list[dict]:
         return rows or []
     except Exception:
         return []
+
+
+# Same server-side row cap as `_TRADES_PAGE_SIZE` (PostgREST's max-rows).
+_PENDING_FILLS_PAGE_SIZE = 1000
+
+
+def load_snaptrade_pending_fills_or_none(since_date: str) -> "list | None":
+    """Pending broker fills dated `since_date` (an ISO `YYYY-MM-DD`) or later, for
+    the Trade Journal's log-time comparison with Robinhood's own fills (TJDate
+    C2b), or None.
+
+    STRICT, unlike `load_snaptrade_pending_imports` (which returns [] on a
+    failure): [] means "read, and nothing is pending", None means "couldn't read"
+    (no DB, or any page failed). The caller must not read None as clean. Only
+    `status = 'pending'` rows (a logged or dismissed fill is not a candidate),
+    newest first, every page via `_read_all_pages` so a server-side cap can't
+    truncate the read (TrPage). Columns: id, snaptrade_txn_id, ticker, action,
+    shares, price, trade_date, raw_json. The caller drops rows already linked to
+    a journal row (`trade_entry_checks.unlinked_fills`).
+    """
+    if not has_db():
+        return None
+    try:
+        return _read_all_pages(
+            lambda: (
+                _client().table("snaptrade_pending_imports")
+                .select("id,snaptrade_txn_id,ticker,action,shares,price,trade_date,raw_json")
+                .eq("status", "pending")
+                .gte("trade_date", str(since_date))
+                .order("trade_date", desc=True).order("id", desc=True)
+            ),
+            _PENDING_FILLS_PAGE_SIZE,
+            dedupe_key="id",
+        )
+    except Exception:
+        return None
 
 
 def save_snaptrade_pending_imports(rows: list[dict]) -> int:

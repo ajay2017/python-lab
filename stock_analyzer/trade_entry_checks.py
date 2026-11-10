@@ -13,12 +13,17 @@ datetime) from its caller. The TIME half is wired into the Trade Journal form by
 chunk C2a (`default_trade_date`, `fill_time_requirement`, `resolve_traded_at`,
 `time_findings`, `same_ticker_same_day`, `logging_as_text`,
 `sell_replay_finding`, and the form helpers `trade_date_widget_reset`,
-`fill_time_missing_text`). The price and broker halves are not wired yet; chunk C2b
-does that and owns the fetching (today's / a recent day's bar low / high from
+`fill_time_missing_text`). Chunk C2b wires the PRICE and BROKER halves: the
+caller owns the fetching (today's / a recent day's bar low / high from
 `data.fetch_session_range`, falling back to the `data.fetch_unadjusted_history`
-frame, split-adjusted and dividend-unadjusted, for older dates, and
-`db.load_snaptrade_unlinked_fills_or_none` for the broker's fills). Plain text
-only in every `text` field: the caller escapes it and puts `$` as `&#36;`.
+frame, split-adjusted and dividend-unadjusted, for older dates;
+`db.load_snaptrade_pending_fills_or_none` for the broker's fills and
+`db.load_snaptrade_txn_synced_at_or_none` for the last completed transaction
+sync) and passes it in; `bar_for_price_check`, `price_band_entry_finding`,
+`unlinked_fills`, `broker_check_coverage` and friends turn it into findings.
+Plain text only in every `text` field: the caller escapes it and puts `$` as
+`&#36;`. Every finding carries a `group` ("time", "price" or "broker") so the
+confirm card can word its tick-box for what it is checking.
 
   * Time: `session_hours`, `default_trade_date`, `fill_time_requirement`,
     `resolve_traded_at`, `time_findings` (NON_TRADING_DATE / OUTSIDE_RTH are
@@ -27,11 +32,17 @@ only in every `text` field: the caller escapes it and puts `$` as `&#36;`.
     `fill_time_missing_text`.
   * Replay: `sell_replay_finding`, the as-of-time hard block for a SELL that
     `db.recalculate_from_trades` would replay before the BUY that covers it.
-  * Price: `price_band_finding`, a logged price against that session's
-    split-adjusted, dividend-unadjusted low-high band. Never a silent in-band:
-    anything it can't judge is `unchecked` with a reason.
+  * Price: `price_sanity` (typo guard against the market price),
+    `price_band_finding`, a logged price against that session's split-adjusted,
+    dividend-unadjusted low-high band, with `bar_for_price_check` choosing the
+    bar (and refusing it across a split) and `price_band_entry_finding` turning
+    the verdict into a card finding. Never a silent in-band: anything it can't
+    judge is `unchecked` with a reason.
   * Broker: `pending_fill_findings`, the entry against Robinhood fills that are
-    not yet linked to a journal row.
+    not yet linked to a journal row (`unlinked_fills` builds that list,
+    `fills_since` bounds the read); `broker_check_coverage` says how fresh the
+    comparison is. A real finding is always shown; coverage only qualifies the
+    ABSENCE of one, and an empty result is never worded "matches Robinhood".
 
 TRADING CALENDAR. Provider-free on purpose: `stock_analyzer.data` imports
 yfinance and the provider orchestrator, and this module has to stay importable
@@ -48,6 +59,7 @@ it is a tick ("I've checked, record it anyway"), never a block.
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import date, datetime, time as _time, timedelta
 
@@ -65,6 +77,9 @@ from stock_analyzer.constants import (
     NYSE_REGULAR_OPEN_ET,
     TRADE_LOG_PRICE_BAND_TOL_PCT,
     TRADE_LOG_PRICE_CHECK_MAX_AGE_DAYS,
+    TRADE_PRICE_SANITY_FLOOR,
+    TRADE_PRICE_SANITY_RATIO_HIGH,
+    TRADE_PRICE_SANITY_RATIO_LOW,
 )
 from stock_analyzer.market_time import ET, et_anchor_iso
 
@@ -86,6 +101,20 @@ KIND_MATCH_SAME_DAY = "MATCH_SAME_DAY"
 KIND_OTHER_DATE = "OTHER_DATE"
 KIND_OTHER_DATE_SPLIT = "OTHER_DATE_SPLIT"
 KIND_SHARES_SHORT = "SHARES_SHORT"
+KIND_PRICE_DIFFERS = "PRICE_DIFFERS"
+KIND_BROKER_NOT_SYNCED = "BROKER_NOT_SYNCED"
+KIND_BROKER_UNCHECKED = "BROKER_UNCHECKED"
+# Finding kinds (price band)
+KIND_PRICE_OUTSIDE_RANGE = "PRICE_OUTSIDE_RANGE"
+KIND_PRICE_UNCHECKED = "PRICE_UNCHECKED"
+
+# What a finding is about: `trade_confirm.confirm_gate` words the tick-box by it.
+GROUP_TIME = "time"
+GROUP_PRICE = "price"
+GROUP_BROKER = "broker"
+
+BROKER_UNREADABLE_TEXT = "Not compared with Robinhood's fills: they couldn't be read."
+PRICE_CHECK_FAILED_REASON = "the check failed"
 
 SEV_HARD = "hard"   # blocks the entry
 SEV_TICK = "tick"   # needs the "I've checked, record it anyway" tick
@@ -356,14 +385,14 @@ def time_findings(traded_at, now_et, time_supplied: bool = False) -> list:
 
     if t > now:
         out.append({
-            "kind": KIND_FUTURE, "severity": SEV_HARD,
+            "kind": KIND_FUTURE, "severity": SEV_HARD, "group": GROUP_TIME,
             "text": f"{_fmt_date(d)}, {_fmt_dt_clock(t)} ET is in the future",
         })
 
     hours = session_hours(d)
     if hours is None:
         out.append({
-            "kind": KIND_NON_TRADING_DATE, "severity": SEV_TICK,
+            "kind": KIND_NON_TRADING_DATE, "severity": SEV_TICK, "group": GROUP_TIME,
             "text": f"{_fmt_date(d)} is not a trading day",
         })
         return out
@@ -375,7 +404,7 @@ def time_findings(traded_at, now_et, time_supplied: bool = False) -> list:
         early = d.isoformat() in NYSE_EARLY_CLOSES
         window = f"{_fmt_dt_clock(open_dt)}–{_fmt_dt_clock(close_dt)}"
         out.append({
-            "kind": KIND_OUTSIDE_RTH, "severity": SEV_TICK,
+            "kind": KIND_OUTSIDE_RTH, "severity": SEV_TICK, "group": GROUP_TIME,
             "text": (f"{_fmt_dt_clock(t)} ET is outside regular hours ({window}"
                      f"{', early close' if early else ''})"),
         })
@@ -570,7 +599,7 @@ def _replay_violations(ordered: list) -> list:
 def sell_replay_unchecked_finding() -> dict:
     """The info finding for "the replay check could not run" (never silent)."""
     return {
-        "kind": KIND_SELL_REPLAY_UNCHECKED, "severity": SEV_INFO,
+        "kind": KIND_SELL_REPLAY_UNCHECKED, "severity": SEV_INFO, "group": GROUP_TIME,
         "text": "Couldn't check this SELL against the order of your journal's trades.",
     }
 
@@ -616,7 +645,7 @@ def sell_replay_finding(journal, ticker, shares, traded_at) -> "dict | None":
     for v in bad:
         if v["row"] is new:
             return {
-                "kind": KIND_SELL_BEFORE_BUY, "severity": SEV_HARD,
+                "kind": KIND_SELL_BEFORE_BUY, "severity": SEV_HARD, "group": GROUP_TIME,
                 "text": (f"At {when} your journal holds only {_fmt_shares(max(v['before'], 0.0))} "
                          f"{tk}: the BUY that covers this SELL is stored at a later time "
                          f"(a BUY logged without a fill time is placed at {anchor} ET), "
@@ -632,7 +661,7 @@ def sell_replay_finding(journal, ticker, shares, traded_at) -> "dict | None":
             ld = trade_time.et_trade_date(v["row"]["raw"])
             lw = _fmt_date(ld) if ld is not None else "date unknown"
             return {
-                "kind": KIND_SELL_BEFORE_BUY, "severity": SEV_HARD,
+                "kind": KIND_SELL_BEFORE_BUY, "severity": SEV_HARD, "group": GROUP_TIME,
                 "text": (f"This SELL leaves too few {tk} shares for a later SELL already in "
                          f"your journal ({lw}). Check the share count and dates, or tick "
                          "'Allow SELL without a matching holding' for a holding from "
@@ -643,16 +672,209 @@ def sell_replay_finding(journal, ticker, shares, traded_at) -> "dict | None":
 
 # ── price ────────────────────────────────────────────────────────────────────
 
-def price_band_finding(price, trade_date, bar, today_et) -> dict:
+def price_sanity(price, market_price) -> dict:
+    """The typo guard on a typed price (moved out of app.py, TJDate C2b).
+
+    -> `{"block": bool, "kind": "floor" | "ratio" | None, "ratio": float | None,
+    "hint": bool}`.
+      * `floor`: `price` is below `TRADE_PRICE_SANITY_FLOOR` (strict `<`), or is
+        not a usable number (never reachable from the form's number box; failing
+        closed is the safe direction). Blocks.
+      * `ratio`: `market_price` is finite and > 0 and `price / market_price`
+        falls outside `[TRADE_PRICE_SANITY_RATIO_LOW, TRADE_PRICE_SANITY_RATIO_HIGH]`
+        (strict `<` / `>`, so exactly LOW or HIGH passes). Blocks.
+      * `ratio` is the price / market-price quotient whenever both are usable
+        (None otherwise: no market price, nothing to compare); `hint` is True
+        exactly when that ratio is outside the band, whatever the floor says, for
+        the live "off market" note. The floor wins `kind` when both fire.
+    The "Allow unusual price" override stays the caller's: it simply ignores
+    `block`.
+    """
+    px = _num(price)
+    mp = _num(market_price)
+    ratio = px / mp if (px is not None and mp is not None and mp > 0) else None
+    hint = ratio is not None and (
+        ratio < TRADE_PRICE_SANITY_RATIO_LOW or ratio > TRADE_PRICE_SANITY_RATIO_HIGH)
+    if px is None or px < TRADE_PRICE_SANITY_FLOOR:
+        return {"block": True, "kind": "floor", "ratio": ratio, "hint": hint}
+    if hint:
+        return {"block": True, "kind": "ratio", "ratio": ratio, "hint": True}
+    return {"block": False, "kind": None, "ratio": ratio, "hint": False}
+
+
+def price_sanity_override_label() -> str:
+    """The "Allow unusual price" checkbox label, with the band read from the
+    constants (the old hardcoded "±50% off market" was wrong: the high side is
+    +100%)."""
+    lo = TRADE_PRICE_SANITY_RATIO_LOW * 100.0
+    hi = TRADE_PRICE_SANITY_RATIO_HIGH * 100.0
+    return (f"Allow unusual price (under {lo:g}% or over {hi:g}% of the market "
+            "price — historical/split-adjusted/delisted)")
+
+
+REASON_NO_BAR = "no usable price bar for that day"
+REASON_SPLIT_UNKNOWN = "couldn't check for a stock split since that day"
+REASON_SPLIT_SINCE = ("a stock split since that day puts the day's range on a "
+                      "different share basis")
+
+
+# yfinance `period` strings and the calendar days each is guaranteed to span
+# (lower bounds: "1mo" is 28 days in February), shortest first.
+_YF_PERIOD_DAYS = (("1mo", 28), ("3mo", 89), ("6mo", 180), ("1y", 365),
+                   ("2y", 730), ("5y", 1825), ("10y", 3650))
+
+
+def price_check_history_period() -> str:
+    """The yfinance `period` for the history `bar_for_price_check` reads: the
+    shortest one that spans more than `TRADE_LOG_PRICE_CHECK_MAX_AGE_DAYS`
+    calendar days (the oldest date `price_check_needs_bar` lets through), so a
+    raised constant moves the period with it instead of quietly leaving the split
+    check without history ("max" past ten years)."""
+    need = int(TRADE_LOG_PRICE_CHECK_MAX_AGE_DAYS) + 1
+    for period, days in _YF_PERIOD_DAYS:
+        if days >= need:
+            return period
+    return "max"
+
+
+def price_check_needs_bar(trade_date, today_et) -> bool:
+    """Whether a price bar can change `price_band_finding`'s verdict, so the
+    caller should fetch one: the date is not in the future, not older than
+    `TRADE_LOG_PRICE_CHECK_MAX_AGE_DAYS`, and a trading day (a weekend / holiday
+    has no bar, and its own NON_TRADING_DATE tick already fires). False means the
+    network fetch is pointless; the caller still calls `price_band_finding` (with
+    `bar=None`) for the stated reason. Unreadable dates -> ValueError."""
+    d = _as_date(trade_date)
+    today = _as_date(today_et)
+    if d is None or today is None:
+        raise ValueError("price_check_needs_bar needs trade_date and today_et as dates")
+    if d > today or (today - d).days > TRADE_LOG_PRICE_CHECK_MAX_AGE_DAYS:
+        return False
+    return _is_trading_day(d)
+
+
+def _usable_bar(b) -> "dict | None":
+    """`{"low", "high"}` as floats when finite, positive and ordered, else None."""
+    if not isinstance(b, dict):
+        return None
+    lo, hi = _num(b.get("low")), _num(b.get("high"))
+    if lo is None or hi is None or lo <= 0 or hi <= 0 or lo > hi:
+        return None
+    return {"low": lo, "high": hi}
+
+
+def _index_et_dates(index) -> "list | None":
+    """The ET calendar date of every row of a history index, or None when the
+    index can't be read. A tz-aware index is converted to America/New_York; a
+    tz-naive one is taken as exchange-local, the way
+    `yfinance_provider.session_range_unadjusted` does."""
+    try:
+        idx = pd.DatetimeIndex(pd.to_datetime(index))
+        if idx.tz is not None:
+            idx = idx.tz_convert("America/New_York").tz_localize(None)
+        return [None if pd.isna(t) else t.date() for t in idx]
+    except Exception:
+        return None
+
+
+def _history_bar(history, dates, d) -> "dict | None":
+    """The min Low / max High of the history rows dated `d`, or None."""
+    try:
+        lows, highs = [], []
+        for i, rd in enumerate(dates):
+            if rd != d:
+                continue
+            lo, hi = _num(history["Low"].iloc[i]), _num(history["High"].iloc[i])
+            if lo is None or hi is None:
+                continue
+            lows.append(lo)
+            highs.append(hi)
+        if not lows:
+            return None
+        return _usable_bar({"low": min(lows), "high": max(highs)})
+    except Exception:
+        return None
+
+
+def bar_for_price_check(trade_date, today_et, history, session_range) -> tuple:
+    """The bar to judge a typed price against, and why there is none.
+
+    -> `(bar, unchecked_reason)`: `({"low", "high"}, None)` or `(None, reason)`.
+    `session_range` is `data.fetch_session_range`'s `{"low", "high"}` for
+    `trade_date` (None when unusable); `history` is the
+    `data.fetch_unadjusted_history`-style frame (Yahoo `auto_adjust=False`:
+    split-adjusted, dividend-unadjusted; Low / High columns, normally "Stock
+    Splits" too) or None. The session range is preferred because it keeps a bar
+    Yahoo published without a Close.
+      * `trade_date == today_et`: no split check (nothing has happened since);
+        the session range, else the history row for that ET date, else
+        `REASON_NO_BAR`.
+      * an earlier date: the bar is on TODAY's share basis, the typed price on
+        the trade date's. History None / empty / without a "Stock Splits" column
+        / with an unreadable index or no row at or before the trade date ->
+        `REASON_SPLIT_UNKNOWN`; a nonzero split on an ET date in
+        `(trade_date, today_et]` -> `REASON_SPLIT_SINCE` (a split ON the trade
+        date is not "since": that day's own bar is already on the new basis).
+        Otherwise the session range, else the history row, else `REASON_NO_BAR`.
+      * a future date: `(None, "the trade date is in the future")`; a weekend or
+        NYSE holiday: `(None, REASON_NO_BAR)` before any split question (a day
+        with no session has no bar to put on a share basis).
+    A row's ET date is read by `_index_et_dates`. Usable = finite, > 0,
+    low <= high. Never raises on a malformed frame; unreadable dates ->
+    ValueError like its siblings.
+    """
+    d = _as_date(trade_date)
+    today = _as_date(today_et)
+    if d is None or today is None:
+        raise ValueError("bar_for_price_check needs trade_date and today_et as dates")
+    if d > today:
+        return None, "the trade date is in the future"
+    if not _is_trading_day(d):
+        return None, REASON_NO_BAR      # no session, so no bar and no split question
+    sr = _usable_bar(session_range)
+
+    usable_hist = isinstance(history, pd.DataFrame) and len(history) > 0
+    dates = _index_et_dates(history.index) if usable_hist else None
+    if d == today:
+        if sr is not None:
+            return sr, None
+        if dates is not None and "Low" in history.columns and "High" in history.columns:
+            hb = _history_bar(history, dates, d)
+            if hb is not None:
+                return hb, None
+        return None, REASON_NO_BAR
+
+    if (not usable_hist or dates is None or "Stock Splits" not in history.columns
+            or all(rd is None or rd > d for rd in dates)):
+        return None, REASON_SPLIT_UNKNOWN
+    try:
+        for i, rd in enumerate(dates):
+            if rd is None or not (d < rd <= today):
+                continue
+            sp = _num(history["Stock Splits"].iloc[i])
+            if sp is not None and sp != 0:
+                return None, REASON_SPLIT_SINCE
+    except Exception:
+        return None, REASON_SPLIT_UNKNOWN
+    if sr is not None:
+        return sr, None
+    if "Low" in history.columns and "High" in history.columns:
+        hb = _history_bar(history, dates, d)
+        if hb is not None:
+            return hb, None
+    return None, REASON_NO_BAR
+
+
+def price_band_finding(price, trade_date, bar, today_et, *, now_et=None,
+                       unchecked_reason=None) -> dict:
     """A logged price against that session's daily range.
 
     `bar` is `{"low", "high"}` for `trade_date`'s split-adjusted, dividend-
-    unadjusted daily bar (the C2b caller takes today's / a recent day's low /
-    high from `data.fetch_session_range` and falls back to the
-    `data.fetch_unadjusted_history` frame, which still split-adjusts, for older
-    dates) or None. C2b MUST pass `bar=None` (so the result is "unchecked") when a split falls between
-    the trade date and today: the bar would then be on a different share basis
-    than the price the owner typed. The band is
+    unadjusted daily bar or None; `bar_for_price_check` picks it (today's / a
+    recent day's low / high from `data.fetch_session_range`, else the
+    `data.fetch_unadjusted_history` frame) and returns None, with a reason, when
+    a split falls between the trade date and today: the bar would then be on a
+    different share basis than the price the owner typed. The band is
     `low x (1 - tol/100)` to `high x (1 + tol/100)` with
     `tol = TRADE_LOG_PRICE_BAND_TOL_PCT`, both edges inclusive (compared at 6 dp
     so float noise can't flip an edge). Not `held_stop.fill_in_band`, which
@@ -663,16 +885,24 @@ def price_band_finding(price, trade_date, bar, today_et) -> dict:
     "unchecked" (never a silent in-band, `reason` says why) when: the price is
     non-finite or <= 0; `trade_date` is after `today_et`; `trade_date` is more
     than `TRADE_LOG_PRICE_CHECK_MAX_AGE_DAYS` calendar days before `today_et`;
-    or the bar is None / non-finite / non-positive / low > high. `so_far` is True
-    when `trade_date == today_et`: today's bar is still forming, so the caller
-    words the verdict "so far". `low`/`high`/`band_*` are None when the bar is
-    unusable (and band_* None whenever unchecked).
+    or the bar is None / non-finite / non-positive / low > high (then `reason` is
+    `unchecked_reason` when the caller gives one, else "no usable price bar for
+    that day"). `so_far` is True when `trade_date == today_et` AND today's bar is
+    still forming, so the caller words the verdict "so far". With `now_et` (a
+    tz-aware datetime) that means before that day's regular close
+    (`session_hours`, early closes included; at the close or after it, the bar is
+    final, so False; a day with no session is False); without `now_et` it is
+    simply `trade_date == today_et`. `low`/`high`/`band_*` are None when the bar
+    is unusable (and band_* None whenever unchecked).
     """
     d = _as_date(trade_date)
     today = _as_date(today_et)
     if d is None or today is None:
         raise ValueError("price_band_finding needs trade_date and today_et as dates")
     so_far = d == today
+    if so_far and now_et is not None:
+        hours = session_hours(d)
+        so_far = hours is not None and _aware_et(now_et) < hours[1]
 
     lo = hi = None
     if isinstance(bar, dict):
@@ -697,13 +927,63 @@ def price_band_finding(price, trade_date, bar, today_et) -> dict:
                     f"older than {TRADE_LOG_PRICE_CHECK_MAX_AGE_DAYS} days, "
                     "so the day's price range isn't checked")
     if not bar_ok:
-        return _out(STATE_UNCHECKED, "no usable price bar for that day")
+        return _out(STATE_UNCHECKED, unchecked_reason or REASON_NO_BAR)
 
     tol = TRADE_LOG_PRICE_BAND_TOL_PCT / 100.0
     band_lo = round(lo * (1.0 - tol), 6)
     band_hi = round(hi * (1.0 + tol), 6)
     inside = band_lo <= round(px, 6) <= band_hi
     return _out(STATE_IN_BAND if inside else STATE_OUTSIDE, None, band_lo, band_hi)
+
+
+def _price_unchecked(reason: str) -> dict:
+    return {
+        "kind": KIND_PRICE_UNCHECKED, "severity": SEV_INFO, "group": GROUP_PRICE,
+        "text": f"Price not checked against the day's range: {reason}.",
+    }
+
+
+def price_check_failed_finding() -> dict:
+    """The info finding for "the price-band check itself raised" (never silent)."""
+    return _price_unchecked(PRICE_CHECK_FAILED_REASON)
+
+
+def price_band_entry_finding(band, price, trade_date=None) -> "dict | None":
+    """A `price_band_finding` result as a confirm-card finding, or None.
+
+    `{"kind", "severity", "text", "group": "price"}`:
+      * outside -> PRICE_OUTSIDE_RANGE (tick): "$171.88 is outside Mon Nov 2's
+        trading range ($186.10 – $191.40, with 1% leeway)", with "trading range
+        so far" while the day's bar is still forming (`band["so_far"]`). The range
+        shown is the bar's own low / high; the leeway names
+        `TRADE_LOG_PRICE_BAND_TOL_PCT`. `trade_date` (optional) names the day,
+        else "that day".
+      * unchecked -> PRICE_UNCHECKED (info): "Price not checked against the day's
+        range: {reason}." An unreadable `band` reads as unchecked too ("the check
+        failed"), never as clean.
+      * in_band -> None.
+    Plain text; `$` is put on the prices (the caller escapes it).
+    """
+    if not isinstance(band, dict):
+        return price_check_failed_finding()
+    state = band.get("state")
+    if state == STATE_IN_BAND:
+        return None
+    if state == STATE_OUTSIDE:
+        px, lo, hi = _num(price), _num(band.get("low")), _num(band.get("high"))
+        if px is None or lo is None or hi is None:
+            return price_check_failed_finding()
+        d = _as_date(trade_date) if trade_date is not None else None
+        day = f"{_fmt_date(d)}'s" if d is not None else "that day's"
+        rng = "trading range so far" if band.get("so_far") else "trading range"
+        return {
+            "kind": KIND_PRICE_OUTSIDE_RANGE, "severity": SEV_TICK, "group": GROUP_PRICE,
+            "text": (f"${_fmt_price(px)} is outside {day} {rng} "
+                     f"(${_fmt_price(lo)} – ${_fmt_price(hi)}, with "
+                     f"{TRADE_LOG_PRICE_BAND_TOL_PCT:g}% leeway)"),
+        }
+    reason = str(band.get("reason") or "").strip() or PRICE_CHECK_FAILED_REASON
+    return _price_unchecked(reason)
 
 
 # ── broker fills ─────────────────────────────────────────────────────────────
@@ -741,6 +1021,13 @@ def pending_fill_findings(entry, fills) -> "list | None":
         interchangeable; one id in the normal case). Plan decision 4: the C2
         form switches to the broker-prefill path for it. It is EXCLUSIVE: the
         entry is explained, so no other finding is returned alongside it.
+      * PRICE_DIFFERS (tick; owner / lead decision, the D0 precedent), only when
+        there is NO MATCH_SAME_DAY: (i) a fill on the entry's ET date with the
+        same shares but a different price (OKTA 11-02: entry 171.88, fill
+        189.14), one finding per such fill; (ii) two or more fills on that date
+        whose shares sum to the entry and whose VWAP is not the entry's price
+        (the combined-row case). A same-day split that sums to the entry at its
+        VWAP is reconciled, not a finding (MRVL 10-30).
       * OTHER_DATE (tick): one fill with the same shares and price on a
         DIFFERENT ET date within the window (an order-date hint pointing at the
         'Filled' date in Robinhood). One finding per such fill.
@@ -751,8 +1038,9 @@ def pending_fill_findings(entry, fills) -> "list | None":
         shares than the entry (U3 "broker shares that date > entry"). A same-day
         split that sums to the entry is reconciled, not a finding (owner
         decision 2 of 2026-11-02, MRVL 10-30: 5 @ 200.00 + 3 @ 191.96 = 8 @ 196.99).
-    Deterministic order: MATCH_SAME_DAY, OTHER_DATE (by fill date, txn id),
-    OTHER_DATE_SPLIT (by fill date), SHARES_SHORT.
+    Deterministic order: MATCH_SAME_DAY, PRICE_DIFFERS, OTHER_DATE (by fill
+    date, txn id), OTHER_DATE_SPLIT (by fill date), SHARES_SHORT. Every finding
+    carries `"group": "broker"`.
 
     A fill's date is SnapTrade's ORDER PLACEMENT date (P0 probe 2026-11-06), not
     necessarily the execution date, so OTHER_DATE is a hint, not proof, and its
@@ -793,20 +1081,41 @@ def pending_fill_findings(entry, fills) -> "list | None":
     match = [c for c in same_day if _same_shares(c["shares"], e_sh) and _same_price(c["price"], e_px)]
     if match:
         return [{
-            "kind": KIND_MATCH_SAME_DAY, "severity": SEV_INFO,
-            "text": (f"Robinhood shows this fill on {ed}: {desc} at "
-                     f"{_fmt_price(match[0]['price'])}"),
+            "kind": KIND_MATCH_SAME_DAY, "severity": SEV_INFO, "group": GROUP_BROKER,
+            "text": (f"Robinhood's record of this order is dated {ed}: {desc} at "
+                     f"{_fmt_price(match[0]['price'])}. This entry will be linked to it."),
             "txn_ids": _txn_ids(match), "fill_date": e_date,
         }]
 
     out: list = []
-    near = [c for c in cand if c["date"] != e_date
+    e_px_txt = _fmt_price(e_px)
+    for c in same_day:
+        if _same_shares(c["shares"], e_sh) and not _same_price(c["price"], e_px):
+            out.append({
+                "kind": KIND_PRICE_DIFFERS, "severity": SEV_TICK, "group": GROUP_BROKER,
+                "text": (f"Robinhood's record of {desc} on {ed} is at "
+                         f"{_fmt_price(c['price'])}, not {e_px_txt}. "
+                         "Check the price in Robinhood."),
+                "txn_ids": _txn_ids([c]), "fill_date": e_date,
+            })
+    if len(same_day) >= 2:
+        total = sum(c["shares"] for c in same_day)
+        vwap = sum(c["shares"] * c["price"] for c in same_day) / total
+        if _same_shares(total, e_sh) and not _same_price(vwap, e_px):
+            out.append({
+                "kind": KIND_PRICE_DIFFERS, "severity": SEV_TICK, "group": GROUP_BROKER,
+                "text": (f"Robinhood's {len(same_day)} fills of {desc} on {ed} average "
+                         f"{_fmt_price(vwap)}, not {e_px_txt}. "
+                         "Check the price in Robinhood."),
+                "txn_ids": _txn_ids(same_day), "fill_date": e_date,
+            })
+    near =[c for c in cand if c["date"] != e_date
             and _sessions_between(e_date, c["date"]) <= JOURNAL_MATCH_WINDOW_SESSIONS]
 
     for c in near:
         if _same_shares(c["shares"], e_sh) and _same_price(c["price"], e_px):
             out.append({
-                "kind": KIND_OTHER_DATE, "severity": SEV_TICK,
+                "kind": KIND_OTHER_DATE, "severity": SEV_TICK, "group": GROUP_BROKER,
                 "text": (f"Robinhood's record of this order ({desc} at {_fmt_price(c['price'])}) "
                          f"is dated {_fmt_date(c['date'])}, not {ed}. That is the date the "
                          "order was placed, which can be earlier than the fill; check the "
@@ -825,7 +1134,7 @@ def pending_fill_findings(entry, fills) -> "list | None":
         vwap = sum(c["shares"] * c["price"] for c in grp) / total
         if _same_shares(total, e_sh) and _same_price(vwap, e_px):
             out.append({
-                "kind": KIND_OTHER_DATE_SPLIT, "severity": SEV_TICK,
+                "kind": KIND_OTHER_DATE_SPLIT, "severity": SEV_TICK, "group": GROUP_BROKER,
                 "text": (f"Robinhood's records of {len(grp)} fills totalling {_fmt_shares(total)} "
                          f"{tk} {act} (average {_fmt_price(vwap)}) are dated {_fmt_date(fd)}, "
                          f"not {ed}. That is the date the orders were placed, which can be "
@@ -837,10 +1146,199 @@ def pending_fill_findings(entry, fills) -> "list | None":
         total = sum(c["shares"] for c in same_day)
         if round(total - e_sh, 9) > BROKER_DRIFT_SHARE_TOL:
             out.append({
-                "kind": KIND_SHARES_SHORT, "severity": SEV_TICK,
+                "kind": KIND_SHARES_SHORT, "severity": SEV_TICK, "group": GROUP_BROKER,
                 "text": (f"{_fmt_shares(total)} shares of {tk} {act} in Robinhood fills not yet "
                          f"matched to the journal are dated {ed}, more than the "
                          f"{_fmt_shares(e_sh)} you entered"),
                 "txn_ids": _txn_ids(same_day), "fill_date": e_date,
             })
     return out
+
+
+# ── broker fills: what to compare with, and how fresh the comparison is ──────
+
+def _txn_text(v) -> "str | None":
+    """A non-empty transaction id as text, else None (None / NaN / '' / 'None')."""
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    s = str(v).strip()
+    return None if s in ("", "None", "nan", "NaN") else s
+
+
+def _raw_price(raw_json) -> "float | None":
+    """The exact fill price in a pending row's `raw_json` (a dict or a JSON
+    string): positive and finite, else None. P0 probe Q3: `raw_json["price"]` is
+    exact; the row's own `price` column is rounded to 2 dp."""
+    raw = raw_json
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(raw, dict):
+        return None
+    px = _num(raw.get("price"))
+    return px if px is not None and px > 0 else None
+
+
+def unlinked_fills(rows, journal) -> "list | None":
+    """The `pending_fill_findings` input: Robinhood fills not yet on a journal row.
+
+    `rows` = the pending-import dicts `db.load_snaptrade_pending_fills_or_none`
+    returns (`id, snaptrade_txn_id, ticker, action, shares, price, trade_date,
+    raw_json`), or None; `journal` = the strict trades frame
+    (`db.load_trades_or_none()`), or None. None if either is None (couldn't
+    check, never a clean `[]`), if a row is not a dict, or if a non-empty
+    journal has no `broker_txn_id` column (nothing can be called unlinked).
+    Drops rows whose `snaptrade_txn_id` is on a journal row (text compare,
+    stripped; NaN / None ignored). Each remaining row becomes
+    `{"snaptrade_txn_id", "pending_id", "ticker", "action", "shares", "price",
+    "trade_date"}`: price is the exact `raw_json` price when it has one, else the
+    row's `price`; `trade_date` is the ET date of the stored value (a Postgres
+    `date`, already the ET fill date since TJDate C4). A field that can't be read
+    becomes None, which makes `pending_fill_findings` return None for that
+    ticker and action (its malformed-fill rule), never a clean result.
+    """
+    if rows is None or journal is None or not isinstance(journal, pd.DataFrame):
+        return None
+    linked: set = set()
+    if "broker_txn_id" in journal.columns:
+        for v in journal["broker_txn_id"]:
+            t = _txn_text(v)
+            if t is not None:
+                linked.add(t)
+    elif len(journal) > 0:
+        return None
+    out: list = []
+    for r in rows:
+        if not isinstance(r, dict):
+            return None
+        txn = _txn_text(r.get("snaptrade_txn_id"))
+        if txn is not None and txn in linked:
+            continue
+        sh = _num(r.get("shares"))
+        px = _raw_price(r.get("raw_json"))
+        if px is None:
+            px = _num(r.get("price"))
+        out.append({
+            "snaptrade_txn_id": txn,
+            "pending_id": r.get("id"),
+            "ticker": str(r.get("ticker") or "").strip().upper(),
+            "action": str(r.get("action") or "").strip().upper(),
+            "shares": sh if sh is not None and sh > 0 else None,
+            "price": px if px is not None and px > 0 else None,
+            "trade_date": _as_date(r.get("trade_date")),
+        })
+    return out
+
+
+def pending_id_for_txn(fills, txn_id) -> "object | None":
+    """The pending-import `pending_id` of the fill with `txn_id` in an
+    `unlinked_fills` list, or None. The form stashes it so confirming a
+    MATCH_SAME_DAY entry flips that pending import to 'logged'."""
+    want = _txn_text(txn_id)
+    if want is None:
+        return None
+    for f in fills or []:
+        if isinstance(f, dict) and _txn_text(f.get("snaptrade_txn_id")) == want:
+            return f.get("pending_id")
+    return None
+
+
+def has_same_day_fill(entry, fills) -> bool:
+    """True when `fills` (an `unlinked_fills` list) holds a fill of the entry's
+    ticker and action dated the entry's own ET date: the entry WAS compared with
+    Robinhood's record of that day, whatever `pending_fill_findings` returned
+    (a same-day split that reconciles to the entry returns `[]`, MRVL 10-30), so
+    a "not compared yet" line would be wrong. False for None, a malformed entry,
+    or when no such fill exists; unreadable fills are skipped."""
+    if not isinstance(entry, dict) or not fills:
+        return False
+    tk = str(entry.get("ticker") or "").strip().upper()
+    act = str(entry.get("action") or "").strip().upper()
+    d = _as_date(entry.get("trade_date"))
+    if not tk or not act or d is None:
+        return False
+    for f in fills:
+        if (isinstance(f, dict)
+                and str(f.get("ticker") or "").strip().upper() == tk
+                and str(f.get("action") or "").strip().upper() == act
+                and _as_date(f.get("trade_date")) == d):
+            return True
+    return False
+
+
+def fills_since(trade_date) -> date:
+    """The earliest fill date `pending_fill_findings` could still call near
+    `trade_date`: the lower bound for the pending-fills read. Fills dated
+    `JOURNAL_MATCH_WINDOW_SESSIONS` trading sessions back count, so a trading
+    day steps back that many sessions; a weekend or holiday date has the same
+    window as the session before it (sessions are counted in
+    `(fill date, trade date]`), so it steps from there."""
+    d = _as_date(trade_date)
+    if d is None:
+        raise ValueError("fills_since needs a trade date")
+    if not _is_trading_day(d):
+        d = _previous_trading_day(d)
+    for _ in range(int(JOURNAL_MATCH_WINDOW_SESSIONS)):
+        d = _previous_trading_day(d)
+    return d
+
+
+def broker_check_coverage(trade_date, synced_at) -> dict:
+    """How fresh the broker comparison is, for ONE trade date.
+
+    -> `{"state": "covered" | "not_synced" | "unknown", "text": str}`.
+    `synced_at` = a tz-aware datetime (or ISO string) of the last COMPLETED
+    transaction sync, or None. "covered" only when the sync's ET date is AFTER
+    `trade_date` (conservative: a sync on the trade date itself may predate that
+    day's fills, and SnapTrade dates a fill by order placement); "not_synced"
+    when it is on or before it; "unknown" when no completed sync is on record
+    (or the value is unreadable: the loader also returns None on a failed read or
+    before the DDL, so the text says the time "couldn't be read"). A naive value is read as UTC (the `trade_time`
+    convention). One freshness per number: a real finding from the fills is
+    always shown whatever this says; this only qualifies the ABSENCE of one, and
+    an empty result is never worded "matches Robinhood".
+    """
+    d = _as_date(trade_date)
+    if d is None:
+        raise ValueError("broker_check_coverage needs a trade date")
+    st = None
+    if synced_at is not None:
+        try:
+            st = _to_et_datetime(synced_at.isoformat() if isinstance(synced_at, datetime)
+                                 else synced_at)
+        except (ValueError, AttributeError):
+            st = None
+    if st is None:
+        return {"state": "unknown",
+                "text": "Not compared with Robinhood's fills: the time of the last "
+                        "completed broker sync couldn't be read."}
+    when = f"{_fmt_date(st.date())}, {_fmt_dt_clock(st)} ET"
+    if st.date() > d:
+        return {"state": "covered",
+                "text": f"Compared with Robinhood fills synced {when}."}
+    return {"state": "not_synced",
+            "text": (f"Not compared with Robinhood's fills for {_fmt_date(d)} yet: "
+                     f"the last completed sync was {when}.")}
+
+
+def broker_coverage_finding(coverage) -> "dict | None":
+    """An info finding (BROKER_NOT_SYNCED) for an "unknown" / "not_synced"
+    coverage, None for "covered" (or anything unreadable: the caller shows the
+    BROKER_UNCHECKED finding for a failed read instead)."""
+    if not isinstance(coverage, dict) or coverage.get("state") not in ("unknown", "not_synced"):
+        return None
+    return {"kind": KIND_BROKER_NOT_SYNCED, "severity": SEV_INFO, "group": GROUP_BROKER,
+            "text": str(coverage.get("text") or "")}
+
+
+def broker_unchecked_finding() -> dict:
+    """The info finding for "Robinhood's fills couldn't be read" (never silent)."""
+    return {"kind": KIND_BROKER_UNCHECKED, "severity": SEV_INFO, "group": GROUP_BROKER,
+            "text": BROKER_UNREADABLE_TEXT}

@@ -26,6 +26,8 @@ Pure / no I/O / no Streamlit. `find_duplicate_entries` is the finding;
 (docs/plans/trade-entry-guard.md, `trade_entry_checks`) arrive as the optional
 `entry_findings` argument of `confirm_gate` and are appended AFTER the duplicate
 blocks, so one card, one tick box and one disabled rule stay the only confirm UI.
+C2b adds the price and broker findings to the same list; a tick finding with
+`group` "price" or "broker" changes the tick-box wording (see `confirm_gate`).
 Plain text only: the caller escapes it.
 """
 
@@ -58,6 +60,13 @@ TITLE_ENTRY_TICK = "Check the date and time"
 LINE_ENTRY_TICK_HINT = ("Tick the box below if the date and time are right "
                         "(for example an extended-hours fill).")
 LABEL_ENTRY_TICK = "The date and time are right"
+# The same single tick-box once a price or broker finding (TJDate C2b) is among
+# the ticks: the box then vouches for the whole entry, not only its date and time.
+TITLE_ENTRY_TICK_WIDE = "Check this entry"
+LINE_ENTRY_TICK_HINT_WIDE = ("Tick the box below if the entry is right as typed "
+                             "(for example an extended-hours fill).")
+LABEL_ENTRY_TICK_WIDE = "The entry is right as typed"
+_ENTRY_WIDE_GROUPS = ("price", "broker")
 
 
 # ── small coercions ──────────────────────────────────────────────────────────
@@ -292,6 +301,40 @@ def _entry_split(entry_findings) -> tuple:
     return hard, tick, info
 
 
+def pending_import_to_flip(stash, saved_record):
+    """The pending-import id a Confirm may flip to 'logged', or None.
+
+    `stash` is what staging left under `_tj_pending_broker_id`:
+    `{"pending_id", "txn_id"}` (a broker prefill, or a manual entry that matched
+    one Robinhood fill). The flip is allowed ONLY when the stash is a dict with a
+    `pending_id` and its `txn_id` is the very `broker_txn_id` of the record just
+    saved. The key is shared by every staged card, so without this check
+    confirming one card could mark ANOTHER card's fill logged (and the cron would
+    never re-queue it). A legacy bare-int stash (staged before this shipped), a
+    missing key, a None / mismatched txn id: None, and nothing is flipped. The
+    cron's `close_linked_pending_imports` closes a linked fill later, the safe
+    direction.
+    """
+    if not isinstance(stash, dict) or not isinstance(saved_record, dict):
+        return None
+    pid = stash.get("pending_id")
+    txn, saved = _txn(stash.get("txn_id")), _txn(saved_record.get("broker_txn_id"))
+    if pid is None or txn is None or saved is None or txn != saved:
+        return None
+    return pid
+
+
+def _entry_ticks_are_wide(entry_findings) -> bool:
+    """True when a tick finding (same rule as `_entry_split`: any severity other
+    than "hard" / "info") has a `group` of "price" or "broker". Time findings,
+    and findings with no group, keep the date-and-time wording."""
+    for f in entry_findings or []:
+        if (isinstance(f, dict) and f.get("severity") not in ("hard", "info")
+                and f.get("group") in _ENTRY_WIDE_GROUPS):
+            return True
+    return False
+
+
 def confirm_gate(dup: "dict | None", entry_findings: "list | None" = None) -> dict:
     """What the confirm card renders and whether Confirm may be pressed.
 
@@ -309,11 +352,15 @@ def confirm_gate(dup: "dict | None", entry_findings: "list | None" = None) -> di
     the same single checkbox, whose label then names both reasons when a
     duplicate tick is also due; info findings are one "info" block each. An
     exact-identity duplicate (hard, no tick) still shows no checkbox, but the
-    entry findings are rendered next to it.
+    entry findings are rendered next to it. When any tick finding is in group
+    "price" or "broker" (TJDate C2b) the block title, hint and label read "Check
+    this entry" / "...the entry is right as typed" instead, because the one box
+    then vouches for more than the date and time.
     """
     fs = _findings(dup)
     ids = [i for f in fs for i in f["ids"]]
     e_hard, e_tick, e_info = _entry_split(entry_findings)
+    wide = _entry_ticks_are_wide(entry_findings)
     dup_hard = any(f["hard"] for f in fs)
     needs_tick = (bool(ids) or bool(e_tick)) and not dup_hard
     blocks = [f["block"] for f in fs]
@@ -323,19 +370,21 @@ def confirm_gate(dup: "dict | None", entry_findings: "list | None" = None) -> di
     if e_tick:
         lines = list(e_tick)
         if needs_tick:
-            lines.append(LINE_ENTRY_TICK_HINT)
-        blocks.append({"level": "warning", "title": TITLE_ENTRY_TICK,
+            lines.append(LINE_ENTRY_TICK_HINT_WIDE if wide else LINE_ENTRY_TICK_HINT)
+        blocks.append({"level": "warning",
+                       "title": TITLE_ENTRY_TICK_WIDE if wide else TITLE_ENTRY_TICK,
                        "lines": lines})
     for text in e_info:
         blocks.append({"level": "info", "title": text, "lines": []})
     if not needs_tick:
         label = ""
     elif ids and e_tick:
-        label = f"{_tick_label(ids)}, and the date and time are right"
+        tail = "the entry is right as typed" if wide else "the date and time are right"
+        label = f"{_tick_label(ids)}, and {tail}"
     elif ids:
         label = _tick_label(ids)
     else:
-        label = LABEL_ENTRY_TICK
+        label = LABEL_ENTRY_TICK_WIDE if wide else LABEL_ENTRY_TICK
     return {
         "hard": dup_hard or bool(e_hard),
         "needs_tick": needs_tick,

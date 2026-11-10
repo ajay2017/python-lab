@@ -34,10 +34,16 @@ def _classified(**over):
     return base
 
 
-def _run(monkeypatch, *, trades, classified=None, backfill_ok=None, close_result=0):
+def _run(monkeypatch, *, trades, classified=None, backfill_ok=None, close_result=0,
+         save_pending_result=None, stamp_result=True, config_calls=None,
+         classify_none=False, activities=None):
     """Drive `_run_broker` through sub-job ②. `trades` is what
-    `db.load_trades_or_none` returns. Returns (rc, recorders)."""
-    rec = {"classify": [], "save_pending": [], "backfill": [], "close": []}
+    `db.load_trades_or_none` returns; `save_pending_result` overrides what
+    `db.save_snaptrade_pending_imports` returns (default: rows attempted);
+    `stamp_result` is what `db.save_snaptrade_txn_synced_at` returns (an
+    Exception instance is raised); `config_calls` collects the
+    `save_snaptrade_config` kwargs. Returns (rc, recorders)."""
+    rec = {"classify": [], "save_pending": [], "backfill": [], "close": [], "stamp": []}
     backfill_ok = backfill_ok or {}
 
     monkeypatch.setattr(cr.snaptrade_client, "has_snaptrade", lambda: True)
@@ -45,12 +51,13 @@ def _run(monkeypatch, *, trades, classified=None, backfill_ok=None, close_result
     monkeypatch.setattr(cr.snaptrade_client, "get_account_positions",
                         lambda aid: [{"instrument": {"kind": "stock", "symbol": "AAA"}, "units": 5.0}])
     monkeypatch.setattr(cr.snaptrade_client, "get_account_balance", lambda _a: {"cash": 1.0})
-    monkeypatch.setattr(cr.snaptrade_client, "get_account_activities", lambda *_a, **_k: [])
+    monkeypatch.setattr(cr.snaptrade_client, "get_account_activities",
+                        lambda *_a, **_k: [] if activities is None else activities)
     monkeypatch.setattr(cr.broker_sync, "map_balances_to_cash",
                         lambda raw: {"cash_balance": 1.0, "note": "test"})
     monkeypatch.setattr(cr.db, "save_broker_position_snapshot", lambda *_a, **_k: True)
     monkeypatch.setattr(cr.db, "save_account_cash", lambda *_a, **_k: True)
-    monkeypatch.setattr(cr.db, "save_snaptrade_config", lambda *_a, **_k: True)
+    monkeypatch.setattr(cr.db, "save_snaptrade_config", lambda *_a, **k: _config(**k))
     monkeypatch.setattr(cr.db, "load_snaptrade_income_events", lambda *_a, **_k: [])
     monkeypatch.setattr(cr.db, "load_trades_or_none", lambda: trades)
     monkeypatch.setattr(cr.db, "save_account_flows", lambda *_a, **_k: 0)
@@ -58,11 +65,24 @@ def _run(monkeypatch, *, trades, classified=None, backfill_ok=None, close_result
 
     def _classify(raw, existing, existing_income_events=None):
         rec["classify"].append(existing)
+        if classify_none:
+            return None             # SnapTrade's activities were unavailable
         return classified if classified is not None else _classified()
 
     def _save_pending(rows):
         rec["save_pending"].append(rows)
-        return len(rows)
+        return len(rows) if save_pending_result is None else save_pending_result
+
+    def _stamp(iso):
+        rec["stamp"].append(iso)
+        if isinstance(stamp_result, Exception):
+            raise stamp_result
+        return stamp_result
+
+    def _config(*_a, **k):
+        if config_calls is not None:
+            config_calls.append(k)
+        return True
 
     def _backfill(trade_id, txn_id):
         rec["backfill"].append((trade_id, txn_id))
@@ -75,6 +95,7 @@ def _run(monkeypatch, *, trades, classified=None, backfill_ok=None, close_result
     monkeypatch.setattr(cr.broker_sync, "classify_transactions", _classify)
     monkeypatch.setattr(cr.db, "save_snaptrade_pending_imports", _save_pending)
     monkeypatch.setattr(cr.db, "backfill_trade_broker_txn_id", _backfill)
+    monkeypatch.setattr(cr.db, "save_snaptrade_txn_synced_at", _stamp)
     monkeypatch.setattr(cr.db, "close_linked_pending_imports", _close)
     monkeypatch.setattr(cr, "_db_unavailable_detail", lambda: None)
     monkeypatch.setattr(cr, "_notify_broker_failure", lambda *_a, **_k: None)

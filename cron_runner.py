@@ -3740,6 +3740,7 @@ def _run_broker(now_et, force: bool) -> int:
     #    succeeds silently logs "0 synced" rather than emailing — acceptable
     #    because nothing here feeds a gate or the composite score. Don't
     #    reorder ① after ② without re-adding an equivalent probe.
+    _txn_sync_clean = False     # set only when every part of ② below completed
     try:
         raw_txns = snaptrade_client.get_account_activities(
             account_id, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS
@@ -3768,6 +3769,14 @@ def _run_broker(now_et, force: bool) -> int:
             rc = 1
         else:
             n_pending = db.save_snaptrade_pending_imports(classified["new_pending"])
+            # save_snaptrade_pending_imports returns the rows ATTEMPTED (0 when the
+            # write failed or the DB is off), so 0 with a txn-id'd record to save
+            # is a failed save, not "nothing new". (Its old-library fallback also
+            # reads 0 for a batch that was all already-recorded; that withholds
+            # the stamp, the safe direction.)
+            _pending_expected = sum(
+                1 for _r in classified["new_pending"] if _r.get("snaptrade_txn_id"))
+            _pending_save_failed = _pending_expected > 0 and not n_pending
             n_income = db.save_snaptrade_income_events(classified["income_events"])
             _backfilled_ids: list[str] = []
             for bf in classified["backfill_broker_txn_id"]:
@@ -3780,9 +3789,11 @@ def _run_broker(now_et, force: bool) -> int:
                 [str(t) for t in classified["linked_txn_ids"]] + _backfilled_ids
             ))
             n_closed = 0
+            _close_failed = False
             if _link_ids:
                 _closed = db.close_linked_pending_imports(_link_ids)
                 if _closed is None:
+                    _close_failed = True
                     failures.append(
                         "transactions: couldn't close pending imports already in the journal"
                     )
@@ -3800,6 +3811,21 @@ def _run_broker(now_et, force: bool) -> int:
                 f"backfilled, closed {n_closed} linked pending, {n_flows} flows, "
                 f"ignored={classified['ignored']}"
             )
+            # TJDate C2b: this pass fetched, queued and closed everything it
+            # should have, so the Trade Journal may say "compared with fills
+            # synced <now>". Any failed part leaves the earlier stamp as it was.
+            # The client reads ONE page: a result as long as the page limit may be
+            # a truncated window, which a "completed sync" stamp must not vouch for.
+            _txns_truncated = (isinstance(raw_txns, list)
+                               and len(raw_txns) >= snaptrade_client.ACTIVITIES_PAGE_LIMIT)
+            _txn_sync_clean = not (_pending_save_failed or _close_failed or _txns_truncated)
+            if _pending_save_failed:
+                _log("broker/transactions: pending imports not saved — "
+                     "completed-sync stamp withheld")
+            if _txns_truncated:
+                _log(f"broker/transactions: {len(raw_txns)} activities reached the "
+                     f"{snaptrade_client.ACTIVITIES_PAGE_LIMIT}-row page limit (window may be "
+                     "truncated) — completed-sync stamp withheld")
     except Exception as exc:
         _log(f"broker/transactions: UNCAUGHT — {str(exc)[:160]}")
         failures.append(f"transactions: {str(exc)[:160]}")
@@ -3813,6 +3839,20 @@ def _run_broker(now_et, force: bool) -> int:
         db.save_snaptrade_config(status="connected", last_full_sync_at=now_et.isoformat())
     except Exception as exc:
         _log(f"broker/config: UNCAUGHT — {str(exc)[:160]} (ignored — bookkeeping only)")
+    # The "completed transaction sync" stamp (TJDate C2b) is separate from
+    # last_full_sync_at above, which is written whatever happened: it is stamped
+    # only when ② ran to the end cleanly, and a missed stamp is bookkeeping too
+    # (the journal then reads the previous completed sync, i.e. "not compared
+    # yet", the conservative way). Taken from the lane's start time, so it can't
+    # claim fills newer than the fetch.
+    if _txn_sync_clean:
+        try:
+            if not db.save_snaptrade_txn_synced_at(now_et.isoformat()):
+                _log("broker: transaction-sync stamp not saved (DDL "
+                     "docs/sql/snaptrade-config-txn-sync.sql not applied, or the "
+                     "write failed) — ignored, bookkeeping only")
+        except Exception as exc:
+            _log(f"broker/txn-sync-stamp: UNCAUGHT — {str(exc)[:160]} (ignored — bookkeeping only)")
 
     if failures:
         _LAST_LANE_FAILURE_DETAIL = "; ".join(failures)
