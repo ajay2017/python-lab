@@ -110,6 +110,18 @@ def fetch_unadjusted_history(ticker: str, period: str) -> pd.DataFrame | None:
     return df
 
 
+def fetch_session_range(ticker: str, session_date) -> dict | None:
+    """{"low", "high"} of one ET session from Yahoo only (no provider failover: no
+    other provider offers the same split-adjusted, dividend-unadjusted basis, and
+    mixing bases would skew the held stop's fill check). It exists because Yahoo can
+    publish today's High / Low without a Close and the history fetches strip such
+    bars. Never raises; None on any failure or when the range isn't usable."""
+    try:
+        return _PRIMARY.session_range_unadjusted(ticker, session_date)
+    except Exception:
+        return None
+
+
 def fetch_ticker_bundle(ticker: str, period: str = "6mo") -> dict:
     """Single session — fetches history, info, news, earnings and revisions in one go."""
     if _C.DATA_MULTISOURCE_ENABLED:

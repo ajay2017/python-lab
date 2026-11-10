@@ -4,8 +4,14 @@
 is the DRIVER the app, the cron and the headless engine all call, so every
 surface judges a breach against the same number:
 
-  build_held_stops(holdings, held_data, trades_df, as_of, *, fetch_history)
+  build_held_stops(holdings, held_data, trades_df, as_of, *, fetch_history,
+                   fetch_range=None)
       -> {TICKER: result dict}      (never raises)
+
+`fetch_range(ticker, as_of) -> {"low", "high"} | None` is consulted only for a
+position bought today and only when no history frame has a row for today: Yahoo
+can publish today's High / Low without a Close and the history fetches strip such
+bars. None or a failure behaves exactly as if it were not passed.
 
 Fallback chain per ticker (each step says so in `note`; nothing is silent):
   1. journal readable + share count agrees: a LONG split-adjusted,
@@ -180,7 +186,7 @@ _unavailable = unavailable_result
 
 
 def _buy_day(t: str, ep: dict, bundle, avg_cost: float, as_of: date, pol: dict,
-             fetch_history) -> dict:
+             fetch_history, fetch_range=None) -> dict:
     """Owner decision 2026-10-30 (second): a position bought TODAY has no completed
     session of its own, so its stop is the entry component the NEXT session will
     compute: the recorded fill (split-adjusted) minus ATR_STOP_MULT x the ATR at
@@ -194,7 +200,12 @@ def _buy_day(t: str, ep: dict, bundle, avg_cost: float, as_of: date, pol: dict,
 
     Fill check (`held_stop.fill_in_band`, the same rule as the entry session's):
     the fill must sit in the band of today's range (union over every frame that
-    has a today row) and the prior close, widened by `fill_tol_pct`. Pass -> an
+    has a today row) and the prior close, widened by `fill_tol_pct`. When NO frame
+    has a today row, `fetch_range(ticker, as_of) -> {"low", "high"} | None` (if given)
+    is asked for today's range alone: Yahoo can publish today's High / Low without a
+    Close, and the history fetches strip such bars. Its result is re-validated
+    (finite, > 0, low <= high); None, a bad value or an exception = no today row,
+    exactly as before. Pass -> an
     accepted buy_day stop, not degraded. Fail (or no today bar anywhere and the
     fill is off the prior close) -> a DEGRADED prior_session result that is the
     LOWEST of up to three legs, so a genuine fill can never produce a stop above
@@ -241,6 +252,18 @@ def _buy_day(t: str, ep: dict, bundle, avg_cost: float, as_of: date, pol: dict,
             if pd.notna(lo) and pd.notna(hi):
                 lows.append(float(lo))
                 highs.append(float(hi))
+        if not lows and fetch_range is not None:
+            # no frame has a today row (Yahoo can publish today's High / Low without a
+            # Close, and the history fetches strip such bars): ask for the range alone
+            try:
+                _rng = fetch_range(t, as_of)
+            except Exception:
+                _rng = None
+            if isinstance(_rng, dict):
+                _rlo, _rhi = _f(_rng.get("low")), _f(_rng.get("high"))
+                if _rlo is not None and _rhi is not None and 0 < _rlo <= _rhi:
+                    lows.append(_rlo)
+                    highs.append(_rhi)
         has_today = bool(lows)
         prev_close = float(bars["Close"].iloc[-1]) if len(bars) else None
         stop = round(fill_adj - mult_i * atr, 2)
@@ -384,7 +407,8 @@ def _long_frame(ticker: str, ep: dict, as_of: date, pol: dict, fetch_history):
     return df, None
 
 
-def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict) -> dict:
+def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
+         fetch_range=None) -> dict:
     t = _ticker(h)
     shares, avg_cost = _exact_shares(h), _avg_cost(h)
     ep = hs.episode_from_journal(t, trades_df, shares, shares_tol=float(_C.HELD_STOP_SHARES_TOL))
@@ -395,7 +419,7 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict) -
         return hs.compute_held_stop(df, ep, avg_cost, as_of, **kw)
 
     if ep.get("status") == "ok" and ep.get("start") is not None and ep["start"] >= as_of:
-        return _buy_day(t, ep, bundle, avg_cost, as_of, pol, fetch_history)
+        return _buy_day(t, ep, bundle, avg_cost, as_of, pol, fetch_history, fetch_range)
 
     if ep.get("status") != "ok":
         df = bundle
@@ -434,7 +458,8 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict) -
     return _wrap(t, res, note, avg_cost, fell_back=True)
 
 
-def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_history) -> dict:
+def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_history,
+                     fetch_range=None) -> dict:
     """{TICKER: held-stop result} for every valid holding. NEVER raises: a ticker
     whose build throws becomes a degraded "Stop Unavailable" result with a note.
 
@@ -442,7 +467,9 @@ def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_histo
     "shares") and average cost. held_data: {ticker: load_all result} (its "df" is
     the 6-month bundle frame). trades_df: the strict journal read (None =
     unreadable). as_of: ET `date` (always passed in). fetch_history(ticker,
-    period) -> unadjusted OHLCV frame; may raise or return None."""
+    period) -> unadjusted OHLCV frame; may raise or return None. fetch_range(
+    ticker, as_of) -> {"low", "high"} | None is optional and used only for a
+    bought-today position when no frame has a today row (see `_buy_day`)."""
     out: dict[str, dict] = {}
     try:
         pol = _policy()
@@ -455,7 +482,7 @@ def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_histo
             t = _ticker(h)
             if not t or _exact_shares(h) <= 0 or _avg_cost(h) <= 0:
                 continue
-            out[t] = _one(h, held_data, trades_df, as_of, fetch_history, pol)
+            out[t] = _one(h, held_data, trades_df, as_of, fetch_history, pol, fetch_range)
         except Exception as exc:
             try:
                 t = _ticker(h)

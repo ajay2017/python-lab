@@ -80,6 +80,11 @@ def test_held_stops_for_uses_strict_trades_et_today_and_build_held_stops():
     bhs = _calls(fn, "build_held_stops")
     assert bhs and _kw(bhs[0], "fetch_history") is not None
     assert "_unadjusted_history_or_raise" in ast.unparse(_kw(bhs[0], "fetch_history"))
+    # the buy-day range fallback (Yahoo can publish today's High / Low without a Close)
+    assert _kw(bhs[0], "fetch_range") is not None, "fetch_range= must stay wired"
+    assert "_cached_session_range(" in ast.unparse(_kw(bhs[0], "fetch_range"))
+    rng = _func(parse_file_cached(_APP_PATH), "_cached_session_range")
+    assert "fetch_session_range(" in ast.unparse(rng)
 
 
 def test_unadjusted_history_is_cached_per_et_day_and_failures_raise():
@@ -101,6 +106,7 @@ def test_headless_build_context_wiring():
     assert len(bhs) == 1
     assert "trades_strict" in ast.unparse(bhs[0]) and "today" in ast.unparse(bhs[0].args[3])
     assert ast.unparse(_kw(bhs[0], "fetch_history")) == "_held_stop_wiring.fetch_or_raise"
+    assert ast.unparse(_kw(bhs[0], "fetch_range")) == "fetch_session_range"
     pdf = _calls(ctx, "build_portfolio_df")
     assert len(pdf) == 1 and ast.unparse(_kw(pdf[0], "held_stops")) == "held_stops"
 

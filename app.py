@@ -65,7 +65,7 @@ from stock_analyzer.data import (
     crosscheck_price, crosscheck_prices, crosscheck_validator_degraded,
     divergence_widened,
     fetch_earnings_calendar, fetch_next_earnings,
-    is_trading_day,
+    is_trading_day, fetch_session_range,
 )
 from stock_analyzer.catalyst_watch import build_catalyst_watch
 from stock_analyzer.technicals import compute_indicators, technical_score
@@ -2659,6 +2659,13 @@ def _cached_unadjusted_history(ticker: str, period: str, et_date: str):
     return _held_stop_wiring.fetch_or_raise(ticker, period)
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _cached_session_range(ticker: str, et_date: str):
+    # today's {"low", "high"} for a bought-today fill check when the history has no
+    # row for today (Yahoo can publish High / Low before the Close); None = unusable
+    return fetch_session_range(ticker, date.fromisoformat(et_date))
+
+
 @st.cache_resource
 def _unadj_negative_cache() -> dict:
     return {}
@@ -2692,7 +2699,8 @@ def _held_stops_for(holdings, held_data) -> dict:
     def _one(_h):
         return _held_stop_wiring.build_held_stops(
             [_h], held_data, _trades, _as_of,
-            fetch_history=_unadjusted_history_or_raise)
+            fetch_history=_unadjusted_history_or_raise,
+            fetch_range=lambda _t, _d: _cached_session_range(str(_t).upper(), _d.isoformat()))
 
     out: dict = {}
     from concurrent.futures import ThreadPoolExecutor

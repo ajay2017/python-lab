@@ -9,6 +9,7 @@ introducing the seam is a no-op until the orchestrator wires in other
 providers. See `base.py` for the canonical schemas.
 """
 
+import math
 import time
 import concurrent.futures
 from datetime import datetime
@@ -132,6 +133,39 @@ class YFinanceProvider(DataProvider):
                 df = df[df["Close"].notna()]
             return df
         return _retry(_fetch)
+
+    def session_range_unadjusted(self, ticker: str, session_date) -> dict | None:
+        """{"low", "high"} of the session dated `session_date` (an ET `date`), or
+        None. Yahoo can publish a session's High / Low before (or without) its
+        Close, and `price_history` / `price_history_unadjusted` strip every NaN-Close
+        bar, so a bought-today fill can't be range-checked from them. This fetch
+        keeps such rows and ignores Close entirely. Yahoo only, on the same
+        split-adjusted, dividend-unadjusted basis as `price_history_unadjusted`
+        (`auto_adjust=False`). It reads a 5-day window, so it only covers the last
+        ~5 sessions. The row's date is its ET session date (tz-aware index converted
+        to America/New_York; tz-naive taken as exchange-local, as held_stop does);
+        several matching rows give the min Low / max High. None when there is no
+        matching row or the Low / High aren't finite, positive and ordered. A
+        transport failure raises like `price_history_unadjusted`."""
+        def _fetch():
+            return yf.Ticker(ticker).history(period="5d", auto_adjust=False)
+        df = _retry(_fetch)
+        if df is None or len(df) == 0 or "Low" not in df.columns or "High" not in df.columns:
+            return None
+        idx = pd.DatetimeIndex(pd.to_datetime(df.index))
+        if idx.tz is not None:
+            idx = idx.tz_convert(_ET).tz_localize(None)
+        rows = df[idx.normalize() == pd.Timestamp(session_date)]
+        if len(rows) == 0:
+            return None
+        lo, hi = rows["Low"].min(), rows["High"].max()
+        try:
+            lo, hi = float(lo), float(hi)
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(lo) and math.isfinite(hi)) or lo <= 0 or hi <= 0 or lo > hi:
+            return None
+        return {"low": lo, "high": hi}
 
     def historical_close(self, ticker: str, start, end) -> float | None:
         """First close on/after `start` within [start, end] — an arbitrary

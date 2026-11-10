@@ -32,7 +32,9 @@ from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import news_feed
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
-from stock_analyzer.data import fetch_spy, fetch_vix, fetch_risk_free_rate, is_trading_day
+from stock_analyzer.data import (
+    fetch_spy, fetch_vix, fetch_risk_free_rate, is_trading_day, fetch_session_range,
+)
 from stock_analyzer.portfolio import build_portfolio_df
 from stock_analyzer.risk import compute_portfolio_risk_metrics
 from stock_analyzer.stress_test import SCENARIOS, run_scenario, assess_fragility
@@ -194,7 +196,8 @@ def _build_context(today: date) -> dict:
     holdings = holdings_df.to_dict("records")
     held_stops = _held_stop_wiring.build_held_stops(
         holdings, held_data, trades_strict, today,
-        fetch_history=_held_stop_wiring.fetch_or_raise)
+        fetch_history=_held_stop_wiring.fetch_or_raise,
+        fetch_range=fetch_session_range)
     held_stop_notes = [f"{t} ({label}): {note}"
                        for t, label, note in _held_stop_wiring.degraded_notes(held_stops)]
     for _line in held_stop_notes:

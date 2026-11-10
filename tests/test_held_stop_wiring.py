@@ -812,3 +812,207 @@ def test_cron_runner_builds_email_footer_notes_through_plain_text_note():
              and isinstance(n.func, ast.Attribute) and n.func.attr == "plain_text_note"]
     assert calls
     assert "list(payload.get(\"held_stop_notes\", []))" not in src
+
+
+# ── fetch_range: today's High / Low when no history frame has a today row ─────
+def build_r(h, held, trades, fetch, fetch_range, as_of=AS_OF):
+    return hw.build_held_stops(h, held, trades, as_of, fetch_history=fetch,
+                               fetch_range=fetch_range)["AAA"]
+
+
+def _range_case():
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    fill = prev * 1.12                         # far from the prior close, inside today's range
+    trades = journal("AAA", 10.0, fill, AS_OF)
+    h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": fill}]
+    return df, prev, fill, trades, h
+
+
+def test_fetch_range_confirms_a_fill_when_no_frame_has_a_today_row():
+    df, prev, fill, trades, h = _range_case()
+    calls = []
+
+    def rng(t, d):
+        calls.append((t, d))
+        return {"low": prev * 1.10, "high": prev * 1.14}
+    r = build_r(h, {"AAA": {"df": df}}, trades, _fetch_down, rng)
+    ref = build_r(h, {"AAA": {"df": _with_today(df, prev * 1.10, prev * 1.14)}}, trades,
+                  _fetch_down, None)
+    assert calls == [("AAA", AS_OF)]
+    assert r["basis"] == "buy_day" and not r["degraded"] and r["binding"] == "entry"
+    assert r["stop"] == round(fill - C.ATR_STOP_MULT * _atr_before(df, AS_OF), 2)
+    assert (r["stop"], r["basis"], r["binding"], r["note"]) == \
+        (ref["stop"], ref["basis"], ref["binding"], ref["note"])
+
+
+def test_fetch_range_excluding_the_fill_is_rejected_with_a_range_leg():
+    df = walk(n=200, seed=2)
+    prev = float(df["Close"].iloc[-1])
+    fill = prev * 10.0
+    trades = journal("AAA", 10.0, fill, AS_OF)
+    h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": fill}]
+    r = build_r(h, {"AAA": {"df": df}}, trades, _fetch_down,
+                lambda t, d: {"low": prev * 0.99, "high": prev * 1.01})
+    ref = build_r(h, {"AAA": {"df": _with_today(df, prev * 0.99, prev * 1.01)}}, trades,
+                  _fetch_down, None)
+    assert r["basis"] == "prior_session" and r["degraded"] and not r["buy_day"]
+    assert "outside today's trading range" in r["note"]
+    assert "couldn't be checked against today's trading range yet" not in r["note"]
+    assert "today's low and the prior close" in r["note"]
+    assert r["label"] == "Fallback Stop" and r["binding"] == "range"
+    assert (r["stop"], r["binding"], r["note"]) == (ref["stop"], ref["binding"], ref["note"])
+
+
+def _raises(t, d):
+    raise RuntimeError("range down")
+
+
+@pytest.mark.parametrize("bad", [
+    _raises,
+    lambda t, d: None,
+    lambda t, d: {"low": float("nan"), "high": 1},
+    lambda t, d: {"low": 0, "high": 5},
+    lambda t, d: {"low": 10, "high": 5},
+    lambda t, d: {"low": float("inf"), "high": float("inf")},
+    lambda t, d: {"low": "x", "high": 5},
+    lambda t, d: {"high": 5},
+    lambda t, d: [1, 2],
+])
+def test_fetch_range_unusable_result_equals_no_fetch_range(bad):
+    df, prev, fill, trades, h = _range_case()
+    got = build_r(h, {"AAA": {"df": df}}, trades, _fetch_down, bad)
+    base = build_r(h, {"AAA": {"df": df}}, trades, _fetch_down, None)
+    assert (got["stop"], got["basis"], got["binding"], got["note"]) == \
+        (base["stop"], base["basis"], base["binding"], base["note"])
+    assert got["basis"] == "prior_session" and got["degraded"]
+
+
+def _must_not_call(t, d):
+    raise AssertionError("fetch_range must not be called")
+
+
+def test_fetch_range_not_called_when_a_frame_has_a_today_row():
+    df, prev, fill, trades, h = _range_case()
+    held = {"AAA": {"df": _with_today(df, prev * 1.10, prev * 1.14)}}
+    r = build_r(h, held, trades, _fetch_down, _must_not_call)
+    assert r["basis"] == "buy_day" and not r["degraded"]
+
+
+def test_fetch_range_not_called_when_it_is_not_a_buy_day():
+    df, e, px, h, tr = setup()
+    r = build_r(h, {"AAA": {"df": df}}, tr, lambda t, p: df, _must_not_call)
+    assert r["basis"] == "full"
+
+
+def test_fetch_range_not_called_when_the_fill_is_unusable():
+    df = walk(n=200, seed=2)
+    trades = journal("AAA", 10.0, 0.0, AS_OF)
+    h = [{"Ticker": "AAA", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": 100.0}]
+    r = build_r(h, {"AAA": {"df": df}}, trades, _fetch_down, _must_not_call)
+    assert r["basis"] == "prior_session" and not r["buy_day"]
+
+
+# ── session_range_unadjusted / fetch_session_range ───────────────────────────
+def _fake_history(monkeypatch, frame, seen=None):
+    from stock_analyzer.providers import yfinance_provider as yp
+
+    class FakeTicker:
+        def __init__(self, t):
+            if seen is not None:
+                seen["t"] = t
+
+        def history(self, **kw):
+            if seen is not None:
+                seen["kw"] = kw
+            return frame.copy()
+    monkeypatch.setattr(yp.yf, "Ticker", FakeTicker)
+    return yp.YFinanceProvider()
+
+
+def _et_frame(rows):
+    """rows: [(ET timestamp str, low, high, close)] on a tz-aware ET index."""
+    idx = pd.DatetimeIndex([pd.Timestamp(r[0]) for r in rows]).tz_localize("America/New_York")
+    return pd.DataFrame({"Open": 1.0, "High": [r[2] for r in rows], "Low": [r[1] for r in rows],
+                         "Close": [r[3] for r in rows]}, index=idx)
+
+
+def test_session_range_returns_low_high_of_a_nan_close_row(monkeypatch):
+    seen = {}
+    frame = _et_frame([("2026-11-06 00:00", 168.0, 172.0, 170.0),
+                       ("2026-11-09 00:00", 170.24, 179.91, float("nan"))])
+    prov = _fake_history(monkeypatch, frame, seen)
+    out = prov.session_range_unadjusted("NVDA", date(2026, 11, 9))
+    assert out == {"low": 170.24, "high": 179.91}
+    assert seen["t"] == "NVDA" and seen["kw"] == {"period": "5d", "auto_adjust": False}
+
+
+def test_session_range_none_when_no_row_for_the_date(monkeypatch):
+    frame = _et_frame([("2026-11-06 00:00", 168.0, 172.0, 170.0)])
+    prov = _fake_history(monkeypatch, frame)
+    assert prov.session_range_unadjusted("NVDA", date(2026, 11, 9)) is None
+    prov = _fake_history(monkeypatch, pd.DataFrame())
+    assert prov.session_range_unadjusted("NVDA", date(2026, 11, 9)) is None
+
+
+@pytest.mark.parametrize("lo,hi", [(float("nan"), 5.0), (1.0, float("nan")), (0.0, 5.0),
+                                   (-1.0, 5.0), (9.0, 5.0)])
+def test_session_range_none_for_unusable_low_high(monkeypatch, lo, hi):
+    frame = _et_frame([("2026-11-09 00:00", lo, hi, float("nan"))])
+    prov = _fake_history(monkeypatch, frame)
+    assert prov.session_range_unadjusted("NVDA", date(2026, 11, 9)) is None
+
+
+def test_session_range_matches_on_the_et_date_not_the_utc_date(monkeypatch):
+    # a bar stamped 2026-11-09 20:00 ET is 2026-11-10 01:00 UTC: it is the 11-09 session
+    idx = pd.DatetimeIndex(["2026-11-10 01:00"]).tz_localize("UTC")
+    frame = pd.DataFrame({"Open": 1.0, "High": 12.0, "Low": 10.0, "Close": float("nan")}, index=idx)
+    prov = _fake_history(monkeypatch, frame)
+    assert prov.session_range_unadjusted("X", date(2026, 11, 9)) == {"low": 10.0, "high": 12.0}
+    assert prov.session_range_unadjusted("X", date(2026, 11, 10)) is None
+    # and the mirror case: a bar at 2026-11-09 23:00 ET stays on 11-09
+    frame2 = _et_frame([("2026-11-09 23:00", 10.0, 12.0, float("nan"))])
+    prov = _fake_history(monkeypatch, frame2)
+    assert prov.session_range_unadjusted("X", date(2026, 11, 9)) == {"low": 10.0, "high": 12.0}
+    assert prov.session_range_unadjusted("X", date(2026, 11, 10)) is None
+
+
+def test_session_range_tz_naive_index_is_taken_as_exchange_local(monkeypatch):
+    idx = pd.DatetimeIndex(["2026-11-09 00:00"])
+    frame = pd.DataFrame({"Open": 1.0, "High": 12.0, "Low": 10.0, "Close": float("nan")}, index=idx)
+    prov = _fake_history(monkeypatch, frame)
+    assert prov.session_range_unadjusted("X", date(2026, 11, 9)) == {"low": 10.0, "high": 12.0}
+
+
+def test_session_range_several_rows_for_one_date_use_min_low_max_high(monkeypatch):
+    frame = _et_frame([("2026-11-09 09:30", 11.0, 12.0, float("nan")),
+                       ("2026-11-09 15:00", 10.0, 11.5, float("nan"))])
+    prov = _fake_history(monkeypatch, frame)
+    assert prov.session_range_unadjusted("X", date(2026, 11, 9)) == {"low": 10.0, "high": 12.0}
+
+
+def test_session_range_raises_on_transport_failure(monkeypatch):
+    from stock_analyzer.providers import yfinance_provider as yp
+
+    class Boom:
+        def __init__(self, t):
+            pass
+
+        def history(self, **kw):
+            raise RuntimeError("down")
+    monkeypatch.setattr(yp.yf, "Ticker", Boom)
+    with pytest.raises(RuntimeError):
+        yp.YFinanceProvider().session_range_unadjusted("X", date(2026, 11, 9))
+
+
+def test_fetch_session_range_never_raises(monkeypatch):
+    prim = data_mod._PRIMARY
+
+    def _raise(t, d):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(prim, "session_range_unadjusted", _raise)
+    assert data_mod.fetch_session_range("X", date(2026, 11, 9)) is None
+    monkeypatch.setattr(prim, "session_range_unadjusted", lambda t, d: {"low": 1.0, "high": 2.0})
+    assert data_mod.fetch_session_range("X", date(2026, 11, 9)) == {"low": 1.0, "high": 2.0}
+    monkeypatch.setattr(prim, "session_range_unadjusted", lambda t, d: None)
+    assert data_mod.fetch_session_range("X", date(2026, 11, 9)) is None
