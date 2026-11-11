@@ -2170,6 +2170,13 @@ TRADE_LOG_PRICE_CHECK_MAX_AGE_DAYS  = 35    # a trade dated more calendar days a
 NYSE_REGULAR_OPEN_ET                = (9, 30)   # (hour, minute) ET the regular session opens; a calendar fact, not a gate
 NYSE_REGULAR_CLOSE_ET               = (16, 0)   # (hour, minute) ET the regular session closes; early-close days use NYSE_EARLY_CLOSES instead
 
+# ── Journal vs Robinhood comparison (journal_broker_match.py, TJDate C5), owner-agreed
+# 2026-11-02 as U4; lag meaning owner-decided 2026-11-10 (D1).
+JOURNAL_MATCH_LOOKBACK_DAYS       = 35  # calendar days of journal rows and Robinhood fills compared; must stay <= ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS (test-pinned) so a proposed correction lands inside the automatic account-row repair
+JOURNAL_MATCH_BROKER_LAG_SESSIONS = 2   # a journal row with no Robinhood record reads "not in Robinhood" only once the last completed transaction sync is on a later date and at least this many trading sessions after it; before that, "not compared yet"
+JOURNAL_MATCH_MAX_FILLS           = 6   # most fills tried as the combination behind one journal row (a whole day's fills are always tried together, whatever their number)
+JOURNAL_MATCH_MAX_CANDIDATES      = 12  # more unmatched fills than this near one journal row: no subset search, reads "too many fills"
+
 # Truncation-ambiguity bound for daily_pnl.reconcile_baseline()'s qty_drift
 # unit guard. A DIFFERENT question from BROKER_DRIFT_SHARE_TOL above: that one
 # absorbs float rounding noise (~0.001 shares); this one absorbs int()

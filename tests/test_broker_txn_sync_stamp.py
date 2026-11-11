@@ -258,3 +258,56 @@ def test_the_embedded_ddl_and_the_sql_file_carry_the_column():
            "snaptrade-config-txn-sync.sql").read_text(encoding="utf-8")
     assert "add column if not exists last_txn_sync_at timestamptz" in sql
     assert "row level security" not in sql.lower()
+
+
+# ── db: the TJDate C5b all-status fills loader ───────────────────────────────
+
+def _fill(i, status):
+    return {"id": i, "snaptrade_txn_id": f"T{i}", "ticker": "OKTA", "action": "BUY", "shares": 3,
+            "price": 189.14, "trade_date": "2026-11-02", "raw_json": {"price": 189.14},
+            "status": status}
+
+
+def test_load_fills_has_no_status_filter_selects_status_and_pages(monkeypatch):
+    rows = [_fill(i, s) for i, s in enumerate(
+        ["pending", "dismissed", "logged", "pending", "dismissed", "logged", "pending"], start=1)]
+    c = _use(monkeypatch, _QClient(rows))
+    monkeypatch.setattr(db, "_PENDING_FILLS_PAGE_SIZE", 3)
+    got = db.load_snaptrade_fills_or_none("2026-11-03")
+    assert [r["id"] for r in got] == list(range(1, 8))                  # every page, every status
+    assert not [x for x in c.log if x[0] == "eq"]                       # no status (or any) filter
+    assert ("gte", "trade_date", "2026-11-03") in c.log
+    sel = [x for x in c.log if x[0] == "select"][0][1]
+    assert sel == "id,snaptrade_txn_id,ticker,action,shares,price,trade_date,raw_json,status"
+    assert ("order", "trade_date", True) in c.log and ("order", "id", True) in c.log
+    assert set(c.tables) == {"snaptrade_pending_imports"}
+
+
+def test_load_fills_empty_is_a_list_and_every_failure_is_none(monkeypatch):
+    _use(monkeypatch, _QClient([]))
+    assert db.load_snaptrade_fills_or_none("2026-11-03") == []           # read, no fills
+    _use(monkeypatch, _QClient([_fill(1, "pending")], boom=True))
+    assert db.load_snaptrade_fills_or_none("2026-11-03") is None         # a page failed
+    _use(monkeypatch, _QClient(), has_db=False)
+    assert db.load_snaptrade_fills_or_none("2026-11-03") is None         # no DB
+
+
+def test_load_fills_leaves_the_pending_only_loader_unchanged(monkeypatch):
+    c = _use(monkeypatch, _QClient([_pend(1)]))
+    db.load_snaptrade_pending_fills_or_none("2026-11-03")
+    assert ("eq", "status", "pending") in c.log                          # C2b still pending-only
+    sel = [x for x in c.log if x[0] == "select"][0][1]
+    assert "status" not in sel.split(",")
+
+
+def test_fills_loader_output_feeds_the_matcher(monkeypatch):
+    from datetime import datetime
+    from stock_analyzer import journal_broker_match as jbm
+    from stock_analyzer.market_time import ET
+    _use(monkeypatch, _QClient([_fill(1, "dismissed")]))
+    rows = db.load_snaptrade_fills_or_none("2026-10-28")
+    journal = pd.DataFrame([{"id": 1, "ticker": "OKTA", "action": "BUY", "shares": 3, "price": 171.88,
+                             "traded_at": "2026-11-02T22:08:00Z", "broker_txn_id": None, "notes": None}])
+    now = ET.localize(datetime(2026, 11, 12, 12, 0))
+    res = jbm.match_journal_to_broker(journal, rows, now, now)
+    assert [f["kind"] for f in res] == ["PRICE_FIX"] and res[0]["fill_statuses"] == ["dismissed"]

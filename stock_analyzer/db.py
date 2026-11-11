@@ -6677,6 +6677,36 @@ def load_snaptrade_pending_fills_or_none(since_date: str) -> "list | None":
         return None
 
 
+def load_snaptrade_fills_or_none(since_date: str) -> "list | None":
+    """Every broker fill dated `since_date` (an ISO `YYYY-MM-DD`) or later, of ANY
+    status (pending, dismissed, logged), for the journal-vs-Robinhood matcher
+    (TJDate C5, `journal_broker_match`), or None.
+
+    STRICT like `load_snaptrade_pending_fills_or_none`: [] means "read, no fills",
+    None means "couldn't read" (no DB, or any page failed). NO status filter: the
+    status is the owner's workflow state, not a fact about the fill (owner D3), and
+    "linked" is decided only by `trades.broker_txn_id`. Newest first, every page
+    via `_read_all_pages` (TrPage). Columns: id, snaptrade_txn_id, ticker, action,
+    shares, price, trade_date, raw_json, status. The C2b pending-only loader stays
+    as it is.
+    """
+    if not has_db():
+        return None
+    try:
+        return _read_all_pages(
+            lambda: (
+                _client().table("snaptrade_pending_imports")
+                .select("id,snaptrade_txn_id,ticker,action,shares,price,trade_date,raw_json,status")
+                .gte("trade_date", str(since_date))
+                .order("trade_date", desc=True).order("id", desc=True)
+            ),
+            _PENDING_FILLS_PAGE_SIZE,
+            dedupe_key="id",
+        )
+    except Exception:
+        return None
+
+
 def save_snaptrade_pending_imports(rows: list[dict]) -> int:
     """Insert new pending-import candidates (from broker_sync.classify_transactions'
     `new_pending` list), ignoring conflicts on the snaptrade_txn_id unique

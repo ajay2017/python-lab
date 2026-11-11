@@ -1138,6 +1138,13 @@ _GATE_FILES = {
     # Journal form blocks, ticks or switches to the broker-prefill path; a wrong
     # call stores a wrong date, time or price in the journal that sizes every sell.
     "stock_analyzer/trade_entry_checks.py",
+    # Added 2026-11-10 (TJDate C5): the pure journal-vs-Robinhood matcher -- one
+    # verdict per unlinked journal row and per broker fill (link / combined fills /
+    # re-dated / wrong price or quantity / not in the journal / not in Robinhood),
+    # the "not compared yet" lag rule and the one-click eligibility pre-filter that
+    # the Phase-2 correction planner and the Home / Pending Imports lines read; a
+    # wrong verdict tells the owner a real trade is missing or a correct row is wrong.
+    "stock_analyzer/journal_broker_match.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per
