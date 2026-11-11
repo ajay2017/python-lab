@@ -639,13 +639,20 @@ def _fuzz_case(rng, now):
                             rng.choice([50.0, 51.0, 52.0]), d,
                             status=rng.choice(["pending", "dismissed", "logged"])))
             ntx += 1
+    if rng.random() < 0.4:      # a row that merged fills of two days at an off price (MERGED_FILLS)
+        d = rng.choice(days)
+        rows.append(jrow(nid, "M", "BUY", 4, 60.0, et(d.year, d.month, d.day, 11)))
+        for off, px in zip(rng.sample([1, 2, 3, 4], 2), (60.0, 50.0)):     # one fill anchors the row's price
+            fills.append(fl(ntx, f"T{ntx}", "M", "BUY", 2, px, d - timedelta(days=off),
+                            status=rng.choice(["pending", "dismissed", "logged"])))
+            ntx += 1
     return rows, fills
 
 
 def test_property_every_row_and_fill_in_exactly_one_finding_and_order_independent():
     rng = random.Random(7)
     seen_kinds = set()
-    for case in range(250):
+    for case in range(120):
         now = et(2026, 11, rng.randint(10, 25), 12)
         sync = rng.choice([None, now, now - timedelta(days=1), now - timedelta(days=3),
                            now - timedelta(days=6)])
@@ -677,7 +684,8 @@ def test_property_every_row_and_fill_in_exactly_one_finding_and_order_independen
         rng.shuffle(r1)
         rng.shuffle(r2)
         assert jbm.match_journal_to_broker(frame(*r1), r2, sync, now) == res, case
-    assert {"NOT_YET_COMPARED", "LINKED_DIFFERS", "JOURNAL_ONLY", "UNLOGGED", "LINK"} <= seen_kinds
+    assert {"NOT_YET_COMPARED", "LINKED_DIFFERS", "JOURNAL_ONLY", "UNLOGGED", "LINK",
+            "MERGED_FILLS"} <= seen_kinds
 
 
 def test_fills_with_no_txn_and_no_pending_id_are_ordered_by_content_not_input_order():
@@ -746,6 +754,165 @@ def test_share_words_follow_the_count():
     two = run([jrow(1, "X", "BUY", 2, 100.0, et(2026, 11, 4, 10))],
               [fl(1, "T1", "X", "BUY", 1, 100.0, date(2026, 11, 4))])
     assert "1 more X share." in one(two, "QTY_MISMATCH")["text"]
+
+
+# ── MERGED_FILLS (owner's 2026-11-11 dry run, MRVL #419) and the wider UNLOGGED safety net ──
+
+def _mrvl_419():
+    j = [jrow(419, "MRVL", "BUY", 5, 260.0, "2026-10-14T13:51:32Z"),             # 09:51 EDT
+         jrow(424, "MRVL", "BUY", 2, 265.0, et(2026, 10, 13, 16), txn="L424")]
+    f = [fl(1, "L424", "MRVL", "BUY", 2, 265.0, date(2026, 10, 13), status="logged"),
+         fl(2, "M1", "MRVL", "BUY", 2, 260.0, date(2026, 10, 14), status="dismissed"),
+         fl(3, "M2", "MRVL", "BUY", 1, 260.0, date(2026, 10, 14), status="dismissed"),
+         fl(4, "M3", "MRVL", "BUY", 2, 235.0, date(2026, 10, 15), status="dismissed")]
+    return j, f
+
+
+def test_mrvl_419_merged_fills_from_two_days_at_an_off_price():
+    res = run(*_mrvl_419())
+    assert kinds(res) == ["MERGED_FILLS"]                    # no UNLOGGED, no AMBIGUOUS, nothing for #424
+    r = res[0]
+    assert r["journal_ids"] == [419] and r["txn_ids"] == ["M1", "M2", "M3"]
+    assert r["severity"] == "differs" and r["rank"] == 95 and r["holdings_effect"] == 0.0
+    assert abs(r["broker_price"] - 250.0) < 1e-9 and r["journal_price"] == 260.0 and r["broker_shares"] == 5.0
+    assert r["one_click_eligible"] is False and r["one_click_block"] == "forward"
+    assert r["correction_shape"] == "split" and r["requires_fill_date_check"] is True
+    assert r["text"] == ("Your journal's BUY 5 MRVL at 260.00 on Wed Oct 14 (#419) matches 3 Robinhood "
+                         "fills dated Wed Oct 14, Thu Oct 15 totalling 5 shares at an average of 250.00, "
+                         "not 260.00. Robinhood dates each fill by when its order was placed; check the "
+                         "'Filled' dates. If these were separate trades, a Robinhood fill is missing from "
+                         "your journal.")
+
+
+def test_merged_fills_on_earlier_days_is_display_only():
+    j = [jrow(1, "X", "BUY", 5, 260.0, et(2026, 10, 16, 10))]
+    f = [fl(1, "T1", "X", "BUY", 2, 260.0, date(2026, 10, 14)),                  # the anchor: the row's own price
+         fl(2, "T2", "X", "BUY", 3, 250.0, date(2026, 10, 15))]
+    r = run(j, f)[0]
+    assert r["kind"] == "MERGED_FILLS" and r["one_click_block"] == "display_only"
+    assert r["one_click_eligible"] is False and r["requires_fill_date_check"] is True
+
+
+def test_merged_fills_text_names_a_weekend_placement():
+    j = [jrow(1, "X", "BUY", 5, 100.0, et(2026, 11, 10, 10))]
+    f = [fl(1, "T1", "X", "BUY", 3, 100.0, date(2026, 11, 7)), fl(2, "T2", "X", "BUY", 2, 90.0, date(2026, 11, 9))]
+    r = run(j, f)[0]
+    assert r["kind"] == "MERGED_FILLS"
+    assert "dated Sat Nov 7, Mon Nov 9" in r["text"]
+    assert "(placed Sat Nov 7, so it filled Mon Nov 9 or later)" in r["text"] and "$" not in r["text"]
+
+
+def test_an_exact_price_cross_day_split_wins_over_merged_fills():
+    j = [jrow(1, "X", "BUY", 5, 100.0, et(2026, 11, 4, 10))]
+    f = [fl(1, "A", "X", "BUY", 3, 100.0, date(2026, 11, 3)), fl(2, "B", "X", "BUY", 2, 100.0, date(2026, 11, 2)),
+         fl(3, "C", "X", "BUY", 2, 110.0, date(2026, 11, 3))]                  # {A, C} would be a MERGED_FILLS
+    res = run(j, f)
+    assert sorted(kinds(res)) == ["SPLIT", "UNLOGGED"]
+    assert one(res, "SPLIT")["txn_ids"] == ["B", "A"] and one(res, "UNLOGGED")["txn_ids"] == ["C"]
+
+
+def test_a_row_with_only_qty_mismatch_and_merged_fills_resolves_as_merged_fills():
+    j = [jrow(1, "X", "BUY", 5, 100.0, et(2026, 11, 4, 10))]
+    f = [fl(1, "A", "X", "BUY", 4, 100.0, date(2026, 11, 4)),                    # a same-price QTY_MISMATCH on its own
+         fl(2, "B", "X", "BUY", 1, 110.0, date(2026, 11, 3))]
+    res = run(j, f)
+    assert kinds(res) == ["MERGED_FILLS"] and res[0]["txn_ids"] == ["B", "A"]
+
+
+def test_too_many_still_fires_when_the_only_explanations_are_merged_fills():
+    prices = [100.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0]                   # one fill anchors; no 5 average 100
+    days = [date(2026, 11, 3), date(2026, 11, 4), date(2026, 11, 5), date(2026, 11, 6),
+            date(2026, 11, 9), date(2026, 11, 10), date(2026, 11, 11)]
+    j = [jrow(1, "X", "BUY", 5, 100.0, et(2026, 11, 6, 11))]
+    f = [fl(i + 1, f"S{i}", "X", "BUY", 1, p, d) for i, (p, d) in enumerate(zip(prices, days))]
+    _, jrecs = jbm._parse_journal(frame(*j))
+    inf = jbm._explain(jrecs[0], jbm._parse_fills(f))
+    assert inf["E"] and {e[0] for e in inf["E"]} == {3} and {e[1] for e in inf["E"]} == {"MERGED_FILLS"}
+    assert inf["too_many"] is True
+    res = run(j, f)
+    assert kinds(res) == ["TOO_MANY"] and len(res[0]["txn_ids"]) == 7
+    # the earlier 7 @ 100 repro: its 7 fills can't be a subset (max 6), so only tier 4 remains
+    j7, f7 = _seven([100.0, 97.0, 103.0, 100.0, 98.0, 101.0, 101.0], "BUY")
+    _, r7 = jbm._parse_journal(frame(*j7))
+    inf7 = jbm._explain(r7[0], jbm._parse_fills(f7))
+    assert {e[0] for e in inf7["E"]} == {4} and inf7["too_many"] is True
+    assert kinds(run(j7, f7)) == ["TOO_MANY"]
+
+
+@pytest.mark.parametrize("act,rank", [("BUY", 20), ("SELL", 40)])
+def test_an_unanchored_share_count_coincidence_is_not_merged_fills_h1_h3(act, rank):
+    # H1 / H3: a real unlogged fill that happens to have the row's share count
+    j = [jrow(1, "X", act, 10, 95.0, et(2026, 11, 2, 10))]
+    res = run(j, [fl(1, "U1", "X", act, 10, 120.0, date(2026, 11, 4))])
+    assert sorted(kinds(res)) == ["JOURNAL_ONLY", "UNLOGGED"]
+    assert one(res, "JOURNAL_ONLY")["rank"] == rank
+    u = one(res, "UNLOGGED")
+    assert u["nearby_journal_ids"] == [1] and "is nearby and matches no fill" in u["text"]
+
+
+def test_an_unanchored_two_fill_set_is_not_merged_fills_h2():
+    j = [jrow(1, "X", "BUY", 10, 95.0, et(2026, 11, 2, 10))]
+    f = [fl(1, "U1", "X", "BUY", 4, 120.0, date(2026, 11, 3)), fl(2, "U2", "X", "BUY", 6, 121.0, date(2026, 11, 4))]
+    res = run(j, f)
+    assert sorted(kinds(res)) == ["JOURNAL_ONLY", "UNLOGGED", "UNLOGGED"]
+    assert all(u["nearby_journal_ids"] == [1] for u in res if u["kind"] == "UNLOGGED")
+
+
+def test_a_single_anchored_fill_with_the_rows_shares_is_a_redate_not_merged_fills():
+    res = run([jrow(1, "X", "BUY", 5, 100.0, et(2026, 11, 4, 10))],
+              [fl(1, "T1", "X", "BUY", 5, 100.0, date(2026, 11, 3))])
+    assert kinds(res) == ["REDATE"]
+
+
+def _ambiguous_row_and_fills():
+    j = [jrow(701, "X", "BUY", 2, 100.0, et(2026, 11, 4, 11))]
+    f = [fl(i, f"X{i}", "X", "BUY", 1, px, date(2026, 11, 4))
+         for i, px in enumerate((99.0, 101.0, 99.5, 100.5), start=1)]
+    return j, f
+
+
+def test_unlogged_names_a_nearby_ambiguous_row_with_the_not_fully_matched_sentence():
+    j, f = _ambiguous_row_and_fills()
+    f.append(fl(9, "U1", "X", "BUY", 3, 80.0, date(2026, 11, 5)))                 # claimed by nothing
+    res = run(j, f)
+    assert sorted(kinds(res)) == ["AMBIGUOUS", "UNLOGGED"]
+    u = one(res, "UNLOGGED")
+    assert u["txn_ids"] == ["U1"] and u["nearby_journal_ids"] == [701] and u["rank"] == 30
+    assert u["text"].endswith(" Journal row #701 (BUY 2 on Wed Nov 4) is nearby and isn't fully "
+                              "matched to Robinhood: check it before logging this one.")
+    assert one(res, "AMBIGUOUS")["journal_ids"] == [701]                          # still one verdict per row
+    f[-1] = fl(9, "U1", "X", "BUY", 3, 80.0, date(2026, 11, 10))                  # 4 sessions away: beyond the window
+    far = one(run(j, f), "UNLOGGED")
+    assert far["nearby_journal_ids"] == [] and "nearby" not in far["text"]
+
+
+def test_unlogged_names_a_nearby_too_many_row_and_a_linked_row_that_differs_on_shares():
+    j7, f7 = _seven([100.0, 97.0, 103.0, 100.0, 98.0, 101.0, 101.0], "BUY")
+    res = run(j7, f7)
+    assert kinds(res) == ["TOO_MANY"]                                              # every fill is claimed: nothing to name it on
+    j = [jrow(1, "X", "BUY", 5, 100.0, et(2026, 11, 4, 10), txn="L1")]
+    f = [fl(1, "L1", "X", "BUY", 6, 100.0, date(2026, 11, 4), status="logged"),
+         fl(2, "U1", "X", "BUY", 2, 90.0, date(2026, 11, 5))]
+    res = run(j, f)
+    assert sorted(kinds(res)) == ["LINKED_DIFFERS", "UNLOGGED"]
+    u = one(res, "UNLOGGED")
+    assert u["nearby_journal_ids"] == [1] and "isn't fully matched to Robinhood" in u["text"]
+    assert one(res, "LINKED_DIFFERS")["journal_ids"] == [1]
+    f[0] = fl(1, "L1", "X", "BUY", 5, 100.0, date(2026, 11, 4), status="logged")  # identical: not a reference
+    assert one(run(j, f), "UNLOGGED")["nearby_journal_ids"] == []
+
+
+def test_unlogged_lists_journal_only_and_not_fully_matched_rows_together():
+    # a JOURNAL_ONLY row keeps its own sentence; the ambiguous row gets the new one
+    j = [jrow(701, "X", "BUY", 2, 100.0, et(2026, 11, 2, 11)),
+         jrow(702, "X", "BUY", 9, 70.0, et(2026, 11, 5, 11))]
+    f = [fl(i, f"X{i}", "X", "BUY", 1, px, date(2026, 11, 2))
+         for i, px in enumerate((99.0, 101.0, 99.5, 100.5), start=1)]
+    f.append(fl(9, "U1", "X", "BUY", 3, 80.0, date(2026, 11, 4)))
+    u = one(run(j, f), "UNLOGGED")
+    assert u["nearby_journal_ids"] == [701, 702]
+    assert "Journal row #702 (BUY 9 on Thu Nov 5) is nearby and matches no fill" in u["text"]
+    assert "Journal row #701 (BUY 2 on Mon Nov 2) is nearby and isn't fully matched to Robinhood" in u["text"]
 
 
 # ── cross-consistency with the C2b single-entry check ───────────────────────

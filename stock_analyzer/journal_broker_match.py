@@ -27,6 +27,17 @@ Facts the rules rest on:
     before that it reads "not compared yet". An empty result is therefore never
     worded "matches Robinhood": show `match_coverage(...)["text"]` beside it.
 
+Explanation tiers (the weaker a story, the later it is tried, and a stronger
+story on the same fills always wins): 1 RECONCILED (a whole day's fills),
+2 REDATE / SPLIT / FORWARD / PRICE_FIX (exact shares AND price, or same-day
+shares), 3 MERGED_FILLS (fills from more than one day whose shares add up to
+the row at a price that is NOT their average: a row that merged fills from two
+days, owner's 2026-11-11 dry run, MRVL #419 5 @ 260.00 = 2 + 1 @ 260.00 on 10-14
+and 2 @ 235.00 on 10-15; ANCHORED: at least one of the fills is at the row's own
+price, review of 2026-11-11, because a bare share-count match could explain away a
+real missing trade), 4 QTY_MISMATCH (one same-price fill, or a whole day's
+fills, with a different share count).
+
 Three-state output, like every cache here: `None` = couldn't check (an
 unreadable journal or fills input), `[]` = checked and nothing to say,
 otherwise a list of findings (see `match_journal_to_broker`).
@@ -61,6 +72,7 @@ KIND_QTY_MISMATCH = "QTY_MISMATCH"
 KIND_PRICE_FIX = "PRICE_FIX"
 KIND_REDATE = "REDATE"
 KIND_SPLIT = "SPLIT"
+KIND_MERGED_FILLS = "MERGED_FILLS"
 KIND_FORWARD = "FORWARD"
 KIND_LINKED_DIFFERS = "LINKED_DIFFERS"
 KIND_AMBIGUOUS = "AMBIGUOUS"
@@ -80,6 +92,7 @@ _SEVERITY = {
     KIND_UNLOGGED: SEV_DIFFERS, KIND_JOURNAL_ONLY: SEV_DIFFERS,
     KIND_QTY_MISMATCH: SEV_DIFFERS, KIND_PRICE_FIX: SEV_DIFFERS,
     KIND_REDATE: SEV_DIFFERS, KIND_SPLIT: SEV_DIFFERS, KIND_FORWARD: SEV_DIFFERS,
+    KIND_MERGED_FILLS: SEV_DIFFERS,
     KIND_LINKED_DIFFERS: SEV_DIFFERS,
     KIND_AMBIGUOUS: SEV_UNRESOLVED, KIND_TOO_MANY: SEV_UNRESOLVED,
     KIND_UNCHECKED: SEV_UNCHECKED, KIND_NOT_YET_COMPARED: SEV_UNCHECKED,
@@ -89,7 +102,8 @@ _SEVERITY = {
 # Rank (owner D5). UNLOGGED / QTY_MISMATCH / JOURNAL_ONLY depend on the action or
 # the sign of `holdings_effect` and are resolved in `_rank`.
 _RANK = {
-    KIND_PRICE_FIX: 70, KIND_REDATE: 80, KIND_SPLIT: 90, KIND_FORWARD: 100,
+    KIND_PRICE_FIX: 70, KIND_REDATE: 80, KIND_SPLIT: 90, KIND_MERGED_FILLS: 95,
+    KIND_FORWARD: 100,
     KIND_LINKED_DIFFERS: 110, KIND_AMBIGUOUS: 120, KIND_TOO_MANY: 130,
     KIND_UNCHECKED: 140, KIND_NOT_YET_COMPARED: 150, KIND_LINK: 160,
     KIND_RECONCILED: 170, KIND_SKIPPED_NON_EQUITY: 180,
@@ -360,6 +374,9 @@ def _one_click(ctx, kind, jrows, ffills):
         return (None, False, BLOCK_MULTI_FILL, False)
     if kind == KIND_FORWARD:
         return (None, False, BLOCK_FORWARD, False)
+    if kind == KIND_MERGED_FILLS:
+        later = any(f["session"] > jrows[0]["date"] for f in ffills)
+        return ("split", False, BLOCK_FORWARD if later else BLOCK_DISPLAY_ONLY, True)
     return (None, False, BLOCK_DISPLAY_ONLY, False)
 
 
@@ -439,9 +456,17 @@ def _classify(j, S, whole_day: bool):
             return (2, KIND_FORWARD)
         return (2, KIND_REDATE if len(S) == 1 else KIND_SPLIT)
     if sh_ok:
-        return (2, KIND_PRICE_FIX) if same_day else None
+        if same_day:
+            return (2, KIND_PRICE_FIX)      # the price is what differs
+        # Other days: the row merged fills of several days at a price that isn't their
+        # average. A share-count match alone is a coincidence that could explain away a
+        # real missing trade, so the set must be ANCHORED: at least one fill at the
+        # row's own price (which also rules out a single fill: one anchored fill with
+        # the row's shares is already REDATE / FORWARD).
+        anchored = any(_tec._same_price(f["price"], j["price"]) for f in S)
+        return (3, KIND_MERGED_FILLS) if anchored else None
     if same_day and px_ok and (len(S) == 1 or whole_day):
-        return (3, KIND_QTY_MISMATCH)
+        return (4, KIND_QTY_MISMATCH)
     return None
 
 
@@ -498,10 +523,12 @@ def _claims(inf, t) -> set:
     return {f["k"] for e in inf["E"] if e[0] <= t for f in e[2]}
 
 
-def _group_findings(ctx, tk, act, jrows, fills, linked_rows):
+def _group_findings(ctx, tk, act, jrows, fills, linked_rows, diff_rows=()):
     """Findings for one (ticker, action) group: `jrows` = readable unlinked pool
     journal rows, `fills` = readable unlinked pool equity fills, `linked_rows` =
-    the group's readable linked journal rows (duplicate hints only)."""
+    the group's readable linked journal rows (duplicate hints only), `diff_rows` =
+    those linked rows whose LINKED_DIFFERS differs on shares (a "check before
+    logging" reference on a nearby UNLOGGED, never a verdict here)."""
     out: list = []
     matched: list = []              # rows that got a LINK / RECONCILED verdict
     F = sorted(fills, key=lambda f: f["sk"])
@@ -532,7 +559,7 @@ def _group_findings(ctx, tk, act, jrows, fills, linked_rows):
     while rows:
         info = {j["id"]: _explain(j, F) for j in rows}
         progressed = False
-        for t in (1, 2, 3):
+        for t in (1, 2, 3, 4):
             res = []
             for j in rows:
                 inf = info[j["id"]]
@@ -560,9 +587,13 @@ def _group_findings(ctx, tk, act, jrows, fills, linked_rows):
         if not progressed:
             break
 
+    def _net(f, extra):
+        return [(j, only) for j, only in extra + [(d, False) for d in diff_rows]
+                if _dist(j, f) <= JOURNAL_MATCH_WINDOW_SESSIONS]
+
     if not rows:
         for f in F:
-            out.append(_unlogged(ctx, tk, act, f, []))
+            out.append(_unlogged(ctx, tk, act, f, _net(f, [])))
         return out
 
     # Step 4: leftovers.
@@ -583,7 +614,7 @@ def _group_findings(ctx, tk, act, jrows, fills, linked_rows):
     for j in stuck:
         inf = info[j["id"]]
         find(("r", j["id"]))
-        for k in (({f["k"] for f in inf["C"]}) if inf["too_many"] else _claims(inf, 3)):
+        for k in (({f["k"] for f in inf["C"]}) if inf["too_many"] else _claims(inf, 4)):
             union(("r", j["id"]), ("f", k))
     comps: dict = {}
     for node in list(parent):
@@ -629,10 +660,12 @@ def _group_findings(ctx, tk, act, jrows, fills, linked_rows):
         jsh = j["shares"]
         out.append(_finding(ctx, KIND_JOURNAL_ONLY, tk, act, [j], [], text,
                             holdings=_holdings(act, jsh, 0.0), dup=dup))
-    only_rows = judged_rows
+    # Rows whose verdict leaves them not fully matched. NOT_YET_COMPARED rows are not
+    # listed: they absorb every unclaimed fill within the window, so no UNLOGGED fill
+    # is ever near one.
+    refs = [(j, True) for j in judged_rows] + [(j, False) for j in stuck]
     for f in still:
-        near = [j for j in only_rows if _dist(j, f) <= JOURNAL_MATCH_WINDOW_SESSIONS]
-        out.append(_unlogged(ctx, tk, act, f, near))
+        out.append(_unlogged(ctx, tk, act, f, _net(f, refs)))
     return out
 
 
@@ -675,6 +708,17 @@ def _resolved(ctx, tk, act, j, chosen):
         text = (f"Your journal's {desc} at {_px(jpx)} on {dj} ({jid}) matches {len(S)} "
                 f"Robinhood fills dated {dates}, average {_px(bpx)}. Robinhood dates each "
                 "fill by when its order was placed; check the 'Filled' dates.")
+    elif kind == KIND_MERGED_FILLS:
+        dates = ", ".join(_fd(d) for d in sorted({f["placed"] for f in S}))
+        n = len(S)
+        text = (f"Your journal's {desc} at {_px(jpx)} on {dj} ({jid}) matches {n} Robinhood "
+                f"{'fill' if n == 1 else 'fills'} dated {dates} totalling {_shares_text(bsh)} "
+                f"at an average of {_px(bpx)}, not {_px(jpx)}.")
+        for pl, se in sorted({(f["placed"], f["session"]) for f in S if f["placed"] != f["session"]}):
+            text += f" (placed {_fd(pl)}, so it filled {_fd(se)} or later)"
+        text += (" Robinhood dates each fill by when its order was placed; check the "
+                 "'Filled' dates. If these were separate trades, a Robinhood fill is "
+                 "missing from your journal.")
     elif kind == KIND_PRICE_FIX:
         if len(S) == 1:
             text = (f"Robinhood's record of {desc} on {dj} is at {_px(bpx)}, not "
@@ -698,8 +742,23 @@ def _resolved(ctx, tk, act, j, chosen):
                     holdings=holdings if kind != KIND_RECONCILED else None)
 
 
+def _near_sentence(rows, act, f, tail_one, tail_many):
+    if not rows:
+        return ""
+    if len(rows) == 1:
+        j = rows[0]
+        return (f" Journal row #{j['id']} ({act} {_sh(j['shares'])} on {_fd(j['date'])}) "
+                f"{tail_one}: check it before logging this one.")
+    parts = ", ".join(f"#{j['id']} ({act} {_sh(j['shares'])} on {_fd(j['date'])})" for j in rows)
+    return f" Journal rows {parts} {tail_many}: check them before logging this one."
+
+
 def _unlogged(ctx, tk, act, f, near_rows):
-    near = sorted(near_rows, key=lambda j: (_dist(j, f), j["id"]))
+    """`near_rows` = [(journal row, matches_no_fill)] within the window of this
+    fill's session whose own verdict leaves them not fully matched: a JOURNAL_ONLY
+    row (True), or a row in an AMBIGUOUS / TOO_MANY component or a linked row that
+    differs on shares (False). References only: never a second verdict for the row."""
+    near = sorted(near_rows, key=lambda t: (_dist(t[0], f), t[0]["id"]))
     verb = "bought" if act == "BUY" else "sold"
     text = (f"Robinhood {verb} {_sh(f['shares'])} {tk} on {_fd(f['session'])} at "
             f"{_px(f['price'])}, and no journal row matches it.")
@@ -710,18 +769,14 @@ def _unlogged(ctx, tk, act, f, near_rows):
                  "(the row may have been deleted).")
     if act == "SELL":
         text += " Your journal still counts these shares."
-    if len(near) == 1:
-        j = near[0]
-        text += (f" Journal row #{j['id']} ({act} {_sh(j['shares'])} on {_fd(j['date'])}) "
-                 "is nearby and matches no fill: check it before logging this one.")
-    elif near:
-        parts = ", ".join(f"#{j['id']} ({act} {_sh(j['shares'])} on {_fd(j['date'])})"
-                          for j in near)
-        text += (f" Journal rows {parts} are nearby and match no fill: check them "
-                 "before logging this one.")
+    text += _near_sentence([j for j, only in near if only], act, f,
+                           "is nearby and matches no fill", "are nearby and match no fill")
+    text += _near_sentence([j for j, only in near if not only], act, f,
+                           "is nearby and isn't fully matched to Robinhood",
+                           "are nearby and aren't fully matched to Robinhood")
     return _finding(ctx, KIND_UNLOGGED, tk, act, [], [f], text,
                     holdings=_holdings(act, 0.0, f["shares"]),
-                    nearby=[j["id"] for j in near])
+                    nearby=sorted({j["id"] for j, _ in near}))
 
 
 def _not_yet(ctx, tk, act, j, absorbed):
@@ -831,6 +886,7 @@ def match_journal_to_broker(journal, fills, synced_at, now_et) -> "list | None":
             pool_f.setdefault((f["ticker"], f["act"]), []).append(f)
 
     # Step 0: LINKED_DIFFERS.
+    share_diff: dict = {}
     for f in linked_f:
         if not f["ok"] or f["session"] < ctx.start:
             continue
@@ -853,6 +909,8 @@ def match_journal_to_broker(journal, fills, synced_at, now_et) -> "list | None":
                          "Robinhood")
         if not diffs:
             continue
+        if not _tec._same_shares(j["shares"], f["shares"]):
+            share_diff.setdefault((j["ticker"], j["act"]), []).append(j)
         text = (f"Journal row #{j['id']} is linked to Robinhood's record of this order, "
                 f"but they differ: {'; '.join(diffs)}.")
         findings.append(_finding(
@@ -868,7 +926,7 @@ def match_journal_to_broker(journal, fills, synced_at, now_et) -> "list | None":
             findings.append(_unchecked(ctx, tk, act, jrows, frows))
             continue
         findings.extend(_group_findings(ctx, tk, act, jrows, frows,
-                                        linked_rows.get(key, [])))
+                                        linked_rows.get(key, []), share_diff.get(key, [])))
 
     # Step 5: non-equity records.
     if nonequity:
