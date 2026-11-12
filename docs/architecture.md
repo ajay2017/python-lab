@@ -642,7 +642,7 @@ before tuning. See §6.29 (`judgment_opinions` table) and
 | `IMPORTED_TRADE_ANCHOR_ET_HOUR` | 16 | Assumed ET fill time for an **imported** trade that carries a date but no time (broker sync / CSV / RH-text). Those writers sent a bare date, Postgres cast it to **midnight UTC** in the `timestamptz` column, and midnight UTC is the **prior evening in ET** — so every `tz_convert("America/New_York")` reader dated the trade a day early. Two live defects came from this: Today's P&L dropped a trade imported the same day (its cash leg never entered the delta), and `risk_advisor`'s buy/trim whiplash suppression **failed open**. `market_time.et_anchor_iso` stops new rows being written that way; `trade_time.normalize_traded_at` repairs existing ones at load. **The value is CONSTRAINED, not free: must be ≥ 0 and < 19.** At 19:00+ ET the anchor rolls into the next **UTC** day, which would silently re-date every UTC-date reader — including `tax_advisor`'s lot dates (a wash-sale or LTCG boundary can turn on one day). (`broker_sync`'s dedup key was such a reader until 2026-11-07; since TJDate C4 it takes the ET date of the normalized `traded_at`.) 16:00 = market close: honest for an unknown fill time, and it sorts imports *after* the regular session, which also fixes a latent FIFO-replay bug. `tests/test_trade_time.py` pins the safe band so an edit past it fails loudly. Data-integrity constant, not an investment threshold. |
 | `BROKER_DRIFT_SHARE_TOL` | 0.001 | Share-count tolerance below which a held ticker counts as matching rather than a real quantity mismatch, absorbing fractional-share rounding noise. Data-integrity tuning, not an investment threshold. **FOUR consumers share this one number** — deliberately, because it is a single question ("is this share difference real or float noise") rather than four policies: **(1)** SnapTrade broker integration (`stock_analyzer/broker_sync.py`, `docs/plans/snaptrade-broker-integration.md`) — `diff_positions()` comparing the live broker feed against the app's `trades`-derived shares; **(2)** F-250 day-P&L integrity (`stock_analyzer/daily_pnl.py`) — `reconcile_baseline()` comparing the prior-close snapshot baseline against current holdings, and `fill_late_logged_baseline()` checking the journal replay against held shares; **(3)** account-snapshot repair (`stock_analyzer/account_snapshot_repair.py`) — whether a stored `account_daily_snapshots` book still matches the journal replay for a ticker touched by a late-logged trade; **(4)** the Trade Journal duplicate-entry warning (`stock_analyzer/trade_confirm.py`, TJDate D0) — whether a new entry has the same share count as an existing journal row. Retuning this for the broker feed also moves the day-P&L guard, the snapshot-repair check and the duplicate warning; if they ever need to diverge, split them rather than compromising on one value. |
 | `JOURNAL_MATCH_PRICE_TOL_USD` | 0.01 | 2026-11-06, TJDate D0 (owner-agreed 2026-11-02 as U4). Two trade prices count as "the same price" within this many dollars (`stock_analyzer/trade_confirm.py`, the Trade Journal duplicate-entry warning). It absorbs Robinhood's 2-dp rounding of the stored price (`raw_price` 136.425 stored as 136.43, P0 Q3). Second consumer (2026-11-10, TJDate C5): the journal vs Robinhood comparison (`stock_analyzer/journal_broker_match.py`, via `trade_entry_checks._same_price`). |
-| `JOURNAL_MATCH_WINDOW_SESSIONS` | 3 | 2026-11-07, TJDate C4 (owner-agreed 2026-11-02 as U4). 💰 Account → Broker Sync → Pending Imports: a pending broker fill and an unlinked journal row with the same ticker, action, shares and price are suggested as "possibly the same trade" when they are this many trading sessions apart or fewer (`broker_sync.find_pending_match_candidates`, counted by `data.trading_sessions_between` on ET dates). Replaces the old `window_days=3` calendar-day literal, which counted a weekend as two days. A hint only: it never links or dismisses anything. Second consumer (2026-11-10, TJDate C5): the journal vs Robinhood comparison (`stock_analyzer/journal_broker_match.py`) uses it as the window within which a Robinhood fill can explain a journal row. |
+| `JOURNAL_MATCH_WINDOW_SESSIONS` | 3 | 2026-11-07, TJDate C4 (owner-agreed 2026-11-02 as U4). How many trading sessions apart a Robinhood fill and a journal row may be and still be compared as possibly the same trade. Consumers: the journal vs Robinhood comparison (`stock_analyzer/journal_broker_match.py`, TJDate C5, 2026-11-10), whose verdicts 📥 Pending Imports shows since TJDate U9 (2026-11-12, `pending_import_verdict.py`), and the log-time Robinhood check (`trade_entry_checks.pending_fill_findings` / `fills_since`, TJDate C2b). Replaces the old `window_days=3` calendar-day literal, which counted a weekend as two days. Its first consumer, the Pending Imports "Possible match" hint (`broker_sync.find_pending_match_candidates`), was retired by TJDate U9b. |
 | `JOURNAL_MATCH_LOOKBACK_DAYS` | 35 | 2026-11-10, TJDate C5 (owner-agreed 2026-11-02 as U4). Calendar days of journal rows and Robinhood fills compared by the journal vs Robinhood matcher (`stock_analyzer/journal_broker_match.py`); must stay <= `ACCOUNT_SNAPSHOT_REPAIR_LOOKBACK_DAYS` (test-pinned) so a proposed correction lands inside the automatic account-row repair. |
 | `JOURNAL_MATCH_BROKER_LAG_SESSIONS` | 2 | 2026-11-10, TJDate C5, owner decision D1. A journal row with no Robinhood record reads "not in Robinhood" only once the last completed transaction sync is on a later date and at least this many trading sessions after it; before that, "not compared yet" (`journal_broker_match._judged`, `match_coverage`). |
 | `JOURNAL_MATCH_MAX_FILLS` | 6 | 2026-11-10, TJDate C5. Most Robinhood fills tried as the combination behind one journal row (a whole day's fills are always tried together, whatever their number). |
@@ -2911,7 +2911,7 @@ default. Three more — `income_event_subtype()` and `dedupe_income_events()`
 (both named in passing inside `classify_transactions()`'s own writeup below)
 and `parse_robinhood_csv_income()` (named only in the top-of-file module map,
 §"stock_analyzer/ tree") — are mentioned but not individually documented
-here. The remaining nine (`normalize_positions`/`ticker_share_counts`/
+here. The remaining eight (`normalize_positions`/
 `diff_position_map`/`drift_dollar_impact`/`split_awaiting_sync`/
 `tickers_traded_since`/`decide_drift_banner`/
 `find_unreconciled_near_duplicates`/`reconciliation_freshness`) have no
@@ -2979,41 +2979,15 @@ round(shares,4), round(price,2))` content-match key F-87's CSV importer
 already uses, restricted to `trades` rows that don't yet carry a
 `broker_txn_id` (so an already-linked row can never be re-matched by Tier 2).
 
-**`annotate_pending_reconciliation(pending, drift)`** (2026-08-30) —
-display-only cross-reference closing a UX gap: Position Drift (live,
-net-current-holdings, forgiving) and Pending Imports (exact per-transaction
-date/price match, unforgiving) answer different questions, so a pending row
-can persist even when its ticker's drift is completely clean — most often
-because the manual Log Trade form has no date picker and stamps `traded_at`
-at confirm-click time, not the real trade date. Flags each pending row
-`likely_reconciled = True` (ticker in none of drift's three buckets) /
-`False` (ticker IS drifted — don't suggest it's already resolved) / `None`
-(drift unavailable this render — never assert reconciliation from an
-unknown). Never mutates its input; introduces no new inference, just
-narrates an already-computed fact.
-
-**`find_pending_match_candidates(pending, existing_trades, window_sessions=None)`**
-(2026-08-30; trading sessions since 2026-11-07, TJDate C4) — a date-TOLERANT sibling of `classify_transactions`' own
-exact-date Tier 2: for each pending row, finds the closest existing trade
-(excluding rows already linked via `broker_txn_id`) matching on `(ticker,
-action, shares, price)` within `JOURNAL_MATCH_WINDOW_SESSIONS` trading sessions
-(`data.trading_sessions_between` on the journal row's ET date), so `app.py` can suggest
-"Possible match: a trade you logged on {date} ({N} trading days apart)" next to a
-pending row. Since C4, `classify_transactions` also dates BUY/SELL fills by their
-ET calendar date on both sides of the Tier-2 key (`_trade_activity_et_date`; income
-and flows keep `_activity_date`'s UTC date), returns `linked_txn_ids`, and the
-`broker` cron reads trades strictly (`load_trades_or_none`; unreadable → step ② skipped,
-rc=1) and closes still-pending imports whose fill is already linked
-(`db.close_linked_pending_imports`, pending → logged). Display-only — never backfills `broker_txn_id`, never changes
-`classify_transactions`' actual bucketing. **Consumes each matched
-candidate on assignment** (pops it from its `by_key` bucket, mirroring
-`classify_transactions`' `content_seen`/`content_counts` pattern) so the
-same logged trade can never be suggested to more than one pending row — a
-2026-08-30 Opus review caught this as a blocking issue on the first pass:
-without the consume step, N pending rows sharing one real logged trade
-(e.g. two same-price DCA buys, only one logged) would each surface an
-"already logged" hint, risking a user dismissing a real, distinct,
-never-logged trade via the permanent "Already logged" button.
+**Retired 2026-11-12 (TJDate U9b): `annotate_pending_reconciliation`,
+`find_pending_match_candidates` and `ticker_share_counts`.** They gave 📥 Pending
+Imports a ticker-level "counts match, use Already logged" caption, an
+"App: X sh · Robinhood: Y sh" line and a date-tolerant "Possible match" hint. Net
+share counts can match while two fills are wrong (GOOGL 10-30), and that advice
+led to 172 dismissals. Pending Imports now shows one verdict per pending fill from
+the C5 matcher via `stock_analyzer/pending_import_verdict.py` (see that module
+and `docs/plans/pending-imports-verdicts-u9.md`). The 2026-08-30 consume-on-assign
+lesson (two identical DCA fills, one logged) lives on as its twin rule.
 
 ### `stock_analyzer/portfolio_health.py`
 

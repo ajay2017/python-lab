@@ -110,6 +110,8 @@ from stock_analyzer import broker_sync
 from stock_analyzer import trade_time
 from stock_analyzer import trade_confirm
 from stock_analyzer import trade_entry_checks
+from stock_analyzer import journal_broker_match
+from stock_analyzer import pending_import_verdict
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
@@ -1883,6 +1885,40 @@ def _rec_events_frame_or_none():
     if _re_rows is None:
         return None
     return pd.DataFrame(_re_rows)
+
+
+def _pending_imports_decision(pending) -> dict:
+    """TJDate U9b: `pending_import_verdict.decide_pending_imports` for the strict
+    pending list `pending` (`db.load_snaptrade_pending_imports_or_none()`), with
+    this render's own strict reads of the journal and of Robinhood's fills. Never
+    raises and never turns a failure into a verdict: any exception gives the
+    offline result (rows plain, a banner). The last completed transaction sync
+    is read whenever the list was read, because the empty-queue line names it;
+    the journal and the fills only when something is pending."""
+    _pd_now = _now_et()
+    _pd_synced = None
+    try:
+        if isinstance(pending, list):
+            _pd_synced = db.load_snaptrade_txn_synced_at_or_none()
+            if not pending:
+                return pending_import_verdict.decide_pending_imports(
+                    pending, None, None, _pd_synced, _pd_now)
+            _pd_journal = db.load_trades_or_none()
+            _pd_fills = db.load_snaptrade_fills_or_none(
+                journal_broker_match.fills_read_since(_pd_now).isoformat())
+            return pending_import_verdict.decide_pending_imports(
+                pending, _pd_journal, _pd_fills, _pd_synced, _pd_now)
+    except Exception:
+        pass
+    if isinstance(pending, list) and pending:
+        try:
+            return pending_import_verdict.decide_pending_imports(
+                pending, None, None, _pd_synced, _pd_now)
+        except Exception:
+            pass
+    return {"list_state": "offline", "list_text": pending_import_verdict.LIST_OFFLINE_TEXT,
+            "compare_state": "skipped", "compare_text": "", "coverage_text": "",
+            "summary_text": "", "rows": []}
 
 
 def _render_trade_button(
@@ -41473,9 +41509,8 @@ elif page == "💰 Account":
             st.markdown("#### 🔍 Position Drift")
             _snap_accounts = _snap_cached_accounts()
             # Defined in every branch below (None = unavailable/not computed this
-            # render) so the Pending Imports cross-reference further down can
-            # tell "checked, no drift" apart from "didn't check" — never treat
-            # the latter as the former (see annotate_pending_reconciliation).
+            # render): the drift table renders from it, and None must never read
+            # as "checked, no drift".
             _snap_drift = None
             if _snap_accounts is None:
                 st.caption("⚠️ Drift check unavailable — SnapTrade unreachable this render.")
@@ -41558,125 +41593,65 @@ elif page == "💰 Account":
                     )
 
             # ── Pending Imports — Option A: never auto-written to `trades` ───────
+            # TJDate U9b: every verdict and every button state comes from
+            # pending_import_verdict (this render's strict journal + fills reads,
+            # `_pending_imports_decision`); this block only renders it. The prefill
+            # is mapped from the pending row itself, not from the verdict row.
             st.markdown("#### 📥 Pending Imports")
             st.caption(
-                "These are individual Robinhood transactions that couldn't be auto-"
-                "matched to a logged trade (the match requires an exact date and "
-                "price) — a separate, stricter check than Position Drift above, "
-                "which only looks at your current share count. A row can persist "
-                "here even when that ticker's drift is clean above."
+                "Each Robinhood fill still pending is compared with your journal. "
+                "The row says whether it is already in it, differs, or isn't, and "
+                "the buttons follow that verdict."
             )
-            _snap_pending = db.load_snaptrade_pending_imports("pending")
-            if not _snap_pending:
-                st.caption("✓ No pending imports.")
-            else:
-                # Build per-ticker share-count maps so each pending row can show
-                # concrete "App: X sh · Robinhood: Y sh" numbers instead of a vague
-                # flag. Uses the same SnapTrade positions already fetched for drift.
-                # _snap_drift is None when the drift check was unavailable this
-                # render — propagated as (None, None) so annotate never fabricates.
-                _snap_holdings_for_counts = st.session_state.get("holdings_df")
-                if _snap_drift is not None:
-                    # 2026-09-24 app review, Q2: explicit `is None` check
-                    # (matching the already-correct handling at the FIRST
-                    # _snap_cached_positions call site above, ~line 34940),
-                    # not `or []`. Low real-world risk here specifically --
-                    # this branch only runs when _snap_drift is not None,
-                    # meaning every account's position fetch already
-                    # succeeded moments earlier in the same render, and
-                    # st.cache_data's TTL means this is very likely a cache
-                    # hit on that same result -- fixed for consistency with
-                    # the sibling call site, not because a live bug was
-                    # traced.
-                    def _snap_positions_or_empty(_acct_id: str) -> list:
-                        _pos = _snap_cached_positions(_acct_id)
-                        return _pos if _pos is not None else []
-
-                    # Re-use the already-normalized RH positions map from drift
-                    # (they're the same per-ticker share totals drift computed).
-                    _snap_rh_map, _snap_app_map = broker_sync.ticker_share_counts(
-                        broker_sync.normalize_positions(
-                            [pos for _sa2 in (_snap_accounts or [])
-                             for pos in _snap_positions_or_empty(_sa2.get("id", ""))]
-                        ),
-                        _snap_holdings_for_counts,
-                    )
+            _snap_pending = db.load_snaptrade_pending_imports_or_none()
+            _pi_dec = _pending_imports_decision(_snap_pending)
+            if _pi_dec["list_text"]:
+                if _pi_dec["list_state"] == "offline":
+                    st.warning(_pi_dec["list_text"])
                 else:
-                    _snap_rh_map, _snap_app_map = None, None
-                _snap_pending = broker_sync.annotate_pending_reconciliation(
-                    _snap_pending, _snap_drift, _snap_rh_map, _snap_app_map
+                    st.caption(_pi_dec["list_text"])
+            if _pi_dec["compare_text"]:
+                st.warning(_pi_dec["compare_text"])
+            if _pi_dec["summary_text"]:
+                st.caption(_pi_dec["summary_text"])
+            _pi_by_id = ({_p.get("id"): _p for _p in _snap_pending if isinstance(_p, dict)}
+                         if isinstance(_snap_pending, list) else {})
+            for _pi_row in _pi_dec["rows"]:
+                _pi_id = _pi_row["pending_id"]
+                _pi = _pi_by_id.get(_pi_id)
+                # The headline sits inside **…**: drop any `*` and escape `$` so it
+                # can neither close the bold early nor start LaTeX.
+                st.markdown(
+                    "⏳ **" + str(_pi_row["headline"]).replace("*", "").replace("$", chr(92) + "$") + "**"
                 )
-                # Date-tolerant per-transaction suggestion — a finer-grained
-                # sibling of the aggregate reconciliation flag above. Only
-                # rendered when that flag isn't already True, so a row never
-                # stacks two "this is probably already logged" messages.
-                _snap_pending_matches = broker_sync.find_pending_match_candidates(
-                    _snap_pending, st.session_state.get("trades_df")
-                )
-                for _pi in _snap_pending:
-                    _pi_c1, _pi_c2, _pi_c3 = st.columns([4, 1, 1])
-                    with _pi_c1:
-                        st.write(
-                            f"⏳ **{_pi['action']} {_pi['shares']:g} {_pi['ticker']}** "
-                            f"@ ${_pi['price']:,.2f} on {_pi['trade_date']}"
-                        )
-                        _pi_app_qty = _pi.get("app_qty")
-                        _pi_rh_qty = _pi.get("rh_qty")
-                        _pi_ticker = _pi["ticker"]
-                        if _pi_app_qty is not None and _pi_rh_qty is not None:
-                            # Show concrete share counts — same ticker-level aggregate
-                            # on every row for this ticker (drift is net, not per-txn).
-                            _pi_app_str = f"{_pi_app_qty:g}" if _pi_app_qty != int(_pi_app_qty) else f"{int(_pi_app_qty)}"
-                            _pi_rh_str = f"{_pi_rh_qty:g}" if _pi_rh_qty != int(_pi_rh_qty) else f"{int(_pi_rh_qty)}"
-                            if _pi.get("likely_reconciled") is True:
-                                st.caption(
-                                    f"↳ App: **{_pi_app_str} sh {_pi_ticker}** logged · "
-                                    f"Robinhood: **{_pi_rh_str} sh {_pi_ticker}** held → "
-                                    "counts match. Very likely a trade already logged with a "
-                                    "slightly different date or price — use **Already logged**."
-                                )
-                            elif _pi.get("likely_reconciled") is False:
-                                st.caption(
-                                    f"↳ App: **{_pi_app_str} sh {_pi_ticker}** logged · "
-                                    f"Robinhood: **{_pi_rh_str} sh {_pi_ticker}** held → "
-                                    "counts differ. This may be a real missing trade — "
-                                    "use **Log This Trade** if it's not yet in your journal."
-                                )
-                            elif _pi["id"] in _snap_pending_matches:
-                                _pm = _snap_pending_matches[_pi["id"]]
-                                _pm_off = _pm["sessions_off"]
-                                st.caption(
-                                    f"↳ App: **{_pi_app_str} sh {_pi_ticker}** logged · "
-                                    f"Robinhood: **{_pi_rh_str} sh {_pi_ticker}** held. "
-                                    f"Possible match: a trade you logged on {_pm['traded_at']} "
-                                    f"({_pm_off} trading day{'s' if _pm_off != 1 else ''} apart) with the "
-                                    "same ticker, action, shares and price. If that's this "
-                                    "transaction, use **Already logged** below."
-                                )
-                        else:
-                            # Drift check was unavailable — fall back to non-numeric hints
-                            if _pi.get("likely_reconciled") is True:
-                                st.caption(
-                                    f"↳ Your {_pi_ticker} position already reconciles with "
-                                    "Robinhood — this is very likely a trade you already logged "
-                                    "with a slightly different date or price."
-                                )
-                            elif _pi["id"] in _snap_pending_matches:
-                                _pm = _snap_pending_matches[_pi["id"]]
-                                _pm_off = _pm["sessions_off"]
-                                st.caption(
-                                    f"↳ Possible match: a trade you logged on {_pm['traded_at']} "
-                                    f"({_pm_off} trading day{'s' if _pm_off != 1 else ''} apart) with the same "
-                                    "ticker, action, shares and price. If that's this transaction, "
-                                    "use **Already logged** below."
-                                )
-                            elif _pi.get("likely_reconciled") is None:
-                                st.caption(
-                                    "↳ Drift check unavailable this render — share counts "
-                                    "can't be confirmed. Open 🏠 Home first if you need counts."
-                                )
-                    with _pi_c2:
-                        if st.button("Log This Trade →", key=f"_snap_log_{_pi['id']}"):
+                _pi_msg = (f"{_pi_row['label']}: {_pi_row['text']}" if _pi_row["text"]
+                           else _pi_row["label"])
+                if _pi_row["tone"] == "warning":
+                    st.warning(_pi_msg)
+                else:
+                    st.caption(_pi_msg)
+                if _pi is None or _pi_id is None:
+                    st.caption("This row has no id, so it can't be acted on here.")
+                    continue
+                _pi_log_ticked = False
+                # Tick keys carry the label, so a tick never carries over to a
+                # render where it vouches for something else (e.g. other #N rows).
+                if _pi_row["log_needs_tick"]:
+                    _pi_log_ticked = st.checkbox(
+                        _pi_row["log_tick_label"],
+                        key=f"_snap_logack_{_pi_id}_{_pi_row['log_tick_label']}")
+                _pi_dis_ticked = False
+                if _pi_row["dismiss_needs_tick"] and not db.is_readonly():
+                    _pi_dis_ticked = st.checkbox(
+                        _pi_row["dismiss_tick_label"],
+                        key=f"_snap_dismack_{_pi_id}_{_pi_row['dismiss_tick_label']}")
+                _pi_c1, _pi_c2, _pi_c3 = st.columns([2, 2, 3])
+                with _pi_c1:
+                    if st.button("Log This Trade →", key=f"_snap_log_{_pi_id}",
+                                 type="primary" if _pi_row["log_primary"] else "secondary",
+                                 disabled=not pending_import_verdict.log_allowed(
+                                     _pi_row, _pi_log_ticked)):
+                        if pending_import_verdict.log_allowed(_pi_row, _pi_log_ticked):
                             st.session_state["_tj_broker_prefill"] = {
                                 "ticker": _pi["ticker"],
                                 "action": _pi["action"],
@@ -41688,19 +41663,28 @@ elif page == "💰 Account":
                             }
                             st.session_state["_pending_page"] = "📒 Trade Journal"
                             st.rerun()
-                    with _pi_c3:
-                        if db.is_readonly():
-                            st.caption("🔒 view-only")
-                        elif st.button("Already logged", key=f"_snap_dismiss_{_pi['id']}",
-                                     help="Use this when you've already logged this trade "
-                                          "manually and the price/date didn't exactly match "
-                                          "for auto-linking (e.g. a 1-cent settlement "
-                                          "difference). Never logs or edits a trade — just "
-                                          "clears this pending-import flag."):
-                            if db.dismiss_snaptrade_pending_import(_pi["id"]):
-                                st.rerun()
-                            else:
-                                st.toast("Couldn't dismiss — try again.", icon="⚠️")
+                    if not _pi_row["log_enabled"]:
+                        st.caption(f"Log is off because {_pi_row['log_disabled_reason']}")
+                with _pi_c2:
+                    if db.is_readonly():
+                        st.caption("🔒 view-only")
+                    else:
+                        if st.button("Already logged", key=f"_snap_dismiss_{_pi_id}",
+                                     type="primary" if _pi_row["dismiss_primary"] else "secondary",
+                                     disabled=not pending_import_verdict.dismiss_allowed(
+                                         _pi_row, _pi_dis_ticked),
+                                     help="Clears this row from Pending Imports. Never logs "
+                                          "or edits a trade."):
+                            if pending_import_verdict.dismiss_allowed(_pi_row, _pi_dis_ticked):
+                                if db.dismiss_snaptrade_pending_import(_pi["id"]):
+                                    st.rerun()
+                                else:
+                                    st.toast("Couldn't dismiss — try again.", icon="⚠️")
+                        if _pi_row["dismiss_note"]:
+                            _pi_note = str(_pi_row["dismiss_note"])
+                            st.caption(_pi_note[:1].upper() + _pi_note[1:])
+            if _pi_dec["coverage_text"]:
+                st.caption(_pi_dec["coverage_text"])
 
             # ── Cash Activity — income events trend (display/trend ONLY; never
             #    feeds account_flows / Modified Dietz — see plan doc) ────────────
@@ -45455,7 +45439,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 
 **7. ⚡ Broker Sync (optional) — automates the two manual habits above for Robinhood.** Open the 💰 Account page's **"🔌 Brokerage Trend"** tab for the "⚡ Broker Sync" section, which connects Robinhood via **SnapTrade** (a middleman service — the app never sees your Robinhood login). Once connected, a background job keeps your **cash balance** current automatically (the "Cash as of" line at the top of the Account page shows when it last synced), and shows:
 - **Position drift** — a live comparison of what Robinhood actually holds vs. what's logged in this app (three buckets: Robinhood-only, App-only, quantity mismatches). Awareness only — it never edits your trades or holdings for you; you reconcile it yourself the same way you always have.
-- **Pending trade imports** — buy/sell activity Robinhood reports that couldn't be auto-matched to a trade you already logged (the match requires an exact date and price, so a manually-logged trade with a slightly different date often lands here even though nothing's actually missing). This is a **different, stricter check than Position Drift above** — a row can appear here even when that ticker's drift is completely clean, and the page will tell you so. Each pending row now shows **"App: X sh logged · Robinhood: Y sh held"** directly beneath the transaction so you can tally without visiting the Portfolio page: matching counts confirm it's likely already logged with a slightly different date or price; differing counts flag it as a real gap. Nothing is written automatically: each row has a **"Log This Trade →"** button that opens the Trade Journal with ticker/shares/price/date already locked in from the real fill — you still choose a trigger reason and write the required pre-mortem (labeled "Retrospective" since the trade already happened), same as any other Buy. A ✗ button lets you back out of a locked import at any point without logging it. If it's already logged, use **"Already logged"** instead to clear the row without touching your trades. Since 2026-11-07 the sync dates each fill by its US Eastern trading day (a fill after 8 PM ET no longer lands on the next day), and a pending row whose fill the sync has already linked to a trade in your journal clears itself on the next sync. A "Possible match" hint counts trading days apart, so a weekend doesn't count.
+- **Pending trade imports** — buy/sell activity Robinhood reports that couldn't be auto-matched to a trade you already logged (the auto-match requires an exact date and price, so a manually-logged trade with a slightly different date or price often lands here even though nothing's actually missing). This is a **different, stricter check than Position Drift above** — a row can appear here even when that ticker's drift is completely clean. Each pending fill is compared, one by one, with your journal, and its row says which of these it is: **✅ Already in your journal**, **⚠️ In your journal, but the details differ** (a different date, price or share count), **🆕 Not in your journal**, or a plain note that it is unclear, couldn't be compared, is an option trade, is older than the comparison window, or wasn't compared this render (each with its reason). A line under the list says how far the comparison reaches, which is the last completed transaction sync. The buttons follow the verdict. Nothing is written automatically: **"Log This Trade →"** opens the Trade Journal with ticker/shares/price/date already locked in from the real fill — you still choose a trigger reason and write the required pre-mortem (labeled "Retrospective" since the trade already happened), same as any other Buy. It is switched off when the fill is already in your journal (logging it would count it twice, and the row says why), and when the comparison names a journal row that could already be this fill it asks you to tick "I've checked #N: this fill is a separate trade" first. **"Already logged"** clears the row from Pending Imports and never logs or edits a trade; it is the main button when the fill is already in your journal, and when the comparison says the fill is not in your journal it asks you to tick "I've checked: this fill is already in my journal under a row the comparison didn't match" first. When your journal or Robinhood's records couldn't be read, the rows say so and both buttons stay plain, so check each fill in Robinhood and 📋 History yourself. A ✗ button lets you back out of a locked import at any point without logging it. Since 2026-11-07 the sync dates each fill by its US Eastern trading day (a fill after 8 PM ET no longer lands on the next day), and a pending row whose fill the sync has linked to a trade in your journal usually clears itself on the next sync (until it does, its row says the fill is in your journal).
 - **Cash Activity** — a trend of dividends, interest, and fees, purely for visibility (it never feeds your Growth/Return numbers above — those stay driven by the deposits/withdrawals you log). Pick **View by** (Monthly / Quarterly / Yearly) and **Range** (Last 12 months / This year / All time); the YTD lines under the chart always cover Jan 1 to today whatever you pick. Bars are signed: dividends and interest earned above zero, **margin interest** and fees below, so a Gold credit never hides that month's margin interest. The broker sync labels margin interest as a "fee"; since your only genuine fee is the annual Gold fee, those charges are counted as margin interest and listed under the chart. The chart pulls from your **SnapTrade broker sync**; your **Robinhood statement** is the source of truth, so upload it via the "📥 Import from Robinhood Statement" expander below the chart (download a CSV from your broker's Statements page) and its rows replace any matching broker-synced ones. A **Realized P&L (trades)** line is overlaid on the same chart, showing how much your closed trades actually made or lost each month — the same avg-cost figure your 📒 Trade Journal's Monthly Realized P&L Trend already shows, so the two never disagree. Hover any month to see dividends, interest, fees, and realized P&L together in one tooltip. A **"📋 Last statement import"** caption shows how current your statement upload is and how many broker-synced events haven't been cross-checked against one yet; a **"⚠️ possible unreconciled duplicate(s)"** expander appears only if the app finds a broker-sync event and a statement event that look like the same real transaction but weren't automatically recognized as one — worth a manual look, never something the app merges or hides on its own.
 
 Setup is a one-time, three-step process shown on the page itself (it needs a free SnapTrade Personal API Key and one Railway environment variable pair — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.

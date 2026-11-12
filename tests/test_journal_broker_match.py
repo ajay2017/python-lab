@@ -141,6 +141,13 @@ def test_constants_are_sane_and_pinned():
     assert C.JOURNAL_MATCH_BROKER_LAG_SESSIONS >= 0
 
 
+def test_window_sessions_value_is_pinned():
+    # Owner-agreed U4 value (2026-11-02). Re-homed here on 2026-11-12 when TJDate
+    # U9b retired broker_sync.find_pending_match_candidates, whose test held the
+    # only pin; changing it is a constants.py policy change.
+    assert C.JOURNAL_MATCH_WINDOW_SESSIONS == 3
+
+
 # ── fixtures from the real incidents ────────────────────────────────────────
 
 def test_mrvl_same_day_split_is_reconciled_not_a_difference():

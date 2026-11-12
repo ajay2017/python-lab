@@ -195,7 +195,7 @@ The main reason is not data quality. The app assumes `holdings` has a single wri
      - Non-trading ET dates are flagged. Fills are ordered by broker time.
      - **Each record carries:**
        - `traded_at` = the SnapTrade ISO timestamp;
-       - the pending row's 2-dp price, so every existing content key still matches (classify Tier 2, CSV import, D0, `find_pending_match_candidates`);
+       - the pending row's 2-dp price, so every existing content key still matches (classify Tier 2, CSV import, D0; `find_pending_match_candidates` was retired 2026-11-12 in TJDate U9b);
        - `broker_txn_id`;
        - `asset_type` via `resolve_trade_asset_type`;
        - `trigger_type` None;

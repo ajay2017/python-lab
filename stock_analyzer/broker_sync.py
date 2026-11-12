@@ -7,7 +7,7 @@ returns plain dicts/lists for the caller (the `broker` cron lane / app.py) to
 persist or render. See docs/plans/snaptrade-broker-integration.md for the
 full design and the reasoning behind each split below.
 
-Five pure functions:
+Three pure functions:
     diff_positions          — 3-bucket drift vs the live portfolio (never gates,
                                never writes; awareness only)
     map_balances_to_cash    — SnapTrade balance payload -> account_cash shape
@@ -15,17 +15,6 @@ Five pure functions:
                                income-event / cash-flow buckets, with the
                                two-tier (exact broker_txn_id, then content-match)
                                dedup against existing trades
-    annotate_pending_reconciliation — display-only cross-reference: flags a
-                               pending-import row as "likely already logged"
-                               when its ticker shows no live drift, so the
-                               Account page can explain why a clean drift
-                               check and a non-empty pending queue can both
-                               be true at once
-    find_pending_match_candidates — display-only, date-TOLERANT sibling of
-                               classify_transactions' exact-date Tier-2 dedup:
-                               suggests a specific already-logged trade a
-                               pending row likely duplicates, within a small
-                               date window. Never backfills anything itself.
 
 Two more pure functions close the income-event cross-path duplication gap
 (2026-09-11, F-268 follow-on — a manual CSV statement import and the live
@@ -63,7 +52,6 @@ import pandas as pd
 from stock_analyzer.constants import (
     BROKER_DRIFT_SHARE_TOL,
     INCOME_EVENT_DEDUP_DATE_TOL_DAYS,
-    JOURNAL_MATCH_WINDOW_SESSIONS,
 )
 from stock_analyzer import asset_type
 from stock_analyzer import trade_time
@@ -245,27 +233,6 @@ def resolve_trade_asset_type(
     if bundle_asset_type:
         return asset_type.normalize(bundle_asset_type)
     return asset_type.ASSET_TYPE_STOCK
-
-
-def ticker_share_counts(rh_shares: dict | None, port_df) -> tuple[dict, dict] | tuple[None, None]:
-    """Return (rh_shares_map, app_shares_map) as `{TICKER: float}` dicts.
-
-    Extracted from `diff_position_map` so callers can look up per-ticker counts
-    without recomputing them, e.g. to annotate pending-import rows with concrete
-    share numbers instead of a vague "likely reconciled" flag.
-
-    Returns (None, None) when `rh_shares` is None (broker unavailable).
-    """
-    if rh_shares is None:
-        return None, None
-    app: dict[str, float] = {}
-    if port_df is not None and not port_df.empty:
-        for _, row in port_df.iterrows():
-            ticker = str(row.get("Ticker", "")).strip().upper()
-            if not ticker:
-                continue
-            app[ticker] = app.get(ticker, 0.0) + float(row.get("Shares") or 0)
-    return rh_shares, app
 
 
 def diff_position_map(rh_shares: dict | None, port_df) -> dict | None:
@@ -650,178 +617,6 @@ def classify_transactions(
         "ignored": ignored,
         "linked_txn_ids": linked_txn_ids,
     }
-
-
-# ── Pending-import / drift cross-reference (display only) ──────────────────
-#
-# Position Drift and Pending Imports answer different questions at different
-# granularities: drift is a live, NET-position check (forgiving — only the
-# end state matters), while a pending import is an exact-key, PER-TRANSACTION
-# match (unforgiving — a date/price that's off by anything fails to link).
-# A pending row can therefore persist even when the ticker's position nets
-# out perfectly (most commonly because the manual Log Trade form has no date
-# picker and stamps `traded_at` at confirm-click time, not the real trade
-# date). This function narrates that already-computed drift fact next to the
-# pending row it explains — it does not introduce any new inference.
-
-def annotate_pending_reconciliation(
-    pending: list[dict],
-    drift: dict | None,
-    rh_shares: dict | None = None,
-    app_shares: dict | None = None,
-) -> list[dict]:
-    """Attach reconciliation context to each pending-import row.
-
-    Parameters
-    ----------
-    pending : the app's current pending-import rows (each a dict with at
-        least a "ticker" key), e.g. `db.load_snaptrade_pending_imports()`.
-    drift : `diff_positions()`'s return value for this same render, or None.
-    rh_shares : optional `{TICKER: float}` map from `ticker_share_counts()` —
-        when provided, concrete Robinhood share counts are attached to each row
-        so the UI can show "App: 1 sh · Robinhood: 1 sh" instead of a vague flag.
-    app_shares : partner dict from `ticker_share_counts()`.
-
-    Returns
-    -------
-    A NEW list of dicts (input is never mutated), each with added keys:
-        likely_reconciled : bool | None
-            None  -> drift check unavailable; never assert "reconciles".
-            False -> ticker has live drift — not just a date/price mismatch.
-            True  -> position nets clean; very likely already logged.
-        app_qty  : float | None  — app's logged share count for this ticker,
-                   or None when share-count maps are unavailable.
-        rh_qty   : float | None  — Robinhood's share count for this ticker,
-                   0.0 when the ticker is absent from RH (not None), so callers
-                   can distinguish "not held at broker" from "data unavailable".
-                   None when share-count maps are unavailable.
-    """
-    if drift is None:
-        drifted_tickers: set[str] | None = None
-    else:
-        drifted_tickers = {
-            r["ticker"] for r in drift.get("rh_only", [])
-        } | {
-            r["ticker"] for r in drift.get("app_only", [])
-        } | {
-            r["ticker"] for r in drift.get("qty_mismatch", [])
-        }
-
-    have_counts = rh_shares is not None and app_shares is not None
-
-    out = []
-    for row in pending:
-        ticker = row.get("ticker", "").upper().strip()
-        if drifted_tickers is None:
-            flag = None
-        else:
-            flag = ticker not in drifted_tickers
-        if have_counts:
-            a_qty = app_shares.get(ticker)
-            r_qty = rh_shares.get(ticker, 0.0)
-        else:
-            a_qty = None
-            r_qty = None
-        out.append({**row, "likely_reconciled": flag, "app_qty": a_qty, "rh_qty": r_qty})
-    return out
-
-
-def find_pending_match_candidates(
-    pending: list[dict], existing_trades: pd.DataFrame | None,
-    window_sessions: int | None = None,
-) -> dict:
-    """For each pending-import row, look for the closest EXISTING trade that
-    content-matches on (ticker, action, shares, price) within `window_sessions`
-    NYSE trading sessions of the pending row's trade_date (None ->
-    `constants.JOURNAL_MATCH_WINDOW_SESSIONS`), among trades not already linked
-    via `broker_txn_id`. The journal side is the ET date of the normalized
-    `traded_at`; distance is `data.trading_sessions_between`, so a weekend or
-    holiday adds no distance.
-
-    This is a wider, date-TOLERANT sibling of `classify_transactions`' own
-    Tier-2 dedup (which requires an exact date match) — read-only and
-    display-only. It never backfills `broker_txn_id` and never changes what
-    `classify_transactions` buckets a transaction into; it only helps the
-    user recognise a likely-already-logged trade with more confidence before
-    they click the existing "Already logged" dismiss button.
-
-    Returns
-    -------
-    {pending_row_id: {"trade_id", "traded_at", "sessions_off"}} — a pending id
-    with no candidate within the window is simply ABSENT from the dict (never
-    mapped to None), so callers can use a plain `.get(id)`.
-    """
-    out: dict = {}
-    if not pending or not isinstance(existing_trades, pd.DataFrame) or existing_trades.empty:
-        return out
-
-    if window_sessions is None:
-        window_sessions = JOURNAL_MATCH_WINDOW_SESSIONS
-    # Lazy: data pulls in yfinance and the provider stack; this module stays light.
-    from stock_analyzer.data import trading_sessions_between
-
-    candidates = trade_time.normalize_traded_at(existing_trades)
-    if "broker_txn_id" in candidates.columns:
-        candidates = candidates[candidates["broker_txn_id"].isna()]
-    if candidates.empty:
-        return out
-
-    by_key: dict[tuple, list] = collections.defaultdict(list)
-    for _, row in candidates.iterrows():
-        action = str(row.get("action", "")).upper().strip()
-        if action not in _TRADE_TYPES:
-            continue
-        ticker = str(row.get("ticker", "")).upper().strip()
-        try:
-            shares = round(float(row.get("shares") or 0), 4)
-            price = round(float(row.get("price") or 0), 2)
-        except (TypeError, ValueError):
-            continue
-        traded_date = trade_time.et_trade_date(row.get("traded_at"))
-        if traded_date is None:
-            continue
-        by_key[(ticker, action, shares, price)].append(
-            {"trade_id": row.get("id"), "date": traded_date}
-        )
-
-    for p in pending:
-        p_ticker = str(p.get("ticker", "")).upper().strip()
-        p_action = str(p.get("action", "")).upper().strip()
-        try:
-            p_shares = round(float(p.get("shares") or 0), 4)
-            p_price = round(float(p.get("price") or 0), 2)
-        except (TypeError, ValueError):
-            continue
-        p_dt = pd.to_datetime(p.get("trade_date"), errors="coerce")
-        if pd.isnull(p_dt):
-            continue
-        p_date = p_dt.date()
-
-        # Consume the chosen candidate (mirrors classify_transactions' own
-        # content_seen/content_counts consumption) so the SAME logged trade
-        # can never be suggested as a match for more than one pending row.
-        # Without this, N pending rows that all share one real logged trade
-        # (e.g. two DCA buys at the same round price/shares, only one of
-        # which was ever logged) would each get an "already logged" hint —
-        # false confidence that could lead to dismissing a real, distinct,
-        # never-logged trade via the permanent "Already logged" button
-        # (2026-08-30 reviewer finding, blocking).
-        bucket = by_key.get((p_ticker, p_action, p_shares, p_price), [])
-        best = None
-        best_idx = None
-        for idx, cand in enumerate(bucket):
-            sessions_off = trading_sessions_between(cand["date"], p_date)
-            if sessions_off > window_sessions:
-                continue
-            if best is None or sessions_off < best["sessions_off"]:
-                best = {"trade_id": cand["trade_id"], "traded_at": cand["date"].isoformat(),
-                        "sessions_off": sessions_off}
-                best_idx = idx
-        if best is not None:
-            out[p["id"]] = best
-            bucket.pop(best_idx)
-
-    return out
 
 
 # ── Drift banner decision (pure) ────────────────────────────────────────────

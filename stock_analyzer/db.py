@@ -6859,9 +6859,9 @@ def dismiss_snaptrade_pending_import(pending_id) -> bool:
     mistaken; the user is only asserting 'not a new trade', not identifying
     which existing row it is. No un-dismiss path in the UI. A fat-fingered
     dismiss of a genuinely-new trade is meant to be caught by Pending Imports'
-    journal comparison (TJDate U9: `pending_import_verdict` decides, and U9b wires
-    it into the buttons, so the tick before "Already logged" arrives with U9b, not
-    before). The C5 matcher already compares dismissed fills too (owner D3), so a
+    journal comparison (TJDate U9: `pending_import_verdict` decides and U9b wires
+    it into the buttons: "Already logged" needs a tick when the comparison says
+    the fill is not in the journal). The C5 matcher already compares dismissed fills too (owner D3), so a
     dismissed-but-unlogged fill reads "not in your journal" there; until U8 lists
     such fills in the app it is visible only through
     `scripts/journal_broker_match_dry_run.py`. Position Drift (Robinhood-only / qty

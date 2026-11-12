@@ -118,7 +118,7 @@ TWIN_TEXT = ("Robinhood has another identical fill (same day, shares and price) 
              "one covers it.")
 NOT_YET_TAIL = " It may be this fill: check it before logging this one."
 UNCHECKED_TAIL = " Check it in Robinhood and 📋 History before using either button."
-OFFLINE_ROW_TEXT = "Not compared this render: see the note above."
+OFFLINE_ROW_TEXT = "the comparison with your journal didn't run this render; see the note above."
 OPTION_TEXT = ("This looks like an option trade, which the journal doesn't track (it tracks "
                "stocks and ETFs).")
 NOT_COMPARED_TEXT = ("This fill wasn't part of this render's comparison with your journal, "
