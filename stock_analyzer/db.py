@@ -6645,6 +6645,36 @@ def load_snaptrade_pending_imports(status: str = "pending") -> list[dict]:
 _PENDING_FILLS_PAGE_SIZE = 1000
 
 
+def load_snaptrade_pending_imports_or_none() -> "list | None":
+    """Every `status = 'pending'` import row, newest first, for 📥 Pending Imports
+    (TJDate U9), or None.
+
+    STRICT, unlike `load_snaptrade_pending_imports` (which returns [] on any
+    failure, so an outage read as "No pending imports"): [] means "read, nothing is
+    pending", None means "couldn't read" (no DB, or any page failed). No date bound.
+    Same columns and order as the lenient loader (`id`, `snaptrade_txn_id`, `ticker`,
+    `action`, `shares`, `price`, `trade_date`, `raw_json`, `status`, `fetched_at`; by
+    `trade_date` then `id`, newest first), every page via `_read_all_pages` so a
+    server-side cap can't truncate the read (TrPage). The lenient loader stays for
+    `data_maintenance`.
+    """
+    if not has_db():
+        return None
+    try:
+        return _read_all_pages(
+            lambda: (
+                _client().table("snaptrade_pending_imports")
+                .select("id,snaptrade_txn_id,ticker,action,shares,price,trade_date,raw_json,status,fetched_at")
+                .eq("status", "pending")
+                .order("trade_date", desc=True).order("id", desc=True)
+            ),
+            _PENDING_FILLS_PAGE_SIZE,
+            dedupe_key="id",
+        )
+    except Exception:
+        return None
+
+
 def load_snaptrade_pending_fills_or_none(since_date: str) -> "list | None":
     """Pending broker fills dated `since_date` (an ISO `YYYY-MM-DD`) or later, for
     the Trade Journal's log-time comparison with Robinhood's own fills (TJDate
@@ -6827,10 +6857,15 @@ def dismiss_snaptrade_pending_import(pending_id) -> bool:
     does NOT attempt to backfill broker_txn_id onto the existing trade row —
     doing that automatically risks linking the wrong trade if the user is
     mistaken; the user is only asserting 'not a new trade', not identifying
-    which existing row it is. No un-dismiss path in the UI — a fat-fingered
-    dismiss of a genuinely-new trade surfaces later via Position Drift
-    (Robinhood-only / qty mismatch against raw holdings), the compensating
-    control, rather than a reversible undo. USER-triggered write → honours
+    which existing row it is. No un-dismiss path in the UI. A fat-fingered
+    dismiss of a genuinely-new trade is meant to be caught by Pending Imports'
+    journal comparison (TJDate U9: `pending_import_verdict` decides, and U9b wires
+    it into the buttons, so the tick before "Already logged" arrives with U9b, not
+    before). The C5 matcher already compares dismissed fills too (owner D3), so a
+    dismissed-but-unlogged fill reads "not in your journal" there; until U8 lists
+    such fills in the app it is visible only through
+    `scripts/journal_broker_match_dry_run.py`. Position Drift (Robinhood-only / qty
+    mismatch against raw holdings) remains the backstop. USER-triggered write → honours
     the read-only viewer guard. Best-effort; swallows failures."""
     if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():

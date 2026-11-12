@@ -311,3 +311,71 @@ def test_fills_loader_output_feeds_the_matcher(monkeypatch):
     now = ET.localize(datetime(2026, 11, 12, 12, 0))
     res = jbm.match_journal_to_broker(journal, rows, now, now)
     assert [f["kind"] for f in res] == ["PRICE_FIX"] and res[0]["fill_statuses"] == ["dismissed"]
+
+
+# ── db: the TJDate U9a' strict pending-list loader ───────────────────────────
+
+def _pend_full(i):
+    return dict(_pend(i), status="pending", fetched_at="2026-11-04T13:00:00+00:00")
+
+
+def test_load_pending_imports_strict_filters_status_not_date_selects_and_pages(monkeypatch):
+    c = _use(monkeypatch, _QClient([_pend_full(i) for i in range(1, 8)]))
+    monkeypatch.setattr(db, "_PENDING_FILLS_PAGE_SIZE", 3)
+    got = db.load_snaptrade_pending_imports_or_none()
+    assert [r["id"] for r in got] == list(range(1, 8))                  # every page read
+    assert ("eq", "status", "pending") in c.log
+    assert not [x for x in c.log if x[0] == "gte"]                      # no date bound
+    sel = [x for x in c.log if x[0] == "select"][0][1]
+    assert sel == "id,snaptrade_txn_id,ticker,action,shares,price,trade_date,raw_json,status,fetched_at"
+    assert ("order", "trade_date", True) in c.log and ("order", "id", True) in c.log
+    assert set(c.tables) == {"snaptrade_pending_imports"}
+
+
+def test_load_pending_imports_strict_selects_the_same_columns_as_the_lenient_loader(monkeypatch):
+    c = _use(monkeypatch, _QClient([_pend_full(1)]))
+    db.load_snaptrade_pending_imports("pending")
+    lenient = [x for x in c.log if x[0] == "select"][0][1]
+    c2 = _use(monkeypatch, _QClient([_pend_full(1)]))
+    db.load_snaptrade_pending_imports_or_none()
+    strict = [x for x in c2.log if x[0] == "select"][0][1]
+    assert lenient == strict
+
+
+def test_load_pending_imports_strict_empty_is_a_list_and_every_failure_is_none(monkeypatch):
+    _use(monkeypatch, _QClient([]))
+    assert db.load_snaptrade_pending_imports_or_none() == []             # read, nothing pending
+    _use(monkeypatch, _QClient([_pend_full(1)], boom=True))
+    assert db.load_snaptrade_pending_imports_or_none() is None           # a page failed
+    _use(monkeypatch, _QClient(), has_db=False)
+    assert db.load_snaptrade_pending_imports_or_none() is None           # no DB
+
+
+def test_load_pending_imports_strict_fails_on_a_later_page(monkeypatch):
+    class _FailsOnSecondPage(_Q):
+        def execute(self):
+            if self._range is not None and self._range[0] > 0:
+                raise RuntimeError("page 2 failed")
+            return super().execute()
+
+    class _Client(_QClient):
+        def table(self, name):
+            self.tables.append(name)
+            return _FailsOnSecondPage(self.rows, self.log, self.boom)
+
+    _use(monkeypatch, _Client([_pend_full(i) for i in range(1, 8)]))
+    monkeypatch.setattr(db, "_PENDING_FILLS_PAGE_SIZE", 3)
+    assert db.load_snaptrade_pending_imports_or_none() is None           # a partial read is never returned
+
+
+def test_load_pending_imports_strict_vs_lenient_on_failure(monkeypatch):
+    _use(monkeypatch, _QClient([_pend_full(1)], boom=True))
+    assert db.load_snaptrade_pending_imports("pending") == []            # lenient: [] on failure
+    assert db.load_snaptrade_pending_imports_or_none() is None           # strict: None
+
+
+def test_dismiss_docstring_names_u9b_u8_and_the_c5_comparison_without_claiming_a_live_tick():
+    doc = db.dismiss_snaptrade_pending_import.__doc__
+    assert "pending_import_verdict" in doc and "U9b" in doc and "dismissed fills" in doc
+    assert "journal_broker_match_dry_run.py" in doc and "U8" in doc
+    assert "surfaces later via Position Drift" not in doc

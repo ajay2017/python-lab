@@ -1145,6 +1145,12 @@ _GATE_FILES = {
     # the Phase-2 correction planner and the Home / Pending Imports lines read; a
     # wrong verdict tells the owner a real trade is missing or a correct row is wrong.
     "stock_analyzer/journal_broker_match.py",
+    # Added 2026-11-12 (TJDate U9a): the pure verdicts of Pending Imports -- one
+    # verdict per pending Robinhood fill (already in the journal / differs / not in
+    # the journal / unclear / not compared) and the decision of which of "Log This
+    # Trade" and "Already logged" is disabled or needs a tick; a wrong call lets a
+    # fill be logged twice or dismissed while it is missing from the journal.
+    "stock_analyzer/pending_import_verdict.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per
