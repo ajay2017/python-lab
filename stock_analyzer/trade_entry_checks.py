@@ -713,6 +713,7 @@ def price_sanity_override_label() -> str:
 
 
 REASON_NO_BAR = "no usable price bar for that day"
+REASON_NO_SESSION = "that day had no trading session"
 REASON_SPLIT_UNKNOWN = "couldn't check for a stock split since that day"
 REASON_SPLIT_SINCE = ("a stock split since that day puts the day's range on a "
                       "different share basis")
@@ -817,7 +818,7 @@ def bar_for_price_check(trade_date, today_et, history, session_range) -> tuple:
         date is not "since": that day's own bar is already on the new basis).
         Otherwise the session range, else the history row, else `REASON_NO_BAR`.
       * a future date: `(None, "the trade date is in the future")`; a weekend or
-        NYSE holiday: `(None, REASON_NO_BAR)` before any split question (a day
+        NYSE holiday: `(None, REASON_NO_SESSION)` before any split question (a day
         with no session has no bar to put on a share basis).
     A row's ET date is read by `_index_et_dates`. Usable = finite, > 0,
     low <= high. Never raises on a malformed frame; unreadable dates ->
@@ -830,7 +831,7 @@ def bar_for_price_check(trade_date, today_et, history, session_range) -> tuple:
     if d > today:
         return None, "the trade date is in the future"
     if not _is_trading_day(d):
-        return None, REASON_NO_BAR      # no session, so no bar and no split question
+        return None, REASON_NO_SESSION  # no session, so no bar and no split question
     sr = _usable_bar(session_range)
 
     usable_hist = isinstance(history, pd.DataFrame) and len(history) > 0

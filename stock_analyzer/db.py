@@ -6862,9 +6862,9 @@ def dismiss_snaptrade_pending_import(pending_id) -> bool:
     journal comparison (TJDate U9: `pending_import_verdict` decides and U9b wires
     it into the buttons: "Already logged" needs a tick when the comparison says
     the fill is not in the journal). The C5 matcher already compares dismissed fills too (owner D3), so a
-    dismissed-but-unlogged fill reads "not in your journal" there; until U8 lists
-    such fills in the app it is visible only through
-    `scripts/journal_broker_match_dry_run.py`. Position Drift (Robinhood-only / qty
+    dismissed-but-unlogged fill reads "not in your journal" there;
+    💰 Account → 🧾 Journal vs Robinhood lists such fills (TJDate U8b), and
+    `scripts/journal_broker_match_dry_run.py` still prints them. Position Drift (Robinhood-only / qty
     mismatch against raw holdings) remains the backstop. USER-triggered write → honours
     the read-only viewer guard. Best-effort; swallows failures."""
     if is_readonly(): return False  # read-only viewer: no-op

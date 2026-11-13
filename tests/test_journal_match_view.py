@@ -685,6 +685,147 @@ def test_every_item_carries_the_full_log_field_set():
             assert k in it, (it["kind"], k)
 
 
+# ── TJDate U8b: decide_account_view ──────────────────────────────────────────
+
+def _view(journal_rows=(), fills=(), pending_rows=None, synced=SYNC, now=NOW):
+    return jmv.decide_account_view(frame(*journal_rows), list(fills), synced, now, pending_rows)
+
+
+def _two_dismissed_sells():
+    return [fl(1, "T1", "TSLA", "SELL", 5, 400.0, date(2026, 11, 10), status="dismissed"),
+            fl(2, "T2", "ORCL", "SELL", 5, 200.0, date(2026, 11, 10), status="dismissed")]
+
+
+def _by_ticker(view, tk):
+    got = [i for i in items(view) if i["ticker"] == tk]
+    assert len(got) == 1, (tk, [i["ticker"] for i in items(view)])
+    return got[0]
+
+
+def test_account_view_offline_names_the_unreadable_part():
+    for j, f, words in ((None, [], "your journal couldn't"),
+                        (frame(), None, "Robinhood's fills couldn't"),
+                        (None, None, "your journal and Robinhood's fills couldn't")):
+        v = jmv.decide_account_view(j, f, SYNC, NOW, None)
+        assert v["state"] == "offline" and words in v["offline_text"], (j, f, v["offline_text"])
+        assert "the comparison didn't run" not in v["offline_text"]
+        assert v["groups"] == [] and v["in_pending_count"] == 0
+        assert_plain(v)
+
+
+def test_account_view_a_matcher_failure_reads_didnt_run_and_never_raises(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("matcher down")
+    monkeypatch.setattr(jmv._jbm, "match_journal_to_broker", boom)
+    v = _view(fills=_two_dismissed_sells())
+    assert v["state"] == "offline" and "the comparison didn't run this render" in v["offline_text"]
+    monkeypatch.setattr(jmv._jbm, "match_journal_to_broker", lambda *a, **k: {"not": "a list"})
+    v = _view(fills=_two_dismissed_sells())
+    assert v["state"] == "offline" and "the comparison didn't run this render" in v["offline_text"]
+    monkeypatch.setattr(jmv._jbm, "match_journal_to_broker", lambda *a, **k: None)
+    assert _view()["state"] == "offline"
+
+
+def test_account_view_a_naive_now_is_a_value_error_even_when_offline():
+    with pytest.raises(ValueError):
+        jmv.decide_account_view(None, None, SYNC, datetime(2026, 11, 12, 12, 0), None)
+
+
+@pytest.mark.parametrize("pending_rows", [None, []])
+def test_account_view_without_pending_rows_lists_the_all_pending_findings(pending_rows):
+    fills = [fl(1, "T1", "TSLA", "SELL", 5, 400.0, date(2026, 11, 10), status="pending")]
+    v = _view(fills=fills, pending_rows=pending_rows)
+    assert v["state"] == "rows" and v["in_pending_count"] == 0
+    assert [i["ticker"] for i in items(v)] == ["TSLA"]
+    assert items(v)[0]["log_enabled"] is False          # a pending fill gets no Log here
+
+
+def test_account_view_all_findings_pending_is_rows_with_no_groups_never_no_differences():
+    fills = [fl(1, "T1", "TSLA", "SELL", 5, 400.0, date(2026, 11, 10), status="pending")]
+    v = _view(fills=fills, pending_rows=[{"pending_id": 1, "twin_txn_id": None}])
+    assert v["state"] == "rows" and v["groups"] == [] and v["in_pending_count"] == 1
+    assert "No differences found" not in v["summary_text"]
+    assert "1 more is in 📥 Pending Imports above." in v["summary_text"]
+
+
+def test_account_view_a_twin_used_by_pending_imports_gets_no_log_of_its_own():
+    v = _view(fills=_two_dismissed_sells(),
+              pending_rows=[{"twin_txn_id": "T1"}, {"twin_txn_id": None}])
+    tw, ok = _by_ticker(v, "TSLA"), _by_ticker(v, "ORCL")
+    assert tw["log_enabled"] is False and tw["log_needs_tick"] is False
+    assert tw["log_tick_label"] == "" and tw["log_prefill"] is None
+    assert tw["log_disabled_reason"] == jmv.TWIN_LOG_OFF_REASON == (
+        "a matching fill in 📥 Pending Imports above offers Log for the same trade; log it from "
+        "there so it isn't logged twice")
+    assert tw["log_twin_suppressed"] is True
+    assert pv.log_allowed(tw, True) is False and pv.log_allowed(tw, False) is False
+    # a non-twin UNLOGGED dismissed item keeps Log on, with the tick
+    assert ok["log_enabled"] is True and ok["log_needs_tick"] is True
+    assert ok["log_tick_label"] == jmv.LOG_TICK_LABEL_DISMISSED and ok["log_twin_suppressed"] is False
+    assert pv.log_allowed(ok, False) is False and pv.log_allowed(ok, True) is True
+    assert_plain(v)
+
+
+def test_account_view_twin_ids_are_ignored_when_pending_rows_is_not_a_list_or_has_junk():
+    fills = _two_dismissed_sells()
+    for rows in (None, [], ["junk", 3, None], [{"twin_txn_id": ""}, {}]):
+        v = _view(fills=fills, pending_rows=rows)
+        assert all(i["log_twin_suppressed"] is False for i in items(v)), rows
+        assert _by_ticker(v, "TSLA")["log_enabled"] is True
+
+
+def test_account_view_log_prefill_comes_from_the_fills_record():
+    it = _by_ticker(_view(fills=_two_dismissed_sells()), "TSLA")
+    assert it["log_prefill"] == {"ticker": "TSLA", "action": "SELL", "shares": 5, "price": 400.0,
+                                 "trade_date": "2026-11-10", "snaptrade_txn_id": "T1",
+                                 "pending_id": 1}
+
+
+def test_account_view_every_item_has_a_prefill_key_that_is_none_when_log_is_off():
+    j = [jrow(1, "Z", "BUY", 5, 100.0, et(2026, 11, 2, 10))]            # a JOURNAL_ONLY row
+    v = _view(journal_rows=j, fills=_two_dismissed_sells())
+    kinds = {i["kind"] for i in items(v)}
+    assert "JOURNAL_ONLY" in kinds and "UNLOGGED" in kinds
+    for it in items(v):
+        assert "log_prefill" in it and "log_twin_suppressed" in it
+        assert (it["log_prefill"] is not None) == it["log_enabled"]
+
+
+def _fake_unlogged(txn="T1", pid=1):
+    return ff(K.KIND_UNLOGGED, tk="TSLA", act="SELL", holdings=5.0, statuses=["dismissed"],
+              txns=[txn], pids=[pid] if pid is not None else [], bs=5, bp=400.0,
+              fdates=[date(2026, 11, 10)])
+
+
+def test_account_view_a_missing_or_duplicated_fill_record_turns_log_off(monkeypatch):
+    rec = fl(1, "T1", "TSLA", "SELL", 5, 400.0, date(2026, 11, 10), status="dismissed")
+    cases = (
+        ([_fake_unlogged("T9", 9)], [rec]),                         # by id: no record
+        ([_fake_unlogged("T9", None)], [rec]),                      # by txn: no record
+        ([_fake_unlogged("T1", 1)], [rec, dict(rec)]),              # by id: two records
+        ([_fake_unlogged("T1", None)], [rec, dict(rec, id=2)]),     # by txn: two records
+    )
+    for findings, fills in cases:
+        monkeypatch.setattr(jmv._jbm, "match_journal_to_broker", lambda *a, _f=findings, **k: _f)
+        it = items(_view(fills=fills))[0]
+        assert it["log_enabled"] is False and it["log_needs_tick"] is False, findings
+        assert it["log_tick_label"] == "" and it["log_prefill"] is None
+        assert it["log_disabled_reason"] == (
+            "Robinhood's record for this fill couldn't be found this render")
+        assert it["log_twin_suppressed"] is False
+        assert pv.log_allowed(it, True) is False
+    # the same finding with exactly one record is fine, by id and by txn
+    for findings in ([_fake_unlogged("T1", 1)], [_fake_unlogged("T1", None)]):
+        monkeypatch.setattr(jmv._jbm, "match_journal_to_broker", lambda *a, _f=findings, **k: _f)
+        it = items(_view(fills=[rec]))[0]
+        assert it["log_enabled"] is True and it["log_prefill"]["snaptrade_txn_id"] == "T1"
+
+
+def test_account_view_clean_journal_and_fills_is_the_clean_state():
+    v = _view()
+    assert v["state"] == "clean" and v["groups"] == [] and "No differences found" in v["summary_text"]
+
+
 # ── sync wording (UE-8) ──────────────────────────────────────────────────────
 
 def test_sync_status_text_states():
@@ -703,6 +844,33 @@ def test_sync_status_text_states():
     assert jmv.sync_status_text(None, older).startswith("Last sync run: Wed Nov 11, 4:30 PM ET.")
     assert "couldn't be read" in jmv.sync_status_text("garbage", None)
     assert "couldn't be read" in jmv.sync_status_text("garbage", "garbage")
+
+
+def test_sync_status_parts_each_branch_and_text_is_their_join():
+    t = et(2026, 11, 12, 9, 5)
+    older = et(2026, 11, 11, 16, 30)
+    run_t = "Last sync run: Thu Nov 12, 9:05 AM ET."
+    cases = [
+        # equal stamps: the import finished
+        ((t, t), {"run_text": run_t, "txn_text": "Transactions imported in that run.", "txn_ok": True}),
+        # txn older than the full run: did not finish
+        ((t, older), {"run_text": run_t, "txn_ok": False,
+                      "txn_text": "Its transaction import didn't finish; fills are compared "
+                                  "through the Wed Nov 11, 4:30 PM ET sync."}),
+        # txn None with a full stamp set
+        ((t, None), {"run_text": run_t, "txn_text": jmv.NO_TXN_SYNC_TEXT, "txn_ok": False}),
+        # both None: waiting, nothing to warn about
+        ((None, None), {"run_text": jmv.WAITING_FOR_SYNC_TEXT, "txn_text": "", "txn_ok": True}),
+        # unreadable stamps
+        (("garbage", None), {"run_text": "Last sync run: time couldn't be read.",
+                             "txn_text": jmv.NO_TXN_SYNC_TEXT, "txn_ok": False}),
+        (("garbage", "garbage"), {"run_text": "Last sync run: time couldn't be read.",
+                                  "txn_text": jmv.NO_TXN_SYNC_TEXT, "txn_ok": False}),
+    ]
+    for args, want in cases:
+        got = jmv.sync_status_parts(*args)
+        assert got == want, (args, got)
+        assert jmv.sync_status_text(*args) == " ".join(p for p in (got["run_text"], got["txn_text"]) if p)
 
 
 def test_sync_status_text_dst_change_reads_the_same_wall_clock_in_et():
@@ -1021,3 +1189,35 @@ def test_property_every_finding_lands_in_exactly_one_group_over_real_kinds():
         for g in a["groups"]:
             allowed = {k for key, _t, kinds in jmv.ACCOUNT_GROUPS if key == g["key"] for k in kinds}
             assert all(i["kind"] in allowed for i in g["items"]), case
+
+
+# ── the real U9 -> U8 chain: one Log offered per unlogged fill, never two ────
+
+def _real_chain(statuses):
+    """One journal BUY (5 X @ 100.00, 11-03) and identical broker fills with `statuses`,
+    through the real U9 decision, whose rows feed the real U8 view."""
+    fills = [fl(i, f"T{i}", "X", "BUY", 5, 100.0, date(2026, 11, 3), status=s)
+             for i, s in enumerate(statuses, start=1)]
+    pending = [f for f in fills if f["status"] == "pending"]
+    journal = frame(jrow(1, "X", "BUY", 5, 100.0, et(2026, 11, 3, 10)))
+    rows = pv.decide_pending_imports(pending, journal, fills, SYNC, NOW)["rows"]
+    view = jmv.decide_account_view(journal, fills, SYNC, NOW, rows)
+    return rows, items(view)
+
+
+def test_real_chain_pending_plus_one_identical_dismissed_fill_offers_one_log():
+    rows, its = _real_chain(["pending", "dismissed"])
+    u9_logs = [r for r in rows if r["log_enabled"]]
+    u8_logs = [i for i in its if i["log_enabled"]]
+    assert len(u9_logs) == 1 and len(u8_logs) == 0
+    assert len(its) == 1 and its[0]["log_twin_suppressed"] is True
+
+
+def test_real_chain_pending_plus_two_identical_dismissed_fills_offers_two_logs():
+    rows, its = _real_chain(["pending", "dismissed", "dismissed"])
+    u9_logs = [r for r in rows if r["log_enabled"]]
+    u8_logs = [i for i in its if i["log_enabled"]]
+    assert len(u9_logs) == 1 and len(u8_logs) == 1
+    assert len(u9_logs) + len(u8_logs) == 2
+    assert sum(1 for i in its if i["log_twin_suppressed"]) == 1
+

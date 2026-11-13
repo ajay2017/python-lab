@@ -28,6 +28,7 @@ HIGH = C.TRADE_PRICE_SANITY_RATIO_HIGH
 
 BAR = {"low": 100.0, "high": 200.0}
 NO_BAR = "no usable price bar for that day"
+NO_SESSION = "that day had no trading session"
 SPLIT_UNKNOWN = "couldn't check for a stock split since that day"
 SPLIT_SINCE = "a stock split since that day puts the day's range on a different share basis"
 
@@ -276,8 +277,17 @@ def test_bar_non_trading_date_reads_no_bar_never_a_split_reason():
                      (date(2026, 11, 26), date(2026, 11, 30)),      # Thanksgiving
                      (date(2026, 11, 7), date(2026, 11, 7))):       # a weekend visit, today
         for hist in (H, None, "x", H.drop(columns=["Stock Splits"])):
-            assert tec.bar_for_price_check(d, today, hist, None) == (None, NO_BAR), (d, hist is None)
-        assert tec.bar_for_price_check(d, today, H, SR) == (None, NO_BAR)
+            assert tec.bar_for_price_check(d, today, hist, None) == (None, NO_SESSION), (d, hist is None)
+        assert tec.bar_for_price_check(d, today, H, SR) == (None, NO_SESSION)
+
+
+def test_bar_non_trading_date_reason_is_the_no_session_wording_not_no_bar():
+    assert tec.REASON_NO_SESSION == NO_SESSION != tec.REASON_NO_BAR
+    # a trading day with no bar keeps the old wording
+    assert tec.bar_for_price_check(date(2026, 11, 9), date(2026, 11, 9), None, None) == (None, NO_BAR)
+    bar, why = tec.bar_for_price_check(date(2026, 11, 7), date(2026, 11, 9), H, SR)
+    band = tec.price_band_finding(150.0, date(2026, 11, 7), bar, date(2026, 11, 9), unchecked_reason=why)
+    assert band["state"] == "unchecked" and band["reason"] == NO_SESSION
 
 
 def test_bar_future_date_and_bad_dates():

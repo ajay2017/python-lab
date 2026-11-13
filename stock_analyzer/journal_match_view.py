@@ -12,6 +12,8 @@ PURE: no streamlit, no db, no `stock_analyzer.data` import and no clock read
     match automatically / Not compared yet / Matches), each item with a headline,
     the date it leaves the comparison window, a "what to check" line and, for a
     fill that is in no journal row, the one "Log This Trade" action (UE-4);
+  * `decide_account_view` (U8b): runs the matcher on the page's own reads and returns
+    `account_list`'s dict with the twin-suppression and Log prefill decisions applied;
   * `sync_status_text`, `journal_signature` and `memo_key`, the small helpers the
     wiring needs (the sync wording, and a memo key that never reads the clock).
 
@@ -79,6 +81,9 @@ WAITING_FOR_SYNC_TEXT = "Waiting for the first `broker` cron sync."
 NO_TXN_SYNC_TEXT = ("No completed transaction import on record (or it couldn't be read), so "
                     "journal rows aren't compared with Robinhood's fills.")
 CLEAN_TEXT = "No differences found."
+TWIN_LOG_OFF_REASON = ("a matching fill in 📥 Pending Imports above offers Log for the same "
+                       "trade; log it from there so it isn't logged twice")
+NO_RECORD_REASON = "Robinhood's record for this fill couldn't be found this render"
 
 _OFFLINE_PART_WORDS = {"journal": "your journal", "fills": "Robinhood's fills"}
 
@@ -552,24 +557,115 @@ def account_list(findings, txn_synced_at, now_et, pending_visible, offline_parts
             "coverage_text": coverage, "in_pending_count": in_pending, "groups": groups}
 
 
-def sync_status_text(full_synced_at, txn_synced_at) -> str:
-    """The Broker Sync banner's sync wording (ET): when the last sync run was, and
-    whether its transaction import finished. "Last sync run" uses the later of the two
-    readable stamps. Never claims a comparison it can't back."""
+def _fill_matches(rec, pid, txn) -> bool:
+    """True when the fills-read record `rec` is the fill an item names: its `id` equals
+    `pid` when there is one, else its `snaptrade_txn_id` equals `txn`."""
+    if not isinstance(rec, dict):
+        return False
+    if pid is not None:
+        n, want = _tec._num(rec.get("id")), _tec._num(pid)
+        return n is not None and want is not None and n == want
+    t = _tec._txn_text(rec.get("snaptrade_txn_id"))
+    return t is not None and txn is not None and t == _tec._txn_text(txn)
+
+
+def _log_off(item: dict, reason: str) -> None:
+    item.update(log_enabled=False, log_needs_tick=False, log_tick_label="",
+                log_disabled_reason=reason, log_prefill=None)
+
+
+def decide_account_view(journal, fills, txn_synced_at, now_et, pending_rows) -> dict:
+    """What 💰 Account's "Journal vs Robinhood" list renders, from the page's own reads.
+
+    `journal` = `db.load_trades_or_none()` (None = unreadable); `fills` =
+    `db.load_snaptrade_fills_or_none(...)` (a list, or None); `txn_synced_at` =
+    `db.load_snaptrade_txn_synced_at_or_none()`; `now_et` a tz-aware datetime
+    (ValueError otherwise); `pending_rows` = `pending_import_verdict.
+    decide_pending_imports(...)["rows"]` when the Pending Imports list was read, else None.
+
+    Returns `account_list`'s dict (same keys). An unreadable journal or fills read is
+    "offline" and names the part; a matcher failure or a non-list result is "offline" with
+    the "comparison didn't run" wording. It never raises on a matcher failure and is never
+    a gate: it only states what differs. Each item also carries `log_twin_suppressed` and
+    `log_prefill`.
+
+    Twin suppression: a Log offered on a fill that a Pending Imports row used as its twin
+    (`twin_txn_id`) is turned off, with `TWIN_LOG_OFF_REASON`, so one missing trade never
+    gets two Log buttons. Prefill: an item whose Log is still on gets its fill record from
+    `fills` (by the pending id, else the transaction id) as `log_prefill`
+    `{ticker, action, shares, price, trade_date, snaptrade_txn_id, pending_id}`; a record
+    that is missing or ambiguous turns Log off (fails closed). `log_prefill` is None
+    whenever Log is off.
+    """
+    now = _tec._aware_et(now_et)
+    offline_parts = [name for name, v in (("journal", journal), ("fills", fills)) if v is None]
+    findings = None
+    if not offline_parts:
+        try:
+            findings = _jbm.match_journal_to_broker(journal, fills, txn_synced_at, now)
+        except Exception:
+            findings = None
+        if not isinstance(findings, list):
+            findings = None
+    pending_visible = isinstance(pending_rows, list) and len(pending_rows) > 0
+    view = account_list(findings, txn_synced_at, now, pending_visible, offline_parts)
+    twins = {r["twin_txn_id"] for r in (pending_rows if isinstance(pending_rows, list) else [])
+             if isinstance(r, dict) and r.get("twin_txn_id")}
+    records = [r for r in _list(fills) if isinstance(r, dict)]
+    for group in view["groups"]:
+        for item in group["items"]:
+            item["log_twin_suppressed"] = False
+            item["log_prefill"] = None
+            if not item.get("log_enabled"):
+                continue
+            if item.get("log_txn_id") in twins:
+                _log_off(item, TWIN_LOG_OFF_REASON)
+                item["log_twin_suppressed"] = True
+                continue
+            hits = [r for r in records
+                    if _fill_matches(r, item.get("log_pending_id"), item.get("log_txn_id"))]
+            if len(hits) != 1:
+                _log_off(item, NO_RECORD_REASON)
+                continue
+            rec = hits[0]
+            item["log_prefill"] = {
+                "ticker": rec.get("ticker"), "action": rec.get("action"),
+                "shares": rec.get("shares"), "price": rec.get("price"),
+                "trade_date": rec.get("trade_date"),
+                "snaptrade_txn_id": rec.get("snaptrade_txn_id"), "pending_id": rec.get("id"),
+            }
+    return view
+
+
+def sync_status_parts(full_synced_at, txn_synced_at) -> dict:
+    """The Broker Sync banner's sync wording split in two (ET): `run_text` (when the last
+    sync run was) and `txn_text` (whether its transaction import finished), plus `txn_ok`
+    (True only when the import finished, or when no sync has happened yet and there is
+    nothing to report). "Last sync run" uses the later of the two readable stamps. Never
+    claims a comparison it can't back."""
     full_et, txn_et = _jbm._sync_et(full_synced_at), _jbm._sync_et(txn_synced_at)
     readable = [s for s in (full_et, txn_et) if s is not None]
     if not readable:
         if full_synced_at is None and txn_synced_at is None:
-            return WAITING_FOR_SYNC_TEXT
-        return f"Last sync run: time couldn't be read. {NO_TXN_SYNC_TEXT}"
+            return {"run_text": WAITING_FOR_SYNC_TEXT, "txn_text": "", "txn_ok": True}
+        return {"run_text": "Last sync run: time couldn't be read.",
+                "txn_text": NO_TXN_SYNC_TEXT, "txn_ok": False}
     last = max(readable)
-    text = f"Last sync run: {_jbm._sync_when(last)}."
+    run_text = f"Last sync run: {_jbm._sync_when(last)}."
     if txn_et is None:
-        return f"{text} {NO_TXN_SYNC_TEXT}"
+        return {"run_text": run_text, "txn_text": NO_TXN_SYNC_TEXT, "txn_ok": False}
     if full_et is not None and txn_et < full_et:
-        return (f"{text} Its transaction import didn't finish; fills are compared through the "
-                f"{_jbm._sync_when(txn_et)} sync.")
-    return f"{text} Transactions imported in that run."
+        return {"run_text": run_text,
+                "txn_text": (f"Its transaction import didn't finish; fills are compared through the "
+                             f"{_jbm._sync_when(txn_et)} sync."),
+                "txn_ok": False}
+    return {"run_text": run_text, "txn_text": "Transactions imported in that run.", "txn_ok": True}
+
+
+def sync_status_text(full_synced_at, txn_synced_at) -> str:
+    """The two `sync_status_parts` sentences as one string."""
+    p = sync_status_parts(full_synced_at, txn_synced_at)
+    return " ".join(x for x in (p["run_text"], p["txn_text"]) if x)
 
 
 # ── memo support (Home) ──────────────────────────────────────────────────────

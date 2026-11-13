@@ -39,8 +39,52 @@ def test_wording_constants_are_exactly_the_agreed_text():
         (_NEW_TITLE, _NEW_HINT, _NEW_LABEL)
 
 
+_OLD_HINT_NS = ("Tick the box below if the date and time are right "
+                "(for example Robinhood shows the fill on this date).")
+_NEW_HINT_NS = ("Tick the box below if the entry is right as typed "
+                "(for example Robinhood shows the fill on this date).")
+
+
+def test_no_session_hint_constants_are_exactly_the_agreed_text():
+    assert tc.LINE_ENTRY_TICK_HINT_NO_SESSION == _OLD_HINT_NS
+    assert tc.LINE_ENTRY_TICK_HINT_WIDE_NO_SESSION == _NEW_HINT_NS
+    assert tc._tec.KIND_NON_TRADING_DATE == "NON_TRADING_DATE" == _TICK_G["kind"]
+
+
+def _hint_of(findings):
+    g = tc.confirm_gate(_dups()["clean"], entry_findings=findings)
+    warn = [b for b in g["blocks"] if b["level"] == "warning"]
+    assert len(warn) == 1
+    return warn[0]["lines"][-1]
+
+
+def test_tick_hint_has_four_variants_by_width_and_non_trading_date():
+    # narrow, with a session: the extended-hours example
+    assert _hint_of([_TICK_F]) == _OLD_HINT
+    # narrow, NON_TRADING_DATE (with or without another time tick): no extended hours
+    assert _hint_of([_TICK_G]) == _OLD_HINT_NS
+    assert _hint_of([_TICK_G, _TIME_G]) == _OLD_HINT_NS
+    # ...and that combination keeps the date-and-time title and label
+    g = tc.confirm_gate(_dups()["clean"], entry_findings=[_TICK_G, _TIME_G])
+    assert g["tick_label"] == _OLD_LABEL
+    assert [b["title"] for b in g["blocks"] if b["level"] == "warning"] == [_OLD_TITLE]
+    # wide, with a session
+    assert _hint_of([_PRICE_T]) == _NEW_HINT
+    assert _hint_of([_TIME_G, _PRICE_T]) == _NEW_HINT
+    # wide, NON_TRADING_DATE
+    assert _hint_of([_TICK_G, _PRICE_T]) == _NEW_HINT_NS
+    assert "extended-hours" not in _OLD_HINT_NS + _NEW_HINT_NS
+
+
+def test_non_trading_date_that_is_not_a_tick_does_not_change_the_hint():
+    info_g = {**_TICK_G, "severity": "info"}
+    assert _hint_of([_TICK_F, info_g]) == _OLD_HINT
+    hard_g = {**_TICK_G, "severity": "hard"}
+    assert _hint_of([_TICK_F, hard_g]) == _OLD_HINT
+
+
 def test_time_group_and_ungrouped_ticks_keep_the_date_and_time_wording():
-    for ticks in ([_TICK_F], [_TIME_G], [_TICK_G, _TIME_G],
+    for ticks in ([_TICK_F], [_TIME_G],
                   [{"kind": "X", "severity": "weird", "text": "odd"}]):
         g = tc.confirm_gate(_dups()["clean"], entry_findings=ticks)
         assert g["tick_label"] == _OLD_LABEL

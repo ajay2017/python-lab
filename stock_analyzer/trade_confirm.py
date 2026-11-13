@@ -36,6 +36,7 @@ from __future__ import annotations
 import pandas as pd
 
 from stock_analyzer import data as _data
+from stock_analyzer import trade_entry_checks as _tec
 from stock_analyzer import trade_time
 from stock_analyzer.constants import (
     BROKER_DRIFT_SHARE_TOL,
@@ -66,6 +67,12 @@ TITLE_ENTRY_TICK_WIDE = "Check this entry"
 LINE_ENTRY_TICK_HINT_WIDE = ("Tick the box below if the entry is right as typed "
                              "(for example an extended-hours fill).")
 LABEL_ENTRY_TICK_WIDE = "The entry is right as typed"
+# A weekend or holiday date has no extended-hours session to point at, so when a tick
+# finding is NON_TRADING_DATE the hint's example is the broker's own record instead.
+LINE_ENTRY_TICK_HINT_NO_SESSION = ("Tick the box below if the date and time are right "
+                                   "(for example Robinhood shows the fill on this date).")
+LINE_ENTRY_TICK_HINT_WIDE_NO_SESSION = ("Tick the box below if the entry is right as typed "
+                                        "(for example Robinhood shows the fill on this date).")
 _ENTRY_WIDE_GROUPS = ("price", "broker")
 
 
@@ -335,6 +342,17 @@ def _entry_ticks_are_wide(entry_findings) -> bool:
     return False
 
 
+def _entry_ticks_have_no_session(entry_findings) -> bool:
+    """True when a tick finding (same rule as `_entry_split`: any severity other
+    than "hard" / "info") is NON_TRADING_DATE: the date has no session, so the tick
+    hint must not suggest an extended-hours fill."""
+    for f in entry_findings or []:
+        if (isinstance(f, dict) and f.get("severity") not in ("hard", "info")
+                and f.get("kind") == _tec.KIND_NON_TRADING_DATE):
+            return True
+    return False
+
+
 def confirm_gate(dup: "dict | None", entry_findings: "list | None" = None) -> dict:
     """What the confirm card renders and whether Confirm may be pressed.
 
@@ -355,7 +373,10 @@ def confirm_gate(dup: "dict | None", entry_findings: "list | None" = None) -> di
     entry findings are rendered next to it. When any tick finding is in group
     "price" or "broker" (TJDate C2b) the block title, hint and label read "Check
     this entry" / "...the entry is right as typed" instead, because the one box
-    then vouches for more than the date and time.
+    then vouches for more than the date and time. When a tick finding is
+    NON_TRADING_DATE the hint's example reads "Robinhood shows the fill on this
+    date" (`LINE_ENTRY_TICK_HINT_NO_SESSION` / `..._WIDE_NO_SESSION`), because a
+    weekend or holiday has no extended-hours session.
     """
     fs = _findings(dup)
     ids = [i for f in fs for i in f["ids"]]
@@ -370,7 +391,13 @@ def confirm_gate(dup: "dict | None", entry_findings: "list | None" = None) -> di
     if e_tick:
         lines = list(e_tick)
         if needs_tick:
-            lines.append(LINE_ENTRY_TICK_HINT_WIDE if wide else LINE_ENTRY_TICK_HINT)
+            no_session = _entry_ticks_have_no_session(entry_findings)
+            if wide:
+                lines.append(LINE_ENTRY_TICK_HINT_WIDE_NO_SESSION if no_session
+                             else LINE_ENTRY_TICK_HINT_WIDE)
+            else:
+                lines.append(LINE_ENTRY_TICK_HINT_NO_SESSION if no_session
+                             else LINE_ENTRY_TICK_HINT)
         blocks.append({"level": "warning",
                        "title": TITLE_ENTRY_TICK_WIDE if wide else TITLE_ENTRY_TICK,
                        "lines": lines})

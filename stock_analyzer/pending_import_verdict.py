@@ -421,7 +421,9 @@ def _apply_twin_rule(items: list, findings: list, fill_by_txn: dict, fill_by_pid
     A row whose own txn is already on a journal row (`linked`: "already linked" and
     LINKED_DIFFERS alike) never flips: logging it again would be refused by the
     trade-confirm hard block, which sends the owner back to "Already logged". The
-    flipped row keeps the matcher's own text after the twin sentence. Mutates `items`
+    flipped row keeps the matcher's own text after the twin sentence and records the
+    unlogged twin's txn text in `it["twin_txn"]` (`twin_txn_id` on the output row), so
+    💰 Account's journal list can leave that fill's own Log button off. Mutates `items`
     (each `{"row", "facts", "map", "from_finding"}`)."""
     twins = _unlogged_twins(findings, fill_by_txn, fill_by_pid, pending_txns, pending_pids)
     if not twins:
@@ -441,6 +443,7 @@ def _apply_twin_rule(items: list, findings: list, fill_by_txn: dict, fill_by_pid
             text = f"{TWIN_TEXT} {old['text']}" if old["text"] else TWIN_TEXT
             it["map"] = _not_in_journal(old["kind"], "twin", text, old["journal_ids"],
                                         _list(tfinding.get("nearby_journal_ids")))
+            it["twin_txn"] = _txn or None
             break
 
 
@@ -483,6 +486,7 @@ def _finish(it: dict) -> dict:
         "dismiss_primary": bool(m["dismiss_primary"]),
         "dismiss_needs_tick": bool(m["dismiss_needs_tick"]),
         "dismiss_tick_label": m["dismiss_tick_label"], "dismiss_note": m["dismiss_note"],
+        "twin_txn_id": it.get("twin_txn"),
     }
 
 
@@ -514,8 +518,9 @@ def decide_pending_imports(pending, journal, fills, synced_at, now_et) -> dict:
     verdict), `tone` ("ok" | "warning" | "neutral"), `label`, `text`, `journal_ids`,
     `nearby_journal_ids`, `log_enabled`, `log_primary`, `log_needs_tick`,
     `log_tick_label`, `log_disabled_reason`, `dismiss_primary`, `dismiss_needs_tick`,
-    `dismiss_tick_label`, `dismiss_note`. Use `log_allowed` / `dismiss_allowed` for the
-    button state. Every string is plain (the caller escapes any HTML it builds).
+    `dismiss_tick_label`, `dismiss_note`, `twin_txn_id` (the txn text of the dismissed /
+    logged-but-unjournaled fill whose twin rule flipped this row, else None). Use
+    `log_allowed` / `dismiss_allowed` for the button state. Every string is plain (the caller escapes any HTML it builds).
     """
     now = _tec._aware_et(now_et)
     if pending is None or not isinstance(pending, (list, tuple)) \

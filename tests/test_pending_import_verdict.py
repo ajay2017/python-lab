@@ -343,6 +343,21 @@ def test_a_pending_twin_never_flips_a_row():
     assert all(r["reason"] != "twin" for r in res["rows"])
 
 
+def test_a_twin_flipped_row_carries_the_twins_txn_id_and_every_other_row_has_none():
+    j = [jrow(1, "X", "BUY", 5, 100.0, et(2026, 11, 3, 10)),
+         jrow(2, "X", "BUY", 5, 100.0, et(2026, 11, 3, 11))]
+    fills = _twin_fills(["pending", "pending", "dismissed"])
+    res = decide(j, fills, pending=fills[:2])
+    assert by_txn(res, "T1")["reason"] == "twin" and by_txn(res, "T1")["twin_txn_id"] == "T3"
+    assert by_txn(res, "T2")["twin_txn_id"] is None
+    # no twin at all: the key is there and None
+    res2 = decide(j[:1], _twin_fills(["pending"]))
+    assert [r["twin_txn_id"] for r in res2["rows"]] == [None]
+    # offline comparison rows carry the key too
+    off = pv.decide_pending_imports(fills[:2], None, None, SYNC, NOW)
+    assert [r["twin_txn_id"] for r in off["rows"]] == [None, None]
+
+
 def test_a_logged_status_unlogged_twin_also_flips():
     j = [jrow(1, "X", "BUY", 5, 100.0, et(2026, 11, 3, 10))]
     res = decide(j, _twin_fills(["pending", "logged"]), pending=_twin_fills(["pending"]))
