@@ -522,6 +522,11 @@ def test_headline_variants():
     assert items(acct([jo]))[0]["headline"] == "BUY 5 X, journal #1, dated Mon Nov 2"
     many = ff(K.KIND_SPLIT, tk="X", holdings=0.0, js=3.0, jids=[1, 2], fdates=[date(2026, 10, 28), date(2026, 10, 29)])
     assert items(acct([many]))[0]["headline"] == "BUY 3 X, journal #1, #2, Robinhood fills Wed Oct 28, Thu Oct 29"
+    # Two fills on ONE date read "fills" (live 2026-11-13: MRVL #454 read "Robinhood fill
+    # Fri Oct 30" over "Robinhood's 2 fills that day combined"); the date prints once.
+    two_one_day = ff(K.KIND_RECONCILED, tk="MRVL", holdings=0.0, js=8.0, jids=[454],
+                     fdates=[date(2026, 10, 30), date(2026, 10, 30)])
+    assert items(acct([two_one_day]))[0]["headline"] == "BUY 8 MRVL, journal #454, Robinhood fills Fri Oct 30"
     opt = ff(K.KIND_SKIPPED_NON_EQUITY, tk="", act="", fdates=[date(2026, 11, 2)])
     assert items(acct([opt]))[0]["headline"] == "Robinhood option records, not compared"
     bare = ff(K.KIND_UNCHECKED, tk="", act="", txns=[], pids=[], statuses=[])

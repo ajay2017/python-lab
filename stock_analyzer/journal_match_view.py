@@ -396,7 +396,10 @@ def _headline(f: dict) -> str:
         head += f", journal {_ids_text(jids)}"
     fills = sorted(set(_dates(f, "fill_dates")))
     if fills:
-        head += f", Robinhood {'fill' if len(fills) == 1 else 'fills'} " \
+        # "fill" / "fills" counts the FILLS (`fill_dates` is parallel to the fills),
+        # not the distinct dates: two fills on one day read "fills Fri Oct 30".
+        n_fills = len(_list(f.get("fill_dates")))
+        head += f", Robinhood {'fill' if n_fills == 1 else 'fills'} " \
                 + ", ".join(_tec._fmt_date(d) for d in fills)
     elif _dates(f, "journal_dates"):
         head += f", dated {_tec._fmt_date(max(_dates(f, 'journal_dates')))}"
