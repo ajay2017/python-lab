@@ -403,6 +403,41 @@ def test_linked_differs_shares_and_nothing_when_identical_or_absent():
     assert run(j, []) == []                                       # the fill is not in the input
 
 
+def _linked_pair(tk="X", act="BUY", sh=5, px=100.0, day=date(2026, 11, 3), **fill_over):
+    j = [jrow(1, "X", "BUY", 5, 100.0, et(2026, 11, 3, 10), txn="T1")]
+    f = [fl(1, "T1", fill_over.get("tk", tk), fill_over.get("act", act), fill_over.get("sh", sh),
+            fill_over.get("px", px), fill_over.get("day", day), status="logged")]
+    return j, f
+
+
+@pytest.mark.parametrize("over,want", [
+    ({"tk": "TSLL"}, ["ticker"]),
+    ({"act": "SELL"}, ["action"]),
+    ({"sh": 6}, ["shares"]),
+    ({"px": 105.0}, ["price"]),
+    ({"day": date(2026, 11, 5)}, ["date"]),
+    ({"tk": "TSLL", "act": "SELL", "sh": 6, "px": 105.0, "day": date(2026, 11, 5)},
+     ["ticker", "action", "shares", "price", "date"]),
+])
+def test_linked_differs_on_names_each_difference_in_check_order(over, want):
+    r = run(*_linked_pair(**over))[0]
+    assert r["kind"] == "LINKED_DIFFERS" and r["differs_on"] == want
+    assert isinstance(r["differs_on"], list)
+
+
+def test_a_ticker_or_action_difference_with_equal_shares_has_zero_holdings_effect_but_is_named():
+    for over, tok in (({"tk": "TSLL"}, "ticker"), ({"act": "SELL"}, "action")):
+        r = run(*_linked_pair(**over))[0]
+        assert r["holdings_effect"] == 0.0 and r["differs_on"] == [tok]
+
+
+def test_every_non_linked_differs_finding_has_an_empty_differs_on():
+    j, f = _444_rows()
+    res = run(j, f) + run(*_csco("a")) + run(*_csco("c")) + run(*_mrvl_419())
+    assert res and all("differs_on" in r for r in res)
+    assert all(r["differs_on"] == [] for r in res if r["kind"] != "LINKED_DIFFERS")
+
+
 def test_option_fill_is_skipped_never_unlogged():
     f = [fl(1, "OPT", "X", "BUY", 1, 2.5, date(2026, 11, 3),
             raw={"option_symbol": "X 261120C00100000"})]

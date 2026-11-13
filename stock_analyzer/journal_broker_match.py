@@ -381,7 +381,7 @@ def _one_click(ctx, kind, jrows, ffills):
 
 
 def _finding(ctx, kind, tk, act, jrows, ffills, text, *, holdings=None,
-             nearby=(), dup=None):
+             nearby=(), dup=None, differs_on=()):
     jrows = sorted(jrows, key=lambda j: (j["id"] if j["id"] is not None else math.inf))
     ffills = sorted(ffills, key=lambda f: f["sk"])
     shape, eligible, block, need_check = _one_click(ctx, kind, jrows, ffills)
@@ -407,6 +407,7 @@ def _finding(ctx, kind, tk, act, jrows, ffills, text, *, holdings=None,
         "correction_shape": shape, "one_click_eligible": bool(eligible),
         "one_click_block": block, "requires_fill_date_check": bool(need_check),
         "nearby_journal_ids": sorted(nearby), "possible_duplicate_of": dup,
+        "differs_on": list(differs_on),
         "text": text,
     }
 
@@ -837,7 +838,10 @@ def match_journal_to_broker(journal, fills, synced_at, now_et) -> "list | None":
     `broker_price`, `holdings_effect` (journal-over shares; positive = the journal
     overstates holdings; None for unresolved / unchecked / info), `correction_shape`,
     `one_click_eligible`, `one_click_block`, `requires_fill_date_check`,
-    `nearby_journal_ids`, `possible_duplicate_of`, `text` (plain; the caller escapes).
+    `nearby_journal_ids`, `possible_duplicate_of`, `differs_on` (a list; for a
+    LINKED_DIFFERS finding the fields that differ, from "ticker", "action", "shares",
+    "price", "date" in that order, empty for every other kind), `text` (plain; the caller
+    escapes).
 
     Sorted by (rank, newest first, ticker, ...). Every unlinked in-window journal
     row and every in-window equity fill appears in exactly one finding.
@@ -894,17 +898,23 @@ def match_journal_to_broker(journal, fills, synced_at, now_et) -> "list | None":
         if j is None:
             continue
         diffs = []
+        on = []                   # the tokens of `differs_on`, in the order of the checks
         if j["ticker"] != f["ticker"]:
+            on.append("ticker")
             diffs.append(f"ticker {j['ticker']} in the journal, {f['ticker']} in Robinhood")
         if j["act"] != f["act"]:
+            on.append("action")
             diffs.append(f"action {j['act']} in the journal, {f['act']} in Robinhood")
         if not _tec._same_shares(j["shares"], f["shares"]):
+            on.append("shares")
             diffs.append(f"share count {_sh(j['shares'])} in the journal, {_sh(f['shares'])} "
                          "in Robinhood")
         if not _tec._same_price(j["price"], f["price"]):
+            on.append("price")
             diffs.append(f"price {_px(j['price'])} in the journal, {_px(f['price'])} "
                          "in Robinhood")
         if j["date"] not in (f["placed"], f["session"]):
+            on.append("date")
             diffs.append(f"date {_fd(j['date'])} in the journal, {_fd(f['session'])} in "
                          "Robinhood")
         if not diffs:
@@ -915,7 +925,7 @@ def match_journal_to_broker(journal, fills, synced_at, now_et) -> "list | None":
                 f"but they differ: {'; '.join(diffs)}.")
         findings.append(_finding(
             ctx, KIND_LINKED_DIFFERS, j["ticker"], j["act"], [j], [f], text,
-            holdings=_holdings(j["act"], j["shares"], f["shares"])))
+            holdings=_holdings(j["act"], j["shares"], f["shares"]), differs_on=on))
 
     # Steps 1 to 4, per group.
     for key in sorted(set(pool_j) | set(pool_f)):

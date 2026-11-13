@@ -1151,6 +1151,13 @@ _GATE_FILES = {
     # Trade" and "Already logged" is disabled or needs a tick; a wrong call lets a
     # fill be logged twice or dismissed while it is missing from the journal.
     "stock_analyzer/pending_import_verdict.py",
+    # Added 2026-11-12 (TJDate U8a): the pure view of the journal-vs-Robinhood
+    # comparison -- which differences the Home line counts and at which tier
+    # (warning only when share counts change), which it leaves to the broker-drift
+    # notice, how 💰 Account groups them, and when "Log This Trade" is offered for a
+    # fill that is in no journal row; a wrong call hides a missing trade or lets a
+    # fill be logged twice.
+    "stock_analyzer/journal_match_view.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per
