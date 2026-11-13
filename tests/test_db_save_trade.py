@@ -158,6 +158,55 @@ def test_save_trade_missing_decision_context_column_degrades_and_retries():
     assert ok is True and not isinstance(ok, tuple) and not isinstance(ok, dict)
 
 
+def test_save_trade_missing_fill_time_typed_column_retry_drops_every_optional_column():
+    """RecTime: the retry after an error naming `fill_time_typed` is DROP-ALL,
+    not drop-the-named-column. db.py strips every optional column present in the
+    record (`_to_drop = {c for c in _optional if c in record}`), so the trade is
+    saved but loses `broker_txn_id` (Tier-1 dedup / broker link) and
+    `idempotency_key` (double-submit guard) along with `fill_time_typed`.
+
+    This pins TODAY's behaviour on purpose. It is why the DDL
+    `docs/sql/trades-fill-time-typed.sql` must be applied BEFORE any writer
+    sends the field (plan docs/plans/fill-time-typed.md S1, C2). The latent class
+    has its own follow-up (drop only the named column); when that ships this
+    test must change deliberately, to assert broker_txn_id and idempotency_key
+    SURVIVE."""
+    exc = Exception("Could not find the 'fill_time_typed' column of 'trades' in the schema cache")
+    fake = _FakeClient(raise_exc=exc, raise_on_call=1)
+    import stock_analyzer.db as _db_mod
+    _db_mod._CLIENT = fake
+    record = {"ticker": "AAPL", "action": "BUY", "shares": 1.0, "price": 10.0,
+              "fill_time_typed": True, "broker_txn_id": "snap-1",
+              "idempotency_key": "abc-123", "asset_type": "stock"}
+    try:
+        ok = db.save_trade(record)
+    finally:
+        _db_mod._CLIENT = None
+    assert ok is True
+    assert len(fake.calls) == 2
+    for col in ("fill_time_typed", "broker_txn_id", "idempotency_key", "asset_type"):
+        assert col in fake.calls[0]                   # first attempt carried it
+        assert col not in fake.calls[1]               # drop-all: all four gone
+    assert fake.calls[1] == {"ticker": "AAPL", "action": "BUY", "shares": 1.0,
+                             "price": 10.0}
+
+
+def test_save_trade_keeps_fill_time_typed_when_the_column_exists():
+    fake = _FakeClient()
+    import stock_analyzer.db as _db_mod
+    _db_mod._CLIENT = fake
+    try:
+        ok = db.save_trade({"ticker": "AAPL", "action": "BUY", "fill_time_typed": False})
+    finally:
+        _db_mod._CLIENT = None
+    assert ok is True
+    assert fake.calls == [{"ticker": "AAPL", "action": "BUY", "fill_time_typed": False}]
+
+
+def test_fill_time_typed_is_a_known_trade_column():
+    assert "fill_time_typed" in db._TRADE_COLS
+
+
 def test_save_trade_unrelated_unique_violation_not_swallowed(monkeypatch):
     """A unique violation on some OTHER constraint must still surface as a
     real failure -- only trades_idempotency_key_unique is treated as a

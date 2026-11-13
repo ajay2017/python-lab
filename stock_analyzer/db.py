@@ -1506,7 +1506,8 @@ def load_trades_or_none() -> "pd.DataFrame | None":
                     "lesson", "lesson_category", "user_thesis", "thesis_source",
                     "decision_context", "premortem_case_against",
                     "premortem_commitment", "premortem_trigger_price",
-                    "premortem_trigger_direction", "situational_category"):
+                    "premortem_trigger_direction", "situational_category",
+                    "fill_time_typed"):
             if col not in df.columns:
                 df[col] = None
         # asset_type backfills to "stock" (never "etf") via asset_type.
@@ -2284,7 +2285,8 @@ _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
                "lesson_category", "traded_at", "user_thesis", "thesis_source",
                "decision_context", "premortem_case_against", "premortem_commitment",
                "premortem_trigger_price", "premortem_trigger_direction",
-               "broker_txn_id", "situational_category", "asset_type"]
+               "broker_txn_id", "situational_category", "asset_type",
+               "fill_time_typed"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -2347,7 +2349,7 @@ def save_trade(record: dict) -> bool:
                      "premortem_case_against", "premortem_commitment",
                      "premortem_trigger_price", "premortem_trigger_direction",
                      "lesson_category", "idempotency_key", "broker_txn_id",
-                     "situational_category", "asset_type")
+                     "situational_category", "asset_type", "fill_time_typed")
         _any_optional = any(c in _err_str for c in _optional)
         if _any_optional:
             _to_drop = {c for c in _optional if c in record}

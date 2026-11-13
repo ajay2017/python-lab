@@ -142,6 +142,40 @@ def test_load_trades_or_none_preserves_real_etf_value(monkeypatch):
     assert list(out["asset_type"]) == ["etf"]
 
 
+def test_load_trades_or_none_backfills_missing_fill_time_typed_column(monkeypatch):
+    """RecTime: pre-DDL rows carry no `fill_time_typed`; it loads as NULL (never
+    False, never absent) and the derived kind falls back on the microsecond."""
+    rows = [
+        {"ticker": "AAPL", "action": "BUY", "shares": 1.0, "price": 100.0,
+         "traded_at": "2026-11-13T14:30:00+00:00"},
+        {"ticker": "AAPL", "action": "BUY", "shares": 1.0, "price": 100.0,
+         "traded_at": "2026-11-13T14:30:50.554958+00:00"},
+    ]
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: _FakeTradesClient(rows=rows))
+    out = db.load_trades_or_none()
+    assert out is not None
+    assert "fill_time_typed" in out.columns
+    assert all(v is None for v in out["fill_time_typed"])
+    assert list(out["traded_at_time_kind"]) == ["fill", "recorded"]
+
+
+def test_load_trades_or_none_preserves_a_recorded_fill_time_typed(monkeypatch):
+    rows = [
+        {"ticker": "AAPL", "action": "BUY", "shares": 1.0, "price": 100.0,
+         "traded_at": "2026-11-13T14:30:50.554958+00:00", "fill_time_typed": True},
+        {"ticker": "AAPL", "action": "BUY", "shares": 1.0, "price": 100.0,
+         "traded_at": "2026-11-13T14:30:00+00:00", "fill_time_typed": False},
+        {"ticker": "AAPL", "action": "BUY", "shares": 1.0, "price": 100.0,
+         "traded_at": "2026-11-13T14:31:00+00:00", "fill_time_typed": None},
+    ]
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: _FakeTradesClient(rows=rows))
+    out = db.load_trades_or_none()
+    assert list(out["traded_at_time_kind"]) == ["fill", "recorded", "fill"]
+    assert [None if v is None else bool(v) for v in out["fill_time_typed"]] == [True, False, None]
+
+
 def test_load_trades_or_none_read_failure_still_returns_none(monkeypatch):
     monkeypatch.setattr(db, "has_db", lambda: True)
     monkeypatch.setattr(

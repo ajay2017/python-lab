@@ -1158,6 +1158,12 @@ _GATE_FILES = {
     # fill that is in no journal row; a wrong call hides a missing trade or lets a
     # fill be logged twice.
     "stock_analyzer/journal_match_view.py",
+    # Added 2026-11-13 (RecTime C1, docs/plans/fill-time-typed.md): the one
+    # comparison of a trade's stored time with a broker sync's completion time
+    # (after / before / can't tell, by how the time was recorded); Capital vs
+    # Margin, the budget basis and the broker-drift excuse read it from C3/C4, so
+    # a wrong call counts a trade a second time against the anchor or the budget.
+    "stock_analyzer/sync_timing.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per

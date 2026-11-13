@@ -9,6 +9,7 @@ only provenance may authorise a rewrite). Pure dict/frame math, no I/O.
 """
 import os
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -554,3 +555,231 @@ def test_backdated_manual_buy_logged_after_a_newer_sell_still_replays_first():
     result = _db.recalculate_from_trades(pd.DataFrame(rows))
     assert result["warnings"] == []
     assert result["holdings_df"].empty
+
+
+# ─── traded_at_time_kind (RecTime C1, docs/plans/fill-time-typed.md S2) ─────
+
+def _kind(traded_at, typed="absent", notes=None, broker_txn_id=None):
+    """The kind of ONE row. typed: True / False / None, or "absent" for a frame
+    with no fill_time_typed column at all (a legacy frame)."""
+    r = _row(traded_at, notes=notes, broker_txn_id=broker_txn_id)
+    if typed != "absent":
+        r["fill_time_typed"] = typed
+    return tt.normalize_traded_at(pd.DataFrame([r]))["traded_at_time_kind"].iloc[0]
+
+
+def test_kind_typed_fill_time_is_fill():
+    assert _kind("2026-11-13T09:56:00-05:00", typed=True) == "fill"
+
+
+def test_kind_typed_false_with_microseconds_is_recorded():
+    assert _kind("2026-11-13T14:30:50.554958-05:00", typed=False) == "recorded"
+
+
+def test_kind_typed_false_microsecond_zero_is_still_recorded():
+    """The column beats the value fingerprint when it is recorded."""
+    assert _kind("2026-11-13T14:30:00-05:00", typed=False) == "recorded"
+
+
+def test_kind_16_00_anchor_with_false_or_null_is_placeholder():
+    for typed in (False, None, "absent"):
+        assert _kind("2026-11-13T16:00:00-05:00", typed=typed) == "placeholder"
+
+
+def test_kind_typed_16_00_is_a_fill():
+    assert _kind("2026-11-13T16:00:00-05:00", typed=True) == "fill"
+
+
+def test_kind_16_00_is_tested_on_the_et_wall_clock_across_dst():
+    # 16:00 EDT = 20:00Z, 16:00 EST = 21:00Z
+    assert _kind("2026-07-15T20:00:00+00:00", typed=None) == "placeholder"
+    assert _kind("2026-12-15T21:00:00+00:00", typed=None) == "placeholder"
+    # 20:00Z in winter is 15:00 EST, an ordinary time
+    assert _kind("2026-12-15T20:00:00+00:00", typed=None) == "fill"
+    # DST days themselves
+    assert _kind("2026-03-08T20:00:00+00:00", typed=None) == "placeholder"
+    assert _kind("2026-11-01T21:00:00+00:00", typed=None) == "placeholder"
+
+
+def test_kind_null_falls_back_on_the_microsecond():
+    assert _kind("2026-11-13T14:30:50.554958-05:00", typed=None) == "recorded"
+    assert _kind("2026-11-13T14:30:00-05:00", typed=None) == "fill"
+    assert _kind("2026-11-13T14:30:50.554958-05:00") == "recorded"      # no column
+    assert _kind("2026-11-13T14:30:00-05:00") == "fill"                 # no column
+
+
+def test_kind_16_00_with_microseconds_is_not_the_anchor():
+    assert _kind("2026-11-13T16:00:00.000001-05:00", typed=None) == "recorded"
+
+
+def test_kind_reanchored_import_is_placeholder_even_if_typed_true():
+    """A re-anchored row's time was invented here; no flag can make it a fill."""
+    r = _row("2026-07-16T00:00:00+00:00", broker_txn_id="s1")
+    r["fill_time_typed"] = True
+    out = tt.normalize_traded_at(pd.DataFrame([r]))
+    assert out["traded_at_time_kind"].iloc[0] == "placeholder"
+    assert bool(out["traded_at_time_known"].iloc[0]) is False
+
+
+def test_kind_legacy_midnight_import_without_provenance_is_a_fill_status_quo():
+    """Midnight UTC with no import marker is a genuine 19:00 ET fill by the
+    module's own corruption-boundary rule; microsecond 0 -> 'fill'."""
+    assert _kind("2026-07-16T00:00:00+00:00", typed=None) == "fill"
+
+
+def test_kind_unparseable_time_is_placeholder():
+    assert _kind("not-a-timestamp", typed=True) == "placeholder"
+    assert _kind("not-a-timestamp", typed=None) == "placeholder"
+
+
+def test_kind_on_the_no_provenance_fail_closed_path():
+    df = pd.DataFrame([
+        {"ticker": "A", "traded_at": "2026-11-13T09:56:00-05:00", "fill_time_typed": True},
+        {"ticker": "B", "traded_at": "2026-11-13T14:30:50.5-05:00", "fill_time_typed": False},
+        {"ticker": "C", "traded_at": "2026-11-13T16:00:00-05:00", "fill_time_typed": None},
+        {"ticker": "D", "traded_at": "junk", "fill_time_typed": True},
+    ])
+    out = tt.normalize_traded_at(df)
+    assert list(out["traded_at_time_kind"]) == ["fill", "recorded", "placeholder",
+                                                "placeholder"]
+    assert out["traded_at_time_known"].all()           # unchanged: fail-closed True
+    assert list(out["traded_at"]) == list(df["traded_at"])
+
+
+def test_kind_mixed_precision_frame_has_zero_nat_and_a_kind_for_every_row():
+    out = tt.normalize_traded_at(_mixed_frame())
+    assert out["traded_at_time_kind"].notna().all()
+    assert set(out["traded_at_time_kind"]) <= {"fill", "recorded", "placeholder"}
+    assert pd.to_datetime(out["traded_at"], utc=True, format="ISO8601").notna().all()
+
+
+def test_kind_mixed_offsets_and_precision_classify_per_row():
+    rows = [
+        _row("2026-11-13T09:56:00-05:00"),              # whole seconds -> fill
+        _row("2026-11-13T14:30:50.554958-05:00"),       # microseconds -> recorded
+        _row("2026-11-13T19:30:50.1+00:00"),            # 1 decimal -> recorded
+        _row("2026-11-13T16:00:00-05:00"),              # anchor -> placeholder
+    ]
+    out = tt.normalize_traded_at(pd.DataFrame(rows))
+    assert list(out["traded_at_time_kind"]) == ["fill", "recorded", "recorded",
+                                                "placeholder"]
+
+
+def test_kind_empty_frame_passes_through_unchanged():
+    empty = pd.DataFrame(columns=["ticker", "traded_at"])
+    out = tt.normalize_traded_at(empty)
+    assert out is empty and "traded_at_time_kind" not in out.columns
+
+
+def test_kind_reads_only_real_booleans_from_fill_time_typed():
+    """NaN / pd.NA / None are NULL, not False and not True (a column holding
+    True beside None arrives as an object column)."""
+    df = pd.DataFrame([
+        _row("2026-11-13T14:30:50.5-05:00"), _row("2026-11-13T14:30:00-05:00"),
+        _row("2026-11-13T14:30:00-05:00"),
+    ])
+    df["fill_time_typed"] = pd.Series([True, None, float("nan")], dtype=object)
+    out = tt.normalize_traded_at(df)
+    assert list(out["traded_at_time_kind"]) == ["fill", "fill", "fill"]
+    df["fill_time_typed"] = pd.Series([pd.NA, False, None], dtype=object)
+    out = tt.normalize_traded_at(df)
+    # NA with microseconds -> recorded (fallback); False -> recorded; None, us 0 -> fill
+    assert list(out["traded_at_time_kind"]) == ["recorded", "recorded", "fill"]
+
+
+def test_kind_accepts_a_nullable_boolean_dtype_column():
+    """pandas' nullable "boolean" dtype: True / <NA>. NA is NULL (fallback on
+    the microsecond), never False. The True row carries microseconds, so a
+    misread True (as NULL) would show as "recorded"."""
+    df = pd.DataFrame([_row("2026-11-13T14:30:50.5-05:00"),
+                       _row("2026-11-13T14:30:50.5-05:00"),
+                       _row("2026-11-13T14:30:00-05:00")])
+    df["fill_time_typed"] = pd.Series([True, pd.NA, pd.NA], dtype="boolean")
+    out = tt.normalize_traded_at(df)
+    assert list(out["traded_at_time_kind"]) == ["fill", "recorded", "fill"]
+
+
+def test_kind_accepts_numpy_bool_scalars_in_an_object_column():
+    # The np.True_ row carries microseconds: a misread True would be "recorded".
+    df = pd.DataFrame([_row("2026-11-13T14:30:50.5-05:00"),
+                       _row("2026-11-13T14:30:00-05:00"),
+                       _row("2026-11-13T14:30:00-05:00")])
+    df["fill_time_typed"] = pd.Series([np.True_, np.False_, None], dtype=object)
+    out = tt.normalize_traded_at(df)
+    assert list(out["traded_at_time_kind"]) == ["fill", "recorded", "fill"]
+
+
+def test_kind_does_not_read_truthy_non_booleans_as_typed():
+    """Strict read: 1 / "true" / 1.0 are not booleans, so they are NULL."""
+    df = pd.DataFrame([_row("2026-11-13T14:30:50.5-05:00"),
+                       _row("2026-11-13T14:30:50.5-05:00"),
+                       _row("2026-11-13T14:30:50.5-05:00")])
+    df["fill_time_typed"] = pd.Series([1, "true", 1.0], dtype=object)
+    out = tt.normalize_traded_at(df)
+    assert list(out["traded_at_time_kind"]) == ["recorded"] * 3     # NULL fallback
+
+
+def test_kind_accepts_a_bool_dtype_column():
+    df = pd.DataFrame([_row("2026-11-13T14:30:50.5-05:00"),
+                       _row("2026-11-13T14:30:00-05:00")])
+    df["fill_time_typed"] = [False, True]
+    out = tt.normalize_traded_at(df)
+    assert list(out["traded_at_time_kind"]) == ["recorded", "fill"]
+
+
+def test_kind_leaves_traded_at_time_known_exactly_as_before():
+    rows = [
+        _row("2026-07-16T00:00:00+00:00", broker_txn_id="s1"),    # re-anchored
+        _row("2026-11-13T14:30:50.5-05:00"),                      # untouched
+        _row("2026-11-13T16:00:00-05:00", notes="Robinhood import"),  # 16:00 import
+    ]
+    out = tt.normalize_traded_at(pd.DataFrame(rows))
+    assert list(out["traded_at_time_known"]) == [False, True, True]
+
+
+def test_kind_failure_is_isolated_and_everything_else_survives(monkeypatch):
+    """If the kind derivation raises, NO kind column is emitted, the re-anchor
+    and traded_at_time_known are exactly as before, and nothing propagates (the
+    loader's own try would otherwise fall back to the raw, un-repaired frame)."""
+    def _boom(*a, **k):
+        raise RuntimeError("synthetic kind failure")
+
+    monkeypatch.setattr(tt, "_time_kind_values", _boom)
+    rows = [_row("2026-07-16T00:00:00+00:00", broker_txn_id="s1"),
+            _row("2026-11-13T14:30:50.5-05:00")]
+    out = tt.normalize_traded_at(pd.DataFrame(rows))
+    assert "traded_at_time_kind" not in out.columns
+    assert list(out["traded_at_time_known"]) == [False, True]
+    assert out["traded_at"].iloc[0] == et_anchor_iso("2026-07-16")
+
+    # also on the fail-closed no-provenance path
+    nop = pd.DataFrame([{"ticker": "A", "traded_at": "2026-11-13T14:30:50.5-05:00"}])
+    out2 = tt.normalize_traded_at(nop)
+    assert "traded_at_time_kind" not in out2.columns
+    assert bool(out2["traded_at_time_known"].iloc[0]) is True
+
+
+def test_kind_failure_drops_a_stale_kind_column_from_the_input(monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(tt, "_time_kind_values", _boom)
+    df = pd.DataFrame([_row("2026-11-13T14:30:50.5-05:00")])
+    df["traded_at_time_kind"] = "fill"
+    out = tt.normalize_traded_at(df)
+    assert "traded_at_time_kind" not in out.columns
+
+
+def test_kind_does_not_use_a_hardcoded_16(monkeypatch):
+    """The anchor hour is read from the constant, not typed here."""
+    monkeypatch.setattr(tt, "IMPORTED_TRADE_ANCHOR_ET_HOUR", 15)
+    assert _kind("2026-11-13T15:00:00-05:00", typed=None) == "placeholder"
+    assert _kind("2026-11-13T16:00:00-05:00", typed=None) == "fill"
+
+
+def test_kind_input_frame_is_not_mutated():
+    df = pd.DataFrame([_row("2026-11-13T14:30:50.5-05:00")])
+    before = df.copy()
+    tt.normalize_traded_at(df)
+    pd.testing.assert_frame_equal(df, before)
+    assert "traded_at_time_kind" not in df.columns

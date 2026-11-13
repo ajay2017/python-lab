@@ -221,6 +221,25 @@ def normalize_traded_at(
     `load_trades_or_none`, so the column is ABSENT on an empty frame — read it
     with `.get`, not `df["traded_at_time_known"]`.
 
+    Also adds `traded_at_time_kind` (RecTime, `docs/plans/fill-time-typed.md`
+    S2): "fill" | "recorded" | "placeholder", saying what the stored time IS —
+    a real fill time, the moment Record was pressed (an UPPER BOUND on the
+    fill), or an app-invented time. First match wins:
+      1. "placeholder": re-anchored here, OR the ET wall clock is exactly the
+         import anchor (`is_placeholder_time`'s 16:00:00.000000) and
+         `fill_time_typed` is not True (a typed 16:00 is a fill), OR the time
+         is unparseable.
+      2. `fill_time_typed is True`  -> "fill".
+      3. `fill_time_typed is False` -> "recorded".
+      4. NULL / column absent (legacy row) -> value-only: microsecond != 0 ->
+         "recorded", microsecond == 0 -> "fill" (the status quo). Rewrites
+         nothing. Fingerprint: `st.time_input` and SQL repairs give microsecond
+         0; `now_et().isoformat()` and the DB's `now()` carry microseconds.
+    Emitted on the no-provenance fail-closed path too. Failure is isolated: if
+    the derivation raises, NO kind column is emitted (consumers read a missing
+    column as "fill", the status quo) and every other behaviour is unchanged.
+    `traded_at_time_known` is untouched by all of this.
+
     Passes `None` straight through: this sits inside the offline-sentinel path
     and must never convert "could not read" into "read and empty".
     """
@@ -239,6 +258,7 @@ def normalize_traded_at(
     has_broker = "broker_txn_id" in df.columns
     if not (has_notes or has_broker):
         df["traded_at_time_known"] = True
+        _attach_time_kind(df, None, None)
         return df
 
     _notes  = df["notes"]         if has_notes  else pd.Series([None] * len(df), index=df.index)
@@ -276,4 +296,94 @@ def normalize_traded_at(
             et_anchor_iso(d, int(anchor_hour)) for d in _ts[_touch].dt.date
         ]
     df["traded_at_time_known"] = [not t for t in _touch]
+    # Classified from the PRE-rewrite parse `_ts` (a re-anchored row is
+    # "placeholder" by `_touch`; every other row's value was not rewritten).
+    _attach_time_kind(df, _ts, _touch)
     return df
+
+
+# `traded_at_time_kind` values (RecTime S2). Read by `sync_timing`.
+KIND_FILL        = "fill"
+KIND_RECORDED    = "recorded"
+KIND_PLACEHOLDER = "placeholder"
+TIME_KINDS = (KIND_FILL, KIND_RECORDED, KIND_PLACEHOLDER)
+
+
+_NS_PER_MICROSECOND = 1_000
+_NS_PER_SECOND = 1_000_000_000
+_NS_PER_HOUR = 3_600 * _NS_PER_SECOND
+_NS_PER_DAY = 24 * _NS_PER_HOUR
+
+
+def _tri_state(v):
+    """`fill_time_typed` cell -> True / False / None (NULL, NaN, pd.NA, anything
+    that is not a real boolean). Strict on purpose: only a boolean counts."""
+    if v is True or v is np.True_:
+        return True
+    if v is False or v is np.False_:
+        return False
+    return None
+
+
+def _time_kind_values(df: "pd.DataFrame", ts, touch) -> "np.ndarray":
+    """The S2 classification for every row of `df`, vectorized (no per-row
+    `pd.to_datetime`; see the performance note in `normalize_traded_at`).
+
+    `ts` is the parsed UTC `traded_at` Series (parsed here when None), `touch`
+    the per-row "re-anchored by this call" list (all False when None).
+    """
+    n = len(df)
+    if ts is None:
+        ts = pd.to_datetime(df["traded_at"], utc=True, errors="coerce",
+                            format="ISO8601")
+    ok = ts.notna().to_numpy()
+    # ET wall-clock time of day as integer nanoseconds. One tz_convert plus one
+    # numpy mod; the four `.dt.hour/.minute/.second/.microsecond` accessors cost
+    # ~3x the vectorised parse on a 3000-row journal and tripped the speed test.
+    # The wall clock (not a fixed UTC hour) because 16:00 ET is 20:00Z in EDT
+    # and 21:00Z in EST. NaT rows hold an arbitrary int; `ok` masks them.
+    wall = ts.dt.tz_convert(_ET).dt.tz_localize(None)
+    tod_ns = np.mod(
+        wall.to_numpy().astype("datetime64[ns]").view("int64"),
+        _NS_PER_DAY,
+    )
+    # Reads IMPORTED_TRADE_ANCHOR_ET_HOUR, deliberately NOT this function's
+    # `anchor_hour` argument: the kind matches `is_placeholder_time`, which also
+    # tests the constant.
+    anchor = (tod_ns == int(IMPORTED_TRADE_ANCHOR_ET_HOUR) * _NS_PER_HOUR) & ok
+    # `.dt.microsecond != 0`  <=>  the sub-second part is at least 1 microsecond.
+    micro_nonzero = (tod_ns % _NS_PER_SECOND) >= _NS_PER_MICROSECOND
+
+    if "fill_time_typed" in df.columns:
+        tri = [_tri_state(v) for v in df["fill_time_typed"]]
+    else:
+        tri = [None] * n
+    is_true  = np.array([t is True for t in tri], dtype=bool)
+    is_false = np.array([t is False for t in tri], dtype=bool)
+    touched  = (np.array(touch, dtype=bool) if touch is not None
+                else np.zeros(n, dtype=bool))
+
+    placeholder = touched | ~ok | (anchor & ~is_true)
+    # np.select takes the FIRST matching condition, which is the spec's order.
+    kinds = np.select(
+        [placeholder, is_true, is_false, micro_nonzero],
+        [KIND_PLACEHOLDER, KIND_FILL, KIND_RECORDED, KIND_RECORDED],
+        default=KIND_FILL,
+    )
+    return kinds.astype(object)
+
+
+def _attach_time_kind(df: "pd.DataFrame", ts, touch) -> None:
+    """Add `traded_at_time_kind` to `df` in place, or emit NOTHING on failure.
+
+    Isolated from `normalize_traded_at`'s other duties on purpose: a bug here
+    must not take the frame (or the journal's re-anchor) down with it. A missing
+    column reads as "fill" downstream, which is today's behaviour. Any stale
+    kind column inherited from the input is dropped on failure so a consumer
+    can't read a kind that no longer matches the rows.
+    """
+    try:
+        df["traded_at_time_kind"] = _time_kind_values(df, ts, touch)
+    except Exception as _err:                    # noqa: BLE001 — see docstring
+        df.drop(columns=["traded_at_time_kind"], errors="ignore", inplace=True)
+        print(f"trade_time: traded_at_time_kind not derived, status quo: {_err}")
