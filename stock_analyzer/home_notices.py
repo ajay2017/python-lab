@@ -1,7 +1,7 @@
 """Home's "⚠️ Alerts" expander — a one-line notices summary (P1 of the Home
 redesign, docs/plans/home-redesign.md's 2026-10-06 "P1 + P2 designed" section).
 
-Pure, no Streamlit/DB/network. Records what each of the 16 existing Alerts-
+Pure, no Streamlit/DB/network. Records what each of the 17 existing Alerts-
 expander fill sites actually rendered (never a second opinion on severity,
 never a new cache read) and rolls that up into one plain-text line that can
 sit above the still-collapsed expander.
@@ -18,12 +18,12 @@ wording when this returns `None`.
 
 from __future__ import annotations
 
-# Declaration order of the 16 `_alert_ph_*` placeholders inside Home's
+# Declaration order of the 17 `_alert_ph_*` placeholders inside Home's
 # "⚠️ Alerts" expander (app.py). Drives `named`'s tie-break ordering —
 # NOT call order, NOT alphabetical.
 SOURCE_ORDER = (
-    "dayshock", "xcheck", "split", "structural", "drift", "thesis",
-    "systrust", "heldload", "stale", "dropped", "scorewithheld", "outage",
+    "dayshock", "xcheck", "split", "structural", "drift", "journalmatch",
+    "thesis", "systrust", "heldload", "stale", "dropped", "scorewithheld", "outage",
     "leverage", "pnldq", "crossasset", "debrief",
 )
 
@@ -33,6 +33,7 @@ SOURCE_LABELS = {
     "split":         "Stock split",
     "structural":    "Structural alert",
     "drift":         "Broker drift",
+    "journalmatch":  "Journal vs Robinhood",
     "thesis":        "Thesis under pressure",
     "systrust":      "System Trust",
     "heldload":      "Load failures",

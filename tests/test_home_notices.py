@@ -4,13 +4,13 @@ notices summary above the "⚠️ Alerts" expander) and its wiring into app.py.
 Two halves:
 1. `summarize_notices` / `notices_headline` pure-logic boundaries — empty
    input, tier merge, unknown-tier/source handling, deterministic ordering,
-   a simulated 16-source "busy day" (the logic-level stand-in for a
+   a simulated 17-source "busy day" (the logic-level stand-in for a
    multi-banner day that can't be forced to happen live), and a quiet day
    with only caption-tier entries (D4 — this must still produce a non-`None`
    muted result, never a blank page).
 2. AST-based wiring tests on app.py, same pattern as
    tests/test_act_today_view.py's split_defensive guards — every one of the
-   16 `_alert_ph_*` placeholders has a matching `_home_notice()` call
+   17 `_alert_ph_*` placeholders has a matching `_home_notice()` call
    reachable from its fill site, the 5 blocks that run on every render never
    call it as a bare top-level statement (it must be nested inside an If/For,
    or it would manufacture a false daily notice), the summary placeholder is
@@ -109,10 +109,10 @@ def test_deterministic_ordering_is_source_order_position_not_call_order_or_alpha
     ]
 
 
-def test_busy_day_all_16_sources_exact_named_and_n_notes_split():
+def test_busy_day_all_17_sources_exact_named_and_n_notes_split():
     # One realistic mixed-tier entry per source, covering every id in
     # SOURCE_ORDER -- the logic-level stand-in for a day where every one of
-    # the 16 Alerts-expander fill sites fires at once, which can't be forced
+    # the 17 Alerts-expander fill sites fires at once, which can't be forced
     # to happen live.
     tiers_by_source = {
         "dayshock":      "error",
@@ -120,6 +120,7 @@ def test_busy_day_all_16_sources_exact_named_and_n_notes_split():
         "split":         "warning",
         "structural":    "warning",
         "drift":         "caption",
+        "journalmatch":  "caption",
         "thesis":        "warning",
         "systrust":      "error",
         "heldload":      "caption",
@@ -138,7 +139,7 @@ def test_busy_day_all_16_sources_exact_named_and_n_notes_split():
 
     expected_errors   = ["dayshock", "systrust", "outage", "debrief"]
     expected_warnings = ["xcheck", "split", "structural", "thesis", "stale", "dropped", "pnldq"]
-    expected_notes    = ["drift", "heldload", "scorewithheld", "leverage", "crossasset"]
+    expected_notes    = ["drift", "journalmatch", "heldload", "scorewithheld", "leverage", "crossasset"]
 
     assert summary["tier"] == "error"
     assert summary["named"] == [SOURCE_LABELS[s] for s in expected_errors] + \
@@ -171,7 +172,7 @@ def test_quiet_day_only_caption_tier_still_produces_non_none_muted_result():
 # ── AST-based wiring tests on app.py ─────────────────────────────────────────
 #
 # Determined by reading app.py directly (not the plan doc's own estimate,
-# which may have drifted): of the 16 `with _alert_ph_X.container():` blocks,
+# which may have drifted): of the 17 `with _alert_ph_X.container():` blocks,
 # these 5 execute on EVERY Home render regardless of whether their condition
 # actually fires -- the real conditional lives one level deeper, inside an
 # If/For. An unguarded `_home_notice()` call directly in one of these blocks'
@@ -209,7 +210,7 @@ def _placeholder_source_ids(tree: ast.Module) -> list[str]:
     return ids
 
 
-def test_app_py_declares_exactly_the_16_expected_placeholders():
+def test_app_py_declares_exactly_the_17_expected_placeholders():
     # Sanity check that this test file's own expectations (SOURCE_ORDER)
     # haven't drifted from the real app.py placeholder set.
     tree = _parse_app_py()

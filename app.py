@@ -5036,6 +5036,9 @@ if page == "🏠 Home":
         # the number it caveats. Same declare-early/fill-late pattern as
         # _alert_ph_structural.
         _alert_ph_drift      = st.empty()
+        # TJDate U8c: the journal-vs-Robinhood line, right under the broker-drift
+        # notice it cross-references. Same declare-early/fill-late pattern.
+        _alert_ph_journalmatch = st.empty()
         # 2026-09-24: moved in from the end of Today's Brief (was rendering
         # below the Buy Candidates overflow, well past this expander) so this
         # awareness nudge groups with the other 5 instead of surfacing far
@@ -6125,6 +6128,82 @@ if page == "🏠 Home":
     # Published for the F-250 day-P&L captions below, which defer to this
     # banner for any ticker it already explains (see the qty_drift block).
     st.session_state["_broker_drift_cache"] = _drift_verdict
+
+    # ── TJDate U8c: Journal vs Robinhood (awareness only, never a gate) ──────
+    # Skipped entirely (nothing published, nothing rendered) with no broker
+    # linked. The strict reads + matcher run only when the memo key changes:
+    # today's ET date, the journal's signature, the two sync stamps, or the
+    # nonce an Account "Already logged" dismiss bumps. A failed read publishes
+    # None ("not checked") and drops the memo, so a failure is never cached.
+    # Plain text only; docs/plans/journal-vs-robinhood-u8.md "U8c".
+    _jm_linked = False
+    try:
+        _jm_linked = bool(snaptrade_client.has_snaptrade())
+    except Exception:
+        _jm_linked = False
+    if _jm_linked:
+        _jm_txn = _jm_full = None
+        try:
+            @st.cache_data(ttl=120, show_spinner=False)
+            def _cached_journal_sync_stamps():
+                try:
+                    _t = db.load_snaptrade_txn_synced_at_or_none()
+                except Exception:
+                    _t = None
+                try:
+                    _cfg = db.load_snaptrade_config()
+                    _f = None if _cfg is None else _cfg.get("last_full_sync_at")
+                except Exception:
+                    _f = None
+                return _t, _f
+
+            _jm_txn, _jm_full = _cached_journal_sync_stamps()
+            _jm_key = journal_match_view.memo_key(
+                _today_et(),
+                journal_match_view.journal_signature(st.session_state.get("trades_df")),
+                _jm_txn, _jm_full,
+                st.session_state.get("_journal_match_nonce", 0),
+            )
+            _jm_memo = st.session_state.get("_journal_match_memo")
+            # Memo hit (same key): the published cache is still this key's
+            # result, so nothing is re-read or re-published.
+            if not (isinstance(_jm_memo, dict) and _jm_memo.get("key") == _jm_key):
+                _jm_in = _journal_match_inputs()
+                if _jm_in["journal"] is None or _jm_in["fills"] is None:
+                    st.session_state["_journal_match_cache"] = None
+                    st.session_state.pop("_journal_match_memo", None)
+                else:
+                    # Judge with the SAME cached stamp that went into _jm_key and
+                    # goes to home_line, never _jm_in["synced"]: a fresh read that
+                    # failed would make the matcher judge nothing while the key
+                    # still holds a good stamp, and that degraded result would be
+                    # memoized under it.
+                    _jm_found = journal_broker_match.match_journal_to_broker(
+                        _jm_in["journal"], _jm_in["fills"], _jm_txn, _jm_in["now"])
+                    if isinstance(_jm_found, list):
+                        st.session_state["_journal_match_cache"] = _jm_found
+                        st.session_state["_journal_match_memo"] = {
+                            "key": _jm_key, "checked_at": _now_et().isoformat()}
+                    else:
+                        # A None / non-list result is never memoized.
+                        st.session_state["_journal_match_cache"] = None
+                        st.session_state.pop("_journal_match_memo", None)
+        except Exception:
+            st.session_state["_journal_match_cache"] = None
+            st.session_state.pop("_journal_match_memo", None)
+        try:
+            _jm_line = journal_match_view.home_line(
+                _get_or_offline(st.session_state, "_journal_match_cache"),
+                _drift_verdict, _jm_txn, _jm_full, True)
+        except Exception:
+            _jm_line = None
+        if _jm_line is not None:
+            with _alert_ph_journalmatch.container():
+                if _jm_line["tier"] == "warning":
+                    st.warning(_jm_line["text"])
+                else:
+                    st.caption(_jm_line["text"])
+                _home_notice("journalmatch", _jm_line["tier"])
 
     # Publish Tier-B to session_state so 🧾 Summary shows the SAME number
     # instead of independently recomputing the cheaper held-only mark — two
@@ -45545,7 +45624,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 **7. ⚡ Broker Sync (optional) — automates the two manual habits above for Robinhood.** Open the 💰 Account page's **"🔌 Brokerage Trend"** tab for the "⚡ Broker Sync" section, which connects Robinhood via **SnapTrade** (a middleman service — the app never sees your Robinhood login). Once connected, a background job keeps your **cash balance** current automatically (the "Cash as of" line at the top of the Account page shows when it last synced), and shows:
 - **Position drift** — a live comparison of what Robinhood actually holds vs. what's logged in this app (three buckets: Robinhood-only, App-only, quantity mismatches). Awareness only — it never edits your trades or holdings for you; you reconcile it yourself the same way you always have.
 - **Pending trade imports** — buy/sell activity Robinhood reports that couldn't be auto-matched to a trade you already logged (the auto-match requires an exact date and price, so a manually-logged trade with a slightly different date or price can land here; its verdict then tells you it is already in your journal). This is a **different, stricter check than Position Drift above** — a row can appear here even when that ticker's drift is completely clean. Each pending fill is compared, one by one, with your journal, and its row says which of these it is: **✅ Already in your journal**, **⚠️ In your journal, but the details differ** (a different date, price or share count), **🆕 Not in your journal**, or a plain note that it is unclear, couldn't be compared, is an option trade, is older than the comparison window, or wasn't compared this render (each with its reason). A line under the list says how far the comparison reaches, which is the last completed transaction sync. The buttons follow the verdict. Nothing is written automatically: **"Log This Trade →"** opens the Trade Journal with ticker/shares/price/date already locked in from the real fill — you still choose a trigger reason and write the required pre-mortem (labeled "Retrospective" since the trade already happened), same as any other Buy. It is switched off when the fill is already in your journal (logging it would count it twice) or is an option trade, and the row says why. When the comparison names a journal row that could already be this fill, it asks you to tick "I've checked #N: this fill is a separate trade" first. **"Already logged"** clears the row from Pending Imports and never logs or edits a trade; it is the main button when the fill is already in your journal or is an option trade, and when the comparison says the fill is not in your journal it asks you to tick "I've checked: this fill is already in my journal under a row the comparison didn't match" first. When your journal or Robinhood's records couldn't be read, the rows say so and both buttons stay plain, so check each fill in Robinhood and 📋 History yourself. A ✗ button lets you back out of a locked import at any point without logging it. Since 2026-11-07 the sync dates each fill by its US Eastern trading day (a fill after 8 PM ET no longer lands on the next day), and a pending row whose fill the sync has linked to a trade in your journal usually clears itself on the next sync (until it does, its row says the fill is in your journal).
-- **🧾 Journal vs Robinhood** — below Pending Imports, your recent journal rows are compared with Robinhood's own fill records, including fills you marked "Already logged". The list says what differs (a Robinhood fill missing from your journal, a journal row with no Robinhood fill, a different share count, price or date), where the dates differ but the journal may be right, what couldn't be matched automatically, and, folded away, what isn't compared yet and what agrees. Each item that needs a look says what to check in Robinhood, and each item says the date it leaves the comparison; the line above the list names the window. A fill still waiting in Pending Imports isn't listed again: the summary line counts it ("N more are in 📥 Pending Imports above"), and when the Pending Imports list couldn't be read every fill is listed here instead. Nothing is changed automatically, and a correction that also repairs past account figures isn't built yet. The one action is **"Log This Trade →"** for a Robinhood fill that is in no journal row but was marked Already logged earlier, or shows as logged with no journal row linked to it: tick that you've checked first. It is switched off, and the item says why, when a matching fill in Pending Imports above offers Log for the same trade, or when Robinhood's record for the fill couldn't be found.
+- **🧾 Journal vs Robinhood** — below Pending Imports, your recent journal rows are compared with Robinhood's own fill records, including fills you marked "Already logged". The list says what differs (a Robinhood fill missing from your journal, a journal row with no Robinhood fill, a different share count, price or date), where the dates differ but the journal may be right, what couldn't be matched automatically, and, folded away, what isn't compared yet and what agrees. Each item that needs a look says what to check in Robinhood, and each item says the date it leaves the comparison; the line above the list names the window. A fill still waiting in Pending Imports isn't listed again: the summary line counts it ("N more are in 📥 Pending Imports above"), and when the Pending Imports list couldn't be read every fill is listed here instead. Nothing is changed automatically, and a correction that also repairs past account figures isn't built yet. The one action is **"Log This Trade →"** for a Robinhood fill that is in no journal row but was marked Already logged earlier, or shows as logged with no journal row linked to it: tick that you've checked first. It is switched off, and the item says why, when a matching fill in Pending Imports above offers Log for the same trade, or when Robinhood's record for the fill couldn't be found. On 🏠 Home, one line in the ⚠️ Alerts area, under the broker-drift notice, points here: a warning when a difference changes share counts, a quieter note when only a price or date differs, a "not checked" note when your journal or Robinhood's fills couldn't be read, and nothing when there is nothing to say (it never says "all clear"). A share-count difference the broker-drift notice already shows isn't counted again; the line points to that notice instead.
 - **Cash Activity** — a trend of dividends, interest, and fees, purely for visibility (it never feeds your Growth/Return numbers above — those stay driven by the deposits/withdrawals you log). Pick **View by** (Monthly / Quarterly / Yearly) and **Range** (Last 12 months / This year / All time); the YTD lines under the chart always cover Jan 1 to today whatever you pick. Bars are signed: dividends and interest earned above zero, **margin interest** and fees below, so a Gold credit never hides that month's margin interest. The broker sync labels margin interest as a "fee"; since your only genuine fee is the annual Gold fee, those charges are counted as margin interest and listed under the chart. The chart pulls from your **SnapTrade broker sync**; your **Robinhood statement** is the source of truth, so upload it via the "📥 Import from Robinhood Statement" expander below the chart (download a CSV from your broker's Statements page) and its rows replace any matching broker-synced ones. A **Realized P&L (trades)** line is overlaid on the same chart, showing how much your closed trades actually made or lost each month — the same avg-cost figure your 📒 Trade Journal's Monthly Realized P&L Trend already shows, so the two never disagree. Hover any month to see dividends, interest, fees, and realized P&L together in one tooltip. A **"📋 Last statement import"** caption shows how current your statement upload is and how many broker-synced events haven't been cross-checked against one yet; a **"⚠️ possible unreconciled duplicate(s)"** expander appears only if the app finds a broker-sync event and a statement event that look like the same real transaction but weren't automatically recognized as one — worth a manual look, never something the app merges or hides on its own.
 
 Setup is a one-time, three-step process shown on the page itself (it needs a free SnapTrade Personal API Key and one Railway environment variable pair — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.

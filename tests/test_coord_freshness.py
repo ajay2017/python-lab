@@ -305,6 +305,7 @@ _SELF_CONSUMED_BY_PRODUCER = {
     "_day_shock_cache",          # Home only
     "_grow_composites_coverage", # Home only
     "_broker_drift_cache",       # Home only
+    "_journal_match_cache",      # Home only; memo key holds the journal signature + sync stamps
     "_news_feed_cache",          # Home publishes; feed health is not book-derived
 }
 
