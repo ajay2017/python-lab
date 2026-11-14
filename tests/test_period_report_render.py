@@ -198,6 +198,26 @@ def _fn_def(name):
     return next(n for n in _TREE.body if isinstance(n, ast.FunctionDef) and n.name == name)
 
 
+def test_m_usd_inside_markdown_text_escapes_the_dollar():
+    # Live 2026-11-14: the S3 period-end caption printed "cushion $2,014 (up $653"
+    # with both `$` eaten as a LaTeX pair. Any _m_usd(...) whose text lands in a
+    # markdown-rendered call must pass md=True; st.metric values/deltas and
+    # dataframe cells are not markdown and stay unescaped.
+    md_calls = {"caption", "markdown", "info", "warning", "success", "error", "write"}
+    bad = []
+    for n in ast.walk(_TREE):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr in md_calls):
+            continue
+        for sub in ast.walk(n):
+            if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                    and sub.func.id == "_m_usd"
+                    and not any(k.arg == "md" and isinstance(k.value, ast.Constant)
+                                and k.value.value is True for k in sub.keywords)):
+                bad.append(f"line {sub.lineno}: {ast.unparse(sub)}")
+    assert bad == [], bad
+
+
 def test_every_period_dollar_goes_through_the_masking_helper():
     # the helper masks real values via _m and leaves None readable ("unknown")
     helper = ast.unparse(_fn_def("_m_usd"))

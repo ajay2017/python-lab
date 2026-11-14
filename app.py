@@ -42856,9 +42856,9 @@ elif page == "📄 Reports":
                                 _pld_cu = _pld["cushion_end"]
                                 st.caption(
                                     f"At the period end ({_pld['end_date']}): cushion "
-                                    + (_m_usd(_pld_cu) if _pld_cu is not None else "—")
+                                    + (_m_usd(_pld_cu, md=True) if _pld_cu is not None else "—")
                                     + (f" ({'down' if _pld['cushion_delta'] < 0 else 'up'} "
-                                       f"{_m_usd(abs(_pld['cushion_delta']))} since "
+                                       f"{_m_usd(abs(_pld['cushion_delta']), md=True)} since "
                                        f"{_pld['start_date']})" if _pld["cushion_delta"] is not None else "")
                                     + " · call distance "
                                     + (f"{_pld_cd:.1f}%" if _pld_cd is not None else "—")
