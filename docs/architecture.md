@@ -1142,7 +1142,7 @@ CREATE TABLE account_flows (
 
 ```sql
 CREATE TABLE thesis_reviews (
-    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id          UUID        PRIMARY KEY,       -- production rows carry UUIDs (seen 2026-11-14); this doc said BIGINT IDENTITY before; the column default isn't recorded here
     ticker      TEXT        NOT NULL,
     trade_date  DATE,                          -- the BUY lot whose thesis is reviewed
     reviewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),

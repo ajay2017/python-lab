@@ -45617,7 +45617,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 #### Deep track — Claude (reflection & narrative)
 
-- **📌 Thesis Review — "is my reason for owning this still true?"** For each holding with a thesis, Claude weighs the original reason against current evidence — recent headlines, the fundamental and technical trend, the last earnings result — and labels it **INTACT**, **WEAKENING**, or **BROKEN** with a short written read. Deliberately conservative: leans WEAKENING when unsure; BROKEN needs a clear contradiction in the evidence. **BROKEN does not sell anything** — it's awareness that your original reason has changed; Trim/Exit protection fires on its own. Reviews refresh weekly and on demand.
+- **📌 Thesis Review — "is my reason for owning this still true?"** For each holding with a thesis, Claude weighs the original reason against current evidence — recent headlines, the fundamental and technical trend, the last earnings result — and labels it **INTACT**, **WEAKENING**, or **BROKEN** with a short written read. Deliberately conservative: leans WEAKENING when unsure; BROKEN needs a clear contradiction in the evidence. **BROKEN does not sell anything** — it's awareness that your original reason has changed; Trim/Exit protection fires on its own. Reviews refresh weekly and on demand. Pressing **Re-evaluate** again the same day, with the same evidence and the same thesis, shows the review already saved (its time and verdict) instead of running and saving a second one; edit your thesis or wait for new evidence and it runs again. The earnings checkpoint's **Confirm** works the same way for the same report and the same status.
 
 - **🎯 Post-earnings Thesis Checkpoint** — Within 14 days of a held position reporting earnings, a prompt surfaces on AI Insights → Positions. Claude compares the result (actual vs estimated EPS, beat/miss, surprise %) against your thesis and suggests INTACT / WEAKENING / BROKEN. Confirming the suggestion writes a timestamped review row tagged as an earnings checkpoint. Suggestion-only — never auto-saves or auto-changes a recommendation.
 
@@ -46525,11 +46525,21 @@ elif page == "🧠 AI Insights":
                                     news_headlines=_ev["news_headlines"],
                                     analyst_consensus=_ac_consensus,
                                 )
-                                _result = _ta.review_thesis(
+                                # DQ-TSLA duplicate-press guard: same ticker + same evidence hash
+                                # already reviewed today (saved row, or this session's last save when
+                                # the DB read is offline) -> no second LLM call, no second row.
+                                _h = _ta.inputs_hash({**_ev_inputs, "user_thesis": str(_thesis or "").strip()})
+                                _dup_row = _ta.same_review_today(_ticker, _h, _thesis_reviews_df, _today_et())
+                                _dup_blocked = _dup_row is not None or (
+                                    st.session_state.get(f"_ai_reeval_last_{_ticker}") == (_today_et().isoformat(), _h)
+                                )
+                                _result = None if _dup_blocked else _ta.review_thesis(
                                     ticker=_ticker, user_thesis=_thesis,
                                     inputs=_ev_inputs, api_key=_ai_api_key,
                                 )
-                                if _result is None:
+                                if _dup_blocked:
+                                    st.info(_ta.same_review_notice(_dup_row))
+                                elif _result is None:
                                     st.error("AI review failed — LLM offline or API key invalid.")
                                 else:
                                     # Chunk B evidence-snapshot capture (raw
@@ -46592,10 +46602,11 @@ elif page == "🧠 AI Insights":
                                         "reviewed_at": _result["reviewed_at"],
                                         "status":      _result["status"],
                                         "summary":     _result["summary"],
-                                        "inputs_hash": _ta.inputs_hash(_ev_inputs),
+                                        "inputs_hash": _h,
                                         "evidence_snapshot": _snapshot,
                                     })
                                     if _saved:
+                                        st.session_state[f"_ai_reeval_last_{_ticker}"] = (_today_et().isoformat(), _h)
                                         st.success(f"Review saved — {_result['status']}")
                                         st.rerun()
                                     else:
@@ -46662,20 +46673,33 @@ elif page == "🧠 AI Insights":
                                         _trade_date = _trade_date_by_ticker.get(_ticker) or _today_et().isoformat()
                                         from datetime import timezone as _tz
                                         from datetime import datetime as _dt_now
-                                        _saved_ckpt = _ai_db.save_thesis_review({
+                                        # DQ-TSLA duplicate-press guard (same shape as Re-evaluate above).
+                                        _ckpt_h = f"earnings_{_er_rdate}"
+                                        _ckpt_dup_row = _ta.same_review_today(
+                                            _ticker, _ckpt_h, _thesis_reviews_df, _today_et(), status=_ckpt_status,
+                                        )
+                                        _ckpt_dup = _ckpt_dup_row is not None or (
+                                            st.session_state.get(f"_ai_earn_ckpt_last_{_ticker}") == (_today_et().isoformat(), _ckpt_h, _ckpt_status)
+                                        )
+                                        _saved_ckpt = None if _ckpt_dup else _ai_db.save_thesis_review({
                                             "ticker":      _ticker,
                                             "trade_date":  _trade_date,
                                             "reviewed_at": _dt_now.now(_tz.utc).isoformat(),
                                             "status":      _ckpt_status,
                                             "summary":     f"[Earnings checkpoint {_er_rdate}] {_ckpt_rat}",
-                                            "inputs_hash": f"earnings_{_er_rdate}",
+                                            "inputs_hash": _ckpt_h,
                                             # This checkpoint path (generate_earnings_thesis_update)
                                             # has no evidence bundle computed at all — a deliberate,
                                             # disclosed Chunk B gap, not a fabricated bundle built
                                             # just to fill this field.
                                             "evidence_snapshot": None,
                                         })
-                                        if _saved_ckpt:
+                                        if _ckpt_dup:
+                                            st.info(_ta.same_review_notice(
+                                                _ckpt_dup_row, checkpoint=True, report_date=_er_rdate))
+                                            st.session_state.pop(_earn_ckpt_key, None)  # drop the dead Confirm card
+                                        elif _saved_ckpt:
+                                            st.session_state[f"_ai_earn_ckpt_last_{_ticker}"] = (_today_et().isoformat(), _ckpt_h, _ckpt_status)
                                             st.success(f"Thesis updated to {_ckpt_status}.")
                                             st.session_state.pop(_earn_ckpt_key, None)
                                             st.rerun()

@@ -189,7 +189,15 @@ def build_review_inputs(
 
 
 def inputs_hash(inputs: dict) -> str:
-    """Stable hash of review inputs — used to detect staleness."""
+    """Stable hash of review inputs — used to detect staleness.
+
+    Manual Re-evaluate rows written from 2026-11-14 on hash the evidence PLUS
+    the thesis text (the caller adds a "user_thesis" key), so editing the
+    thesis and re-evaluating is never read as a duplicate. The weekly cron
+    (`run_batch_review`) rows stay evidence-only, so a manual row and a cron
+    row never compare equal; that is fine (same_review_today only needs a
+    manual press to match a manual row).
+    """
     serialized = json.dumps(inputs, sort_keys=True, default=str)
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
@@ -325,6 +333,104 @@ def already_reviewed_today(ticker: str, reviews_df, today_et: date) -> bool:
         except (TypeError, ValueError):
             continue
     return False
+
+
+def same_review_today(ticker: str, inputs_hash: str, reviews_df, today_et: date,
+                      status: str | None = None) -> dict | None:
+    """Guard for the manual Re-evaluate / earnings-checkpoint buttons (DQ-TSLA).
+
+    Returns {"reviewed_at": <raw value>, "status": <str or None>} for the most
+    recent row in `reviews_df` with the same ticker (strip/upper), the exact
+    same `inputs_hash`, and a `reviewed_at` on `today_et`'s ET calendar date;
+    None when there is no such row.
+
+    Unlike `already_reviewed_today` (ticker + day only, for the cron lane) this
+    also keys on the evidence hash, so a same-day re-review after the evidence
+    changed is still allowed. When `status` is given, a row also has to carry
+    that status (strip/upper compare); a row with no status never matches a
+    given status (earnings-checkpoint Confirm: same report, different status
+    is a different decision, not a duplicate). On 2026-10-27 a double press wrote two TSLA rows
+    30 s apart with an identical hash and paid for two LLM calls.
+
+    Fails toward "no match" (so it can never block a legitimate review) on a
+    None / empty frame, missing columns, a None / empty hash, or a row whose
+    `reviewed_at` is missing or unparseable.
+    """
+    import pytz
+
+    if reviews_df is None or getattr(reviews_df, "empty", True):
+        return None
+    cols = getattr(reviews_df, "columns", [])
+    if "ticker" not in cols or "reviewed_at" not in cols or "inputs_hash" not in cols:
+        return None
+    t = str(ticker or "").strip().upper()
+    if not t or not isinstance(inputs_hash, str) or not inputs_hash:
+        return None
+    want_status = str(status).strip().upper() if status is not None else None
+    et = pytz.timezone("America/New_York")
+    same_ticker = reviews_df[reviews_df["ticker"].astype(str).str.strip().str.upper() == t]
+    best_ts, best = None, None
+    for _, row in same_ticker.iterrows():
+        row_hash = row.get("inputs_hash")
+        if not isinstance(row_hash, str) or row_hash != inputs_hash:
+            continue
+        row_status = row.get("status") if "status" in cols else None
+        row_status = row_status if isinstance(row_status, str) and row_status else None
+        if want_status is not None and (
+            row_status is None or row_status.strip().upper() != want_status
+        ):
+            continue
+        raw = row.get("reviewed_at")
+        try:
+            ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts.astimezone(et).date() != today_et:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if best_ts is None or ts > best_ts:
+            best_ts = ts
+            best = {"reviewed_at": raw, "status": row_status}
+    return best
+
+
+def same_review_notice(match: dict | None, checkpoint: bool = False,
+                       report_date: str | None = None) -> str:
+    """Plain-text banner for a blocked duplicate review (see same_review_today).
+
+    `match` is same_review_today's return value, or None when only the
+    in-session marker matched (no saved row seen yet) -> "saved earlier in
+    this session". `report_date` names the earnings report when `checkpoint`.
+    Keeps the wording and the ET time formatting out of app.py.
+    """
+    import pytz
+
+    when = None
+    if match:
+        try:
+            ts = datetime.fromisoformat(str(match.get("reviewed_at")).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            when = ts.astimezone(pytz.timezone("America/New_York")).strftime("%I:%M %p").lstrip("0")
+        except (TypeError, ValueError):
+            when = None
+    if when:
+        status = match.get("status")
+        detail = f"{when} ET, {status}" if status else f"{when} ET"
+    else:
+        detail = "saved earlier in this session"
+    if checkpoint:
+        rd = str(report_date or "").strip()
+        report = f"the {rd} report" if rd else "the latest report"
+        return (
+            f"Already saved today as the checkpoint for {report} ({detail}). "
+            "That checkpoint still stands."
+        )
+    return (
+        f"Already reviewed today with the same evidence and thesis ({detail}). "
+        "That review still stands; Re-evaluate runs again once the evidence or your thesis changes."
+    )
 
 
 # ── Thesis authoring (F-5) ──────────────────────────────────────────────────

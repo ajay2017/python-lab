@@ -1032,3 +1032,223 @@ def test_generate_earnings_thesis_update_no_text_block_returns_none():
     _install_fake_anthropic_no_text_block()
     assert ta.generate_earnings_thesis_update(
         "AAPL", "Services growth carries the multiple.", {"eps_beat": True}, api_key="fake") is None
+
+
+# ── same_review_today / same_review_notice (DQ-TSLA duplicate-press guard) ───
+# 2026-10-27: a double press of Re-evaluate wrote two TSLA rows 30 s apart with
+# an identical inputs_hash and paid for two LLM calls.
+
+def _hash_df(rows):
+    cols = ["ticker", "reviewed_at", "status", "inputs_hash"]
+    return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+
+
+_TODAY = date(2026, 10, 27)
+
+
+def test_same_review_today_matches_same_ticker_hash_today_and_returns_latest():
+    df = _hash_df([
+        {"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00", "status": "INTACT", "inputs_hash": "h1"},
+        {"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:30+00:00", "status": "WEAKENING", "inputs_hash": "h1"},
+    ])
+    got = ta.same_review_today("TSLA", "h1", df, _TODAY)
+    assert got == {"reviewed_at": "2026-10-27T15:00:30+00:00", "status": "WEAKENING"}
+
+
+def test_same_review_today_latest_wins_regardless_of_row_order():
+    df = _hash_df([
+        {"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:30+00:00", "status": "WEAKENING", "inputs_hash": "h1"},
+        {"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00", "status": "INTACT", "inputs_hash": "h1"},
+    ])
+    assert ta.same_review_today("TSLA", "h1", df, _TODAY)["status"] == "WEAKENING"
+
+
+def test_same_review_today_different_hash_is_none():
+    df = _hash_df([{"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00", "status": "INTACT", "inputs_hash": "h1"}])
+    assert ta.same_review_today("TSLA", "h2", df, _TODAY) is None
+
+
+def test_same_review_today_other_ticker_is_none():
+    df = _hash_df([{"ticker": "AAPL", "reviewed_at": "2026-10-27T15:00:00+00:00", "status": "INTACT", "inputs_hash": "h1"}])
+    assert ta.same_review_today("TSLA", "h1", df, _TODAY) is None
+
+
+def test_same_review_today_yesterday_et_is_none():
+    df = _hash_df([{"ticker": "TSLA", "reviewed_at": "2026-10-26T15:00:00+00:00", "status": "INTACT", "inputs_hash": "h1"}])
+    assert ta.same_review_today("TSLA", "h1", df, _TODAY) is None
+
+
+def test_same_review_today_utc_next_day_after_8pm_et_still_counts_as_today_et():
+    # 2026-10-28 02:30 UTC == 2026-10-27 22:30 ET (EDT) -> today (10-27) in ET.
+    df = _hash_df([{"ticker": "TSLA", "reviewed_at": "2026-10-28T02:30:00+00:00", "status": "INTACT", "inputs_hash": "h1"}])
+    assert ta.same_review_today("TSLA", "h1", df, date(2026, 10, 27)) is not None
+    assert ta.same_review_today("TSLA", "h1", df, date(2026, 10, 28)) is None
+
+
+def test_same_review_today_utc_same_day_but_previous_et_day_does_not_count():
+    # 2026-10-27 03:00 UTC == 2026-10-26 23:00 ET -> NOT 10-27 in ET.
+    df = _hash_df([{"ticker": "TSLA", "reviewed_at": "2026-10-27T03:00:00+00:00", "status": "INTACT", "inputs_hash": "h1"}])
+    assert ta.same_review_today("TSLA", "h1", df, date(2026, 10, 27)) is None
+    assert ta.same_review_today("TSLA", "h1", df, date(2026, 10, 26)) is not None
+
+
+def test_same_review_today_ticker_case_and_whitespace_insensitive():
+    df = _hash_df([{"ticker": "tsla ", "reviewed_at": "2026-10-27T15:00:00+00:00", "status": "INTACT", "inputs_hash": "h1"}])
+    assert ta.same_review_today(" TSLA", "h1", df, _TODAY) is not None
+
+
+def test_same_review_today_none_empty_or_missing_columns_is_none():
+    assert ta.same_review_today("TSLA", "h1", None, _TODAY) is None
+    assert ta.same_review_today("TSLA", "h1", pd.DataFrame(), _TODAY) is None
+    assert ta.same_review_today("TSLA", "h1", _hash_df([]), _TODAY) is None
+    no_hash_col = pd.DataFrame([{"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00"}])
+    assert ta.same_review_today("TSLA", "h1", no_hash_col, _TODAY) is None
+    no_at_col = pd.DataFrame([{"ticker": "TSLA", "inputs_hash": "h1"}])
+    assert ta.same_review_today("TSLA", "h1", no_at_col, _TODAY) is None
+
+
+def test_same_review_today_unparseable_reviewed_at_is_ignored():
+    df = _hash_df([
+        {"ticker": "TSLA", "reviewed_at": "garbage", "status": "INTACT", "inputs_hash": "h1"},
+        {"ticker": "TSLA", "reviewed_at": None, "status": "INTACT", "inputs_hash": "h1"},
+    ])
+    assert ta.same_review_today("TSLA", "h1", df, _TODAY) is None
+
+
+def test_same_review_today_none_or_empty_hash_never_matches():
+    df = _hash_df([
+        {"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00", "status": "INTACT", "inputs_hash": None},
+        {"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00", "status": "INTACT", "inputs_hash": ""},
+    ])
+    assert ta.same_review_today("TSLA", None, df, _TODAY) is None
+    assert ta.same_review_today("TSLA", "", df, _TODAY) is None
+
+
+def test_same_review_today_missing_status_returns_none_status():
+    df = _hash_df([{"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00", "status": None, "inputs_hash": "h1"}])
+    assert ta.same_review_today("TSLA", "h1", df, _TODAY) == {
+        "reviewed_at": "2026-10-27T15:00:00+00:00", "status": None}
+
+
+def test_same_review_notice_formats_et_time_and_status():
+    # 15:05 UTC == 11:05 AM EDT; 13:09 UTC == 9:09 AM EDT (no leading zero).
+    m = {"reviewed_at": "2026-10-27T15:05:00+00:00", "status": "INTACT"}
+    assert ta.same_review_notice(m) == (
+        "Already reviewed today with the same evidence and thesis (11:05 AM ET, INTACT). "
+        "That review still stands; Re-evaluate runs again once the evidence or your thesis changes.")
+    m2 = {"reviewed_at": "2026-10-27T13:09:00+00:00", "status": "WEAKENING"}
+    assert "(9:09 AM ET, WEAKENING)" in ta.same_review_notice(m2)
+    m3 = {"reviewed_at": "2026-10-27T19:30:00+00:00", "status": "INTACT"}
+    assert "(3:30 PM ET, INTACT)" in ta.same_review_notice(m3)
+
+
+def test_same_review_notice_marker_only_says_saved_a_moment_ago():
+    msg = ta.same_review_notice(None)
+    assert msg.startswith("Already reviewed today with the same evidence and thesis (saved earlier in this session).")
+    assert "$" not in msg
+
+
+def test_same_review_notice_checkpoint_wording_and_unparseable_time():
+    m = {"reviewed_at": "2026-10-27T15:05:00+00:00", "status": "INTACT"}
+    assert ta.same_review_notice(m, checkpoint=True, report_date="2026-10-22") == (
+        "Already saved today as the checkpoint for the 2026-10-22 report "
+        "(11:05 AM ET, INTACT). That checkpoint still stands.")
+    assert "(saved earlier in this session)" in ta.same_review_notice(
+        {"reviewed_at": "garbage", "status": "INTACT"})
+
+
+def test_same_review_today_status_filter_same_report_different_status_is_none():
+    df = _hash_df([{"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00",
+                    "status": "INTACT", "inputs_hash": "earnings_2026-10-22"}])
+    assert ta.same_review_today("TSLA", "earnings_2026-10-22", df, _TODAY, status="WEAKENING") is None
+
+
+def test_same_review_today_status_filter_same_status_matches_case_insensitively():
+    df = _hash_df([{"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00",
+                    "status": "Intact", "inputs_hash": "earnings_2026-10-22"}])
+    got = ta.same_review_today("TSLA", "earnings_2026-10-22", df, _TODAY, status=" INTACT ")
+    assert got is not None and got["status"] == "Intact"
+
+
+def test_same_review_today_status_given_but_row_status_none_is_none():
+    df = _hash_df([{"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00",
+                    "status": None, "inputs_hash": "earnings_2026-10-22"}])
+    assert ta.same_review_today("TSLA", "earnings_2026-10-22", df, _TODAY, status="INTACT") is None
+
+
+def test_same_review_today_status_filter_skips_other_status_row_and_finds_matching_one():
+    df = _hash_df([
+        {"ticker": "TSLA", "reviewed_at": "2026-10-27T16:00:00+00:00", "status": "BROKEN", "inputs_hash": "h1"},
+        {"ticker": "TSLA", "reviewed_at": "2026-10-27T15:00:00+00:00", "status": "INTACT", "inputs_hash": "h1"},
+    ])
+    got = ta.same_review_today("TSLA", "h1", df, _TODAY, status="INTACT")
+    assert got == {"reviewed_at": "2026-10-27T15:00:00+00:00", "status": "INTACT"}
+
+
+def test_inputs_hash_with_thesis_text_is_deterministic_and_thesis_sensitive():
+    ev = {"technical": {"rsi": 55.0}, "fundamentals": {"pe": 20}, "news_headlines": ["a"]}
+    h_a1 = ta.inputs_hash({**ev, "user_thesis": "Services growth."})
+    h_a2 = ta.inputs_hash({"user_thesis": "Services growth.", **ev})   # key order irrelevant
+    h_b = ta.inputs_hash({**ev, "user_thesis": "Services growth, plus buybacks."})
+    assert h_a1 == h_a2
+    assert h_a1 != h_b
+    assert h_a1 != ta.inputs_hash(ev)   # evidence-only (cron) hash never equals the manual one
+
+
+# ── app.py wiring (no test imports app.py; AST via the shared cache) ─────────
+
+def _app_if_segment(button_key_marker):
+    """Source of the `if st.button(...)` statement whose test mentions the marker."""
+    import ast
+    from pathlib import Path
+    from tests._ast_cache import parse_file_cached, source_segment
+
+    path = Path(__file__).resolve().parent.parent / "app.py"
+    src = path.read_text(encoding="utf-8-sig")
+    hits = []
+    for node in ast.walk(parse_file_cached(path)):
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Call):
+            test_src = source_segment(src, node.test) or ""
+            if button_key_marker in test_src:
+                hits.append(source_segment(src, node) or "")
+    assert len(hits) == 1, f"expected exactly one button block for {button_key_marker!r}, got {len(hits)}"
+    return hits[0]
+
+
+def test_app_reevaluate_guards_before_llm_call_and_sets_session_marker():
+    seg = _app_if_segment('key=f"_ai_reeval_{_ticker}"')
+    i_guard = seg.index("_ta.same_review_today(")
+    i_llm = seg.index("_ta.review_thesis(")
+    i_save = seg.index("_ai_db.save_thesis_review(")
+    i_marker = seg.index('st.session_state[f"_ai_reeval_last_{_ticker}"] =')
+    i_rerun = seg.index("st.rerun()")
+    assert i_guard < i_llm < i_save < i_marker < i_rerun
+    assert "_ta.same_review_notice(" in seg
+    assert '"inputs_hash": _h,' in seg          # hash computed once, reused on save
+    assert seg.count("_ta.inputs_hash(") == 1
+    # the hash covers the thesis text, so edit-thesis -> Re-evaluate is never refused
+    hash_call = seg[seg.index("_ta.inputs_hash("):].split(chr(10), 1)[0]
+    assert "user_thesis" in hash_call
+    # the session marker is also read by the guard (survives an offline reviews read)
+    assert seg.index('st.session_state.get(f"_ai_reeval_last_{_ticker}")') < i_llm
+
+
+def test_app_earnings_checkpoint_guards_before_save_and_sets_session_marker():
+    seg = _app_if_segment('key=f"_ckpt_confirm_{_ticker}"')
+    i_guard = seg.index("_ta.same_review_today(")
+    i_save = seg.index("_ai_db.save_thesis_review(")
+    i_marker = seg.index('st.session_state[f"_ai_earn_ckpt_last_{_ticker}"] =')
+    i_rerun = seg.index("st.rerun()")
+    assert i_guard < i_save < i_marker < i_rerun
+    assert "same_review_notice(" in seg and "checkpoint=True, report_date=_er_rdate" in seg
+    assert "status=_ckpt_status" in seg                      # duplicate = hash AND status
+    assert "_ckpt_h, _ckpt_status)" in seg                   # marker carries the status
+    assert "st.session_state.pop(_earn_ckpt_key, None)" in seg
+    assert '"inputs_hash": _ckpt_h,' in seg
+    assert seg.index('st.session_state.get(f"_ai_earn_ckpt_last_{_ticker}")') < i_save
+
+
+def test_same_review_notice_checkpoint_without_report_date_says_latest_report():
+    msg = ta.same_review_notice(None, checkpoint=True, report_date="")
+    assert msg == ("Already saved today as the checkpoint for the latest report "
+                   "(saved earlier in this session). That checkpoint still stands.")
