@@ -5791,6 +5791,9 @@ if page == "🏠 Home":
                                     f"to {_sp['adj_shares']:g}sh @ ${_sp['adj_avg_cost']:,.2f}"
                                 ),
                                 "trigger_type": "REBALANCE",
+                                # RecTime: no fill time was typed (the row has no
+                                # traded_at; the DB stamps its own now()).
+                                "fill_time_typed": False,
                             })
                             st.session_state.pop("_budget_trades_cache", None)
                             st.session_state.trades_df = db.load_trades()
@@ -32820,6 +32823,10 @@ elif page == "📒 Trade Journal":
                 # below (TJDate C2a: no manual entry relies on the DB's now()).
                 if _is_broker_trade:
                     record["broker_txn_id"] = _broker_prefill.get("snaptrade_txn_id")
+                    # RecTime: the prefill form has no fill-time input (it is shown
+                    # only for a manual entry), and the date below is a 16:00 ET
+                    # anchor, so no fill time was typed.
+                    record["fill_time_typed"] = False
                     # Anchor to a real ET time rather than sending the bare
                     # date — Postgres would cast that to midnight UTC, i.e. the
                     # prior EVENING in ET, dating the trade a day early for
@@ -32876,6 +32883,9 @@ elif page == "📒 Trade Journal":
                             _entry_stage["logging_as"] = ""
                 else:
                     _tj_ft = st.session_state.get("_tj_fill_time")
+                    # RecTime: True only when the owner typed a fill time; a blank
+                    # one stores the record time (an upper bound, not the fill).
+                    record["fill_time_typed"] = _tj_ft is not None
                     _tj_sts = trade_entry_checks.same_ticker_same_day(
                         _dup_journal, ticker_input, _tj_picked_date)
                     try:
@@ -34264,6 +34274,9 @@ elif page == "📒 Trade Journal":
                                                 "traded_at":    _et_anchor_iso(_bi_row["Date"]),
                                                 "trigger_type": "MANUAL",
                                                 "notes":        f"{_NOTE_CSV_IMPORT} {_bi_today_str}",
+                                                # RecTime: an import never carries a
+                                                # typed fill time (16:00 ET anchor).
+                                                "fill_time_typed": False,
                                             }
                                         except (TypeError, ValueError):
                                             _bi_n_fail += 1
@@ -34623,6 +34636,9 @@ elif page == "📒 Trade Journal":
                                                 "traded_at":    _et_anchor_iso(_ss_row["Date"]),
                                                 "trigger_type": "MANUAL",
                                                 "notes":        f"{_NOTE_TEXT_IMPORT} {_ss_today_str}",
+                                                # RecTime: an import never carries a
+                                                # typed fill time (16:00 ET anchor).
+                                                "fill_time_typed": False,
                                             }
                                         except (TypeError, ValueError):
                                             _ss_n_fail += 1
