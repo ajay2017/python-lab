@@ -777,7 +777,8 @@ def test_sell_at_1400_before_a_same_day_buy_on_the_placeholder_is_blocked():
     assert f["text"] == (
         "At Thu Nov 5, 2:00 PM ET your journal holds only 0 OKTA: the BUY that covers this "
         "SELL is stored at a later time (a BUY logged without a fill time is placed at "
-        "4:00 PM ET), so the SELL would be replayed first and count as a sale of shares you "
+        "4:00 PM ET, or at the time you pressed Record if you logged it the same day with "
+        "the market open), so the SELL would be replayed first and count as a sale of shares you "
         "didn't hold. If this SELL's time is right, the BUY covering it is stored too late: "
         "delete it in \U0001F4CB History and re-log it with its fill time (a Robinhood-linked BUY "
         "would lose its link, so tick 'Allow SELL without a matching holding' instead). "
@@ -922,9 +923,14 @@ def test_replay_order_matches_the_db_replay_on_a_mixed_offset_journal():
 
 
 def test_captions():
-    assert tec.fill_time_caption("default_now") == "Leave blank to use the time you press Record."
+    assert tec.fill_time_caption("default_now") == (
+        "Blank records the time you press Record. Type Robinhood's fill time if you have it; "
+        "if you don't, leave it blank rather than estimate: the app treats a blank as unknown "
+        "and stays on the safe side.")
     assert tec.fill_time_caption("required") == "Required: enter the fill time from Robinhood (ET)."
-    assert tec.fill_time_caption("optional") == "Optional: blank places it at 4:00 PM ET."
+    assert tec.fill_time_caption("optional") == (
+        "Optional: blank places it at 4:00 PM ET. If you don't have Robinhood's fill time, "
+        "leave it blank rather than estimate.")
     assert tec.fill_time_caption("nonsense").startswith("Required")
     pre = ("Before 9:30 AM ET: pick the trade date (yesterday's after-hours fill or "
            "today's pre-market fill).")
@@ -1015,3 +1021,361 @@ def test_date_reset_notice_text():
     assert tec.DATE_RESET_NOTICE == ("The trade date was reset. Check the date "
                                      "and fill time, then press Record again.")
     assert "$" not in tec.DATE_RESET_NOTICE
+
+
+# ── RecTime C5 (code half): Q4 option B wording, caption reasons, same-day order ──
+
+CAP_DEFAULT_NOW = ("Blank records the time you press Record. Type Robinhood's fill time if you "
+                   "have it; if you don't, leave it blank rather than estimate: the app treats "
+                   "a blank as unknown and stays on the safe side.")
+CAP_OPTIONAL = ("Optional: blank places it at 4:00 PM ET. If you don't have Robinhood's fill "
+                "time, leave it blank rather than estimate.")
+CAP_REQUIRED = "Required: enter the fill time from Robinhood (ET)."
+OPEN_NOW = et(2026, 11, 9, 11, 0)       # a Monday, market open
+PAST_FRI = date(2026, 11, 6)
+
+
+def test_c5_caption_texts_are_verbatim_and_clean():
+    assert tec.fill_time_caption("default_now") == CAP_DEFAULT_NOW
+    assert tec.fill_time_caption("optional") == CAP_OPTIONAL
+    assert tec.fill_time_caption("required") == CAP_REQUIRED
+    for text in (CAP_DEFAULT_NOW, CAP_OPTIONAL, CAP_REQUIRED):
+        assert "$" not in text and "**" not in text
+
+
+def test_fill_time_caption_for_past_date_names_the_same_ticker_reason():
+    out = tec.fill_time_caption_for(PAST_FRI, OPEN_NOW, "OKTA", True)
+    assert out == ("Required: you already logged OKTA on Fri Nov 6, so type this fill time "
+                   "from Robinhood (ET) to keep the trades in the right order.")
+    assert "$" not in out and "**" not in out
+
+
+def test_fill_time_caption_for_unreadable_journal_says_so():
+    out = tec.fill_time_caption_for(PAST_FRI, OPEN_NOW, " okta ", None)
+    assert out == ("Required: the journal couldn't be read to check for other OKTA trades "
+                   "on Fri Nov 6, so type the fill time from Robinhood (ET).")
+    assert "$" not in out and "**" not in out
+
+
+def test_fill_time_caption_for_past_date_without_a_sibling_is_optional():
+    assert tec.fill_time_caption_for(PAST_FRI, OPEN_NOW, "OKTA", False) == CAP_OPTIONAL
+
+
+def test_fill_time_caption_for_today_open_stays_default_now_even_with_a_sibling():
+    """Owner decision 2026-11-14 (Q4 option B): pins that today's blank default is
+    not forced by a same-ticker row, and the requirement itself is unchanged."""
+    today = date(2026, 11, 9)
+    for sts in (True, False, None):
+        assert tec.fill_time_caption_for(today, OPEN_NOW, "OKTA", sts) == CAP_DEFAULT_NOW
+    assert tec.fill_time_requirement(today, OPEN_NOW, True) == "default_now"
+    assert tec.fill_time_requirement(today, OPEN_NOW, False) == "default_now"
+    assert tec.resolve_traded_at(today, None, OPEN_NOW, True) == OPEN_NOW.isoformat()
+
+
+def test_fill_time_caption_for_pre_open_future_and_after_close_use_the_plain_required():
+    pre = et(2026, 11, 9, 8, 0)
+    assert tec.fill_time_caption_for(PAST_FRI, pre, "OKTA", True) == CAP_REQUIRED
+    assert tec.fill_time_caption_for(PAST_FRI, pre, "OKTA", None) == CAP_REQUIRED
+    assert tec.fill_time_caption_for(date(2026, 11, 10), OPEN_NOW, "OKTA", True) == CAP_REQUIRED
+    after = et(2026, 11, 9, 20, 0)
+    assert tec.fill_time_caption_for(date(2026, 11, 9), after, "OKTA", True) == CAP_REQUIRED
+
+
+def test_fill_time_caption_for_blank_ticker_falls_back_to_the_plain_caption():
+    for tk in ("", "   ", None):
+        assert tec.fill_time_caption_for(PAST_FRI, OPEN_NOW, tk, True) == CAP_REQUIRED
+        assert tec.fill_time_caption_for(PAST_FRI, OPEN_NOW, tk, None) == CAP_REQUIRED
+        assert tec.fill_time_caption_for(PAST_FRI, OPEN_NOW, tk, False) == CAP_OPTIONAL
+
+
+def test_fill_time_caption_for_weekend_visit_past_date():
+    sat = et(2026, 11, 7, 12, 0)
+    assert tec.fill_time_caption_for(PAST_FRI, sat, "OKTA", True).startswith(
+        "Required: you already logged OKTA on Fri Nov 6")
+    assert tec.fill_time_caption_for(PAST_FRI, sat, "OKTA", False) == CAP_OPTIONAL
+
+
+def test_fill_time_missing_text_same_ticker_branch():
+    new = ("Enter the fill time (ET): you already logged OKTA that day, so the time is needed "
+           "to keep the trades in the right order.")
+    out = tec.fill_time_missing_text(PAST_FRI, OPEN_NOW, False, ticker="okta", same_ticker=True)
+    assert out == new and "$" not in out and "**" not in out
+    # blank ticker, a False / None sibling answer, pre-open, today and future keep the old text
+    assert tec.fill_time_missing_text(PAST_FRI, OPEN_NOW, False, ticker="", same_ticker=True) == PLAIN_MSG
+    assert tec.fill_time_missing_text(PAST_FRI, OPEN_NOW, False, ticker="OKTA", same_ticker=False) == PLAIN_MSG
+    assert tec.fill_time_missing_text(PAST_FRI, OPEN_NOW, False, ticker="OKTA", same_ticker=None) == PLAIN_MSG
+    assert tec.fill_time_missing_text(PAST_FRI, et(2026, 11, 9, 8, 0), False,
+                                      ticker="OKTA", same_ticker=True) == PLAIN_MSG
+    assert tec.fill_time_missing_text(date(2026, 11, 9), et(2026, 11, 9, 20, 0), False,
+                                      ticker="OKTA", same_ticker=True) == PLAIN_MSG
+    assert tec.fill_time_missing_text(date(2026, 11, 10), OPEN_NOW, False,
+                                      ticker="OKTA", same_ticker=True) == PLAIN_MSG
+    # the unreadable-journal message still wins, and the old calls are unchanged
+    assert tec.fill_time_missing_text(PAST_FRI, OPEN_NOW, True, ticker="OKTA",
+                                      same_ticker=True) == UNREADABLE_MSG
+    assert tec.fill_time_missing_text(PAST_FRI, OPEN_NOW, True) == UNREADABLE_MSG
+    assert tec.fill_time_missing_text(PAST_FRI, OPEN_NOW, False) == PLAIN_MSG
+    assert tec.fill_time_missing_text(None, OPEN_NOW, False, ticker="OKTA", same_ticker=True) == PLAIN_MSG
+
+
+def test_logging_as_text_blank_is_record_time():
+    rec = "2026-11-09T11:00:00-05:00"
+    plain = "Logging as Mon Nov 9, 11:00 AM ET"
+    assert tec.logging_as_text(rec, date(2026, 11, 9), False) == plain       # default unchanged
+    assert tec.logging_as_text(rec, date(2026, 11, 9), False, blank_is_record_time=False) == plain
+    out = tec.logging_as_text(rec, date(2026, 11, 9), False, blank_is_record_time=True)
+    assert out == "Logging as Mon Nov 9, 11:00 AM ET (no fill time: the time you pressed Record)"
+    assert "$" not in out and "**" not in out
+    # a typed time never reads as the record time
+    assert tec.logging_as_text(rec, date(2026, 11, 9), True, blank_is_record_time=True) == plain
+    # the placeholder keeps its own wording on both settings
+    ph = "2026-11-05T16:00:00-05:00"
+    want = "Logging as Thu Nov 5 (no fill time: placed at 4:00 PM ET)"
+    assert tec.logging_as_text(ph, date(2026, 11, 9), False, blank_is_record_time=True) == want
+    assert tec.logging_as_text(ph, date(2026, 11, 9), False) == want
+
+
+def test_sell_replay_text_names_the_record_time_case():
+    j = _journal(_jr(1, "OKTA", "BUY", 5, "2026-11-05T16:00:00-05:00"))
+    f = tec.sell_replay_finding(j, "OKTA", 5, "2026-11-05T14:00:00-05:00")
+    assert ("(a BUY logged without a fill time is placed at 4:00 PM ET, or at the time you "
+            "pressed Record if you logged it the same day with the market open)") in f["text"]
+    assert "$" not in f["text"] and "**" not in f["text"]
+
+
+# same_day_order_finding
+
+def _jk(id_, ticker, action, traded_at, kind=None):
+    r = _jr(id_, ticker, action, 5, traded_at)
+    if kind is not None:
+        r["traded_at_time_kind"] = kind
+    return r
+
+
+NEW_AT = "2026-11-02T11:30:00-05:00"        # Monday after the fall-back change, EST
+
+
+def _order_text(listed, action="BUY", clock="11:30 AM", tk="OKTA"):
+    return (f"You already logged {tk} today: {listed}. Without a fill time this {action} is "
+            f"placed at {clock} (when you pressed Record), so the journal orders them by "
+            "those times. If that order is wrong, type this trade's fill time from Robinhood.")
+
+
+def test_same_day_order_constants_and_shape():
+    assert tec.KIND_SAME_DAY_ORDER == "SAME_DAY_ORDER"
+    j = _journal(_jk(1, "OKTA", "SELL", "2026-11-02T09:56:00-05:00", "fill"))
+    f = tec.same_day_order_finding(j, "OKTA", "BUY", NEW_AT)
+    assert f["kind"] == "SAME_DAY_ORDER" and f["severity"] == "info" and f["group"] == "time"
+    assert set(f) == {"kind", "severity", "group", "text"}
+
+
+def test_same_day_order_none_when_no_same_ticker_row_today():
+    assert tec.same_day_order_finding(_journal(), "OKTA", "BUY", NEW_AT) is None
+    j = _journal(_jk(1, "CSCO", "BUY", "2026-11-02T10:00:00-05:00", "fill"),
+                 _jk(2, "OKTA", "BUY", "2026-11-01T10:00:00-05:00", "fill"),       # a row from yesterday
+                 _jk(3, "OKTA", "BUY", "2026-11-03T10:00:00-05:00", "fill"))       # and from tomorrow
+    assert tec.same_day_order_finding(j, "OKTA", "BUY", NEW_AT) is None
+
+
+def test_same_day_order_one_fill_row():
+    j = _journal(_jk(1, "OKTA", "SELL", "2026-11-02T09:56:00-05:00", "fill"))
+    f = tec.same_day_order_finding(j, "OKTA", "BUY", NEW_AT)
+    assert f["text"] == _order_text("SELL at 9:56 AM")
+    assert "$" not in f["text"] and "**" not in f["text"]
+    f2 = tec.same_day_order_finding(j, "OKTA", "SELL", NEW_AT)
+    assert f2["text"] == _order_text("SELL at 9:56 AM", action="SELL")
+
+
+def test_same_day_order_recorded_and_placeholder_rows_in_stored_time_order():
+    j = _journal(_jk(1, "OKTA", "SELL", "2026-11-02T16:00:00-05:00", "placeholder"),
+                 _jk(2, "OKTA", "BUY", "2026-11-02T10:15:00-05:00", "recorded"))
+    f = tec.same_day_order_finding(j, "OKTA", "SELL", NEW_AT)
+    assert f["text"] == _order_text(
+        "BUY at 10:15 AM (time you pressed Record), SELL (no fill time, placed at 4:00 PM)",
+        action="SELL")
+
+
+def test_same_day_order_more_than_three_rows_are_summarised():
+    rows = [_jk(i, "OKTA", "BUY", f"2026-11-02T{9 + i}:05:00-05:00", "fill") for i in (4, 1, 3, 2)]
+    f = tec.same_day_order_finding(_journal(*rows), "OKTA", "BUY", NEW_AT)
+    assert f["text"] == _order_text("BUY at 10:05 AM, BUY at 11:05 AM, BUY at 12:05 PM, and 1 more")
+    rows.append(_jk(9, "OKTA", "SELL", "2026-11-02T15:00:00-05:00", "fill"))
+    f = tec.same_day_order_finding(_journal(*rows), "OKTA", "BUY", NEW_AT)
+    assert f["text"].startswith("You already logged OKTA today: BUY at 10:05 AM, BUY at 11:05 AM, "
+                                "BUY at 12:05 PM, and 2 more. ")
+    f = tec.same_day_order_finding(_journal(*rows[:3]), "OKTA", "BUY", NEW_AT)
+    assert "more" not in f["text"]
+    assert tec._SAME_DAY_ORDER_LIST_MAX == 3
+
+
+def test_same_day_order_unreadable_journal_says_it_could_not_check():
+    want = ("Couldn't check for other OKTA trades today (the journal couldn't be read). If you "
+            "logged one, type this trade's fill time from Robinhood so the two stay in the right "
+            "order.")
+    import pandas as pd
+    bad = [None, [1, 2], {"a": 1},
+           pd.DataFrame([{"id": 1, "traded_at": NEW_AT}]),              # no ticker column
+           pd.DataFrame([{"id": 1, "ticker": "OKTA"}])]                 # no traded_at column
+    for j in bad:
+        f = tec.same_day_order_finding(j, "OKTA", "BUY", NEW_AT)
+        assert f == {"kind": "SAME_DAY_ORDER", "severity": "info", "group": "time", "text": want}
+    assert "$" not in want and "**" not in want
+
+
+def test_same_day_order_skips_a_row_with_an_unreadable_time():
+    j = _journal(_jk(1, "OKTA", "BUY", "garbage", "fill"),
+                 _jk(2, "OKTA", "BUY", None, "fill"),
+                 _jk(3, "OKTA", "SELL", "2026-11-02T09:56:00-05:00", "fill"))
+    f = tec.same_day_order_finding(j, "OKTA", "BUY", NEW_AT)
+    assert f["text"] == _order_text("SELL at 9:56 AM")
+    only_bad = _journal(_jk(1, "OKTA", "BUY", "garbage", "fill"))
+    assert tec.same_day_order_finding(only_bad, "OKTA", "BUY", NEW_AT) is None
+
+
+def test_same_day_order_ticker_is_case_and_space_insensitive():
+    j = _journal(_jk(1, " okta ", "SELL", "2026-11-02T09:56:00-05:00", "fill"))
+    for tk in ("OKTA", "okta", " Okta "):
+        f = tec.same_day_order_finding(j, tk, "BUY", NEW_AT)
+        assert f["text"] == _order_text("SELL at 9:56 AM")
+
+
+def test_same_day_order_dates_rows_on_the_et_day_across_utc_and_dst():
+    # 00:30Z on Nov 3 is 7:30 PM EST on Nov 2: same ET day as the new trade
+    j = _journal(_jk(1, "OKTA", "SELL", "2026-11-03T00:30:00+00:00", "fill"))
+    f = tec.same_day_order_finding(j, "OKTA", "BUY", NEW_AT)
+    assert f["text"] == _order_text("SELL at 7:30 PM")
+    # 2026-03-09, the Monday after the spring-forward change (EDT): 13:40Z is 9:40 AM
+    new_mar = "2026-03-09T11:30:00-04:00"
+    j2 = _journal(_jk(1, "OKTA", "BUY", "2026-03-09T13:40:00+00:00", "fill"),
+                  _jk(2, "OKTA", "BUY", "2026-03-08T13:40:00+00:00", "fill"))   # Sunday: other day
+    f2 = tec.same_day_order_finding(j2, "OKTA", "SELL", new_mar)
+    assert f2["text"] == _order_text("BUY at 9:40 AM", action="SELL")
+    # a UTC-stored new trade reads in ET too
+    f3 = tec.same_day_order_finding(j2, "OKTA", "SELL", "2026-03-09T15:30:00+00:00")
+    assert f3["text"] == _order_text("BUY at 9:40 AM", action="SELL")
+
+
+def test_same_day_order_missing_kind_column_reads_a_fill_unless_it_is_the_anchor():
+    j = _journal(_jr(1, "OKTA", "SELL", 5, "2026-11-02T09:56:00-05:00"),
+                 _jr(2, "OKTA", "BUY", 5, "2026-11-02T16:00:00-05:00"))
+    f = tec.same_day_order_finding(j, "OKTA", "BUY", NEW_AT)
+    assert f["text"] == _order_text("SELL at 9:56 AM, BUY (no fill time, placed at 4:00 PM)")
+
+
+def test_same_day_order_unreadable_new_time_raises():
+    j = _journal(_jk(1, "OKTA", "SELL", "2026-11-02T09:56:00-05:00", "fill"))
+    with pytest.raises(ValueError):
+        tec.same_day_order_finding(j, "OKTA", "BUY", "not a time")
+
+
+# app.py wiring (no test imports app.py; AST + source pins)
+
+def _app_tree_and_text():
+    from tests._ast_cache import parse_file_cached
+    app = Path(__file__).parent.parent / "app.py"
+    return parse_file_cached(app), app.read_text(encoding="utf-8")
+
+
+def _tec_calls(tree, name):
+    import ast
+    return [n for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == name
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == "trade_entry_checks"]
+
+
+def test_app_wiring_c5_manual_staging_and_caption_site():
+    import ast
+    tree, text = _app_tree_and_text()
+    # the caption site goes through fill_time_caption_for, never the bare caption
+    assert len(_tec_calls(tree, "fill_time_caption_for")) == 1
+    assert _tec_calls(tree, "fill_time_caption") == []
+    # the staging path calls the new finding exactly once, with the action
+    so = _tec_calls(tree, "same_day_order_finding")
+    assert len(so) == 1 and len(so[0].args) == 4
+    # the manual logging_as call passes blank_is_record_time=True; the broker call does not
+    la = _tec_calls(tree, "logging_as_text")
+    flagged = [c for c in la if any(
+        k.arg == "blank_is_record_time" and isinstance(k.value, ast.Constant) and k.value.value is True
+        for k in c.keywords)]
+    assert len(la) == 2 and len(flagged) == 1
+    # the missing-time error passes the ticker and the sibling answer
+    fm = _tec_calls(tree, "fill_time_missing_text")
+    assert len(fm) == 1 and {k.arg for k in fm[0].keywords} == {"ticker", "same_ticker"}
+    # the finding is only asked for when no fill time was typed and the time is not the placeholder
+    seg = text[text.index("RecTime Q4 (option B)"):
+               text.index("_entry_so = trade_entry_checks.same_day_order_finding")]
+    assert "_tj_ft is None" in seg and "is_placeholder_time" in seg
+    # advisory: its own try/except, nothing appended on failure
+    tail = text[text.index("_entry_so = trade_entry_checks.same_day_order_finding"):][:500]
+    assert "except Exception:" in tail
+    assert "trade_entry_checks.same_day_order_unchecked_finding(" in tail
+    assert "_entry_so = None" not in tail
+    assert "same_day_order_unchecked_finding(" in text[
+        text.index("RecTime Q4 (option B)"):text.index("_entry_pb = _tj_price_broker_stage(")]
+
+
+def test_app_user_guide_c5_wording_and_anchor_figure():
+    _, text = _app_tree_and_text()
+    new = ("During market hours a blank time records the moment you press Record. Type "
+           "Robinhood's fill time if you have it; if you don't, leave it blank rather than "
+           "estimate, because the app treats a blank as unknown and stays on the safe side. "
+           "If you already logged that ticker today, the confirm card shows the order the "
+           "trades will be stored in. On a past date the time is optional (blank places it at "
+           "4:00 PM ET) unless you already logged that ticker that day.")
+    assert text.count(new) == 1
+    assert "; on a past date the time is optional (blank places it at 4:00 PM ET)" not in text
+    assert C.IMPORTED_TRADE_ANCHOR_ET_HOUR == 16
+
+
+def test_same_day_order_a_placeholder_row_shows_the_time_it_is_stored_at():
+    """A Pending Imports row logged today sits at the 16:00 anchor, so a blank-time
+    hand log at 11:30 sorts BEFORE it: the card must show both times."""
+    j = _journal(_jk(1, "OKTA", "SELL", "2026-11-02T16:00:00-05:00", "placeholder"))
+    f = tec.same_day_order_finding(j, "OKTA", "BUY", NEW_AT)
+    assert f["text"] == _order_text("SELL (no fill time, placed at 4:00 PM)")
+    assert "SELL (no fill time, placed at 4:00 PM)" in f["text"]
+    assert "placed at 11:30 AM" in f["text"]
+    assert "$" not in f["text"] and "**" not in f["text"]
+
+
+def test_same_day_order_no_kind_column_uses_the_sync_classifier():
+    """With no `traded_at_time_kind` column the subset goes through
+    `trade_time.normalize_traded_at`: fill_time_typed False is a recorded time."""
+    j = _journal(dict(_jr(1, "OKTA", "SELL", 5, "2026-11-02T10:15:00-05:00"), fill_time_typed=False))
+    assert "traded_at_time_kind" not in j.columns
+    f = tec.same_day_order_finding(j, "OKTA", "BUY", NEW_AT)
+    assert f["text"] == _order_text("SELL at 10:15 AM (time you pressed Record)")
+    # typed True is a fill; a typed 16:00 is a fill, an untyped 16:00 a placeholder
+    j2 = _journal(dict(_jr(1, "OKTA", "SELL", 5, "2026-11-02T10:15:00-05:00"), fill_time_typed=True),
+                  dict(_jr(2, "OKTA", "BUY", 5, "2026-11-02T16:00:00-05:00"), fill_time_typed=True),
+                  dict(_jr(3, "OKTA", "BUY", 5, "2026-11-02T16:00:00-05:00"), fill_time_typed=None))
+    f2 = tec.same_day_order_finding(j2, "OKTA", "BUY", NEW_AT)
+    assert f2["text"] == _order_text(
+        "SELL at 10:15 AM, BUY at 4:00 PM, BUY (no fill time, placed at 4:00 PM)")
+    # a legacy row with microseconds (the record-time fingerprint) reads recorded
+    j3 = _journal(_jr(1, "OKTA", "SELL", 5, "2026-11-02T10:15:00.123456-05:00"))
+    f3 = tec.same_day_order_finding(j3, "OKTA", "BUY", NEW_AT)
+    assert f3["text"] == _order_text("SELL at 10:15 AM (time you pressed Record)")
+
+
+def test_same_day_order_falls_back_to_the_anchor_rule_if_the_classifier_raises(monkeypatch):
+    from stock_analyzer import trade_time
+
+    def boom(df):
+        raise RuntimeError("classifier down")
+    monkeypatch.setattr(trade_time, "normalize_traded_at", boom)
+    j = _journal(dict(_jr(1, "OKTA", "SELL", 5, "2026-11-02T10:15:00-05:00"), fill_time_typed=False),
+                 _jr(2, "OKTA", "BUY", 5, "2026-11-02T16:00:00-05:00"))
+    f = tec.same_day_order_finding(j, "OKTA", "BUY", NEW_AT)
+    assert f["text"] == _order_text("SELL at 10:15 AM, BUY (no fill time, placed at 4:00 PM)")
+
+
+def test_same_day_order_unchecked_factory_is_the_single_source_of_the_text():
+    f = tec.same_day_order_unchecked_finding(" okta ")
+    assert f == {"kind": "SAME_DAY_ORDER", "severity": "info", "group": "time",
+                 "text": ("Couldn't check for other OKTA trades today (the journal couldn't be "
+                          "read). If you logged one, type this trade's fill time from Robinhood "
+                          "so the two stay in the right order.")}
+    assert tec.same_day_order_finding(None, "OKTA", "BUY", NEW_AT) == tec.same_day_order_unchecked_finding("OKTA")
+    assert "$" not in f["text"] and "**" not in f["text"]

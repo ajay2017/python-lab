@@ -641,8 +641,10 @@ def test_c2a_review_fixes_are_wired_in_app():
     assert "trade_entry_checks.fill_time_missing_text(" in t
     assert "_dup_journal is None" in t
     seg = _slice(t, "trade_entry_checks.time_findings(", "if _entry_ok:\n                    try:")
-    # the replay check has its own try / except that keeps the time findings
-    assert seg.count("try:") == 2 and seg.count("except Exception:") == 2
+    # the replay check has its own try / except that keeps the time findings; so
+    # does the advisory SAME_DAY_ORDER finding (RecTime C5), the third guard
+    assert seg.count("try:") == 3 and seg.count("except Exception:") == 3
+    assert "trade_entry_checks.same_day_order_finding(" in seg
     assert "trade_entry_checks.sell_replay_unchecked_finding()" in seg
     assert seg.index("trade_entry_checks.logging_as_text(") < seg.index("sell_replay_finding(")
 

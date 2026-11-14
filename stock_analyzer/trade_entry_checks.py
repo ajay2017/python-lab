@@ -90,6 +90,8 @@ KIND_FUTURE = "FUTURE"
 # Finding kinds (journal replay)
 KIND_SELL_BEFORE_BUY = "SELL_BEFORE_BUY"
 KIND_SELL_REPLAY_UNCHECKED = "SELL_REPLAY_UNCHECKED"
+# Finding kind (a blank-time entry beside a same-ticker row logged the same day)
+KIND_SAME_DAY_ORDER = "SAME_DAY_ORDER"
 
 # Shown instead of staging when the form's trade date was reset for a new ET day
 # (or by the 09:30 flip) in the very run the owner pressed Record: what they saw
@@ -309,6 +311,9 @@ def fill_time_requirement(trade_date, now_et, same_ticker_same_day: bool) -> str
     * "optional": any other past date; the 16:00 ET anchor is used. Logging a
       past date on a weekend or holiday stays "optional" on purpose: the
       owner's decision covers trading-day pre-open only.
+    Owner decision 2026-11-14 (RecTime Q4, option B): today's market-open blank
+    default stays default_now (never required by the same-ticker rule) even
+    when a same-ticker row exists; the confirm card's SAME_DAY_ORDER info finding (`same_day_order_finding`) covers it.
     """
     now = _aware_et(now_et)
     d = _as_date(trade_date)
@@ -442,7 +447,8 @@ def same_ticker_same_day(journal, ticker, trade_date) -> "bool | None":
     return False
 
 
-def logging_as_text(traded_at, today_et, time_supplied: bool) -> str:
+def logging_as_text(traded_at, today_et, time_supplied: bool, *,
+                    blank_is_record_time: bool = False) -> str:
     """The confirm card's date-in-words line (owner decision 3 of 2026-11-02).
 
     "Logging as Thu Nov 5, 2:43 PM ET" when `time_supplied` or the time is not
@@ -450,13 +456,22 @@ def logging_as_text(traded_at, today_et, time_supplied: bool) -> str:
     placed at 4:00 PM ET)" when it is the placeholder and the owner gave no
     time. ", 2025" follows the day only when the ET year differs from
     `today_et`'s. Plain text, no `$`. ValueError if `traded_at` is unreadable.
+    `blank_is_record_time` (the manual path only, where a blank time that
+    resolved to a non-placeholder time is the moment Record was pressed): with
+    no time supplied, that time reads "Logging as Thu Nov 5, 2:43 PM ET (no
+    fill time: the time you pressed Record)". Default False leaves the broker
+    path unchanged.
     """
     t = _to_et_datetime(traded_at)
     today = _as_date(today_et)
     day = _fmt_date(t.date())
     if today is not None and t.year != today.year:
         day = f"{day}, {t.year}"
-    if time_supplied or not trade_time.is_placeholder_time(traded_at):
+    is_placeholder = trade_time.is_placeholder_time(traded_at)
+    if not time_supplied and blank_is_record_time and not is_placeholder:
+        return (f"Logging as {day}, {_fmt_dt_clock(t)} ET "
+                "(no fill time: the time you pressed Record)")
+    if time_supplied or not is_placeholder:
         return f"Logging as {day}, {_fmt_dt_clock(t)} ET"
     anchor = _fmt_clock(int(IMPORTED_TRADE_ANCHOR_ET_HOUR), 0)
     return f"Logging as {day} (no fill time: placed at {anchor} ET)"
@@ -467,11 +482,43 @@ def fill_time_caption(requirement) -> str:
     `fill_time_requirement` result. An unknown value reads as the strictest
     ("required"), never as a blank that implies the time can be skipped."""
     if requirement == REQ_DEFAULT_NOW:
-        return "Leave blank to use the time you press Record."
+        return ("Blank records the time you press Record. Type Robinhood's fill "
+                "time if you have it; if you don't, leave it blank rather than "
+                "estimate: the app treats a blank as unknown and stays on the safe side.")
     if requirement == REQ_OPTIONAL:
         anchor = _fmt_clock(int(IMPORTED_TRADE_ANCHOR_ET_HOUR), 0)
-        return f"Optional: blank places it at {anchor} ET."
+        return (f"Optional: blank places it at {anchor} ET. If you don't have "
+                "Robinhood's fill time, leave it blank rather than estimate.")
     return "Required: enter the fill time from Robinhood (ET)."
+
+
+def fill_time_caption_for(trade_date, now_et, ticker, same_ticker) -> str:
+    """The caption under the fill-time box, with the reason when the same-ticker
+    rule is what makes the time required.
+
+    `same_ticker` is the `same_ticker_same_day` result (True / False / None;
+    None = journal unreadable, read as True, fail closed). Computes
+    `fill_time_requirement(trade_date, now_et, same_ticker is not False)` and
+    returns `fill_time_caption` of it, EXCEPT when that is "required" only
+    because of the same-ticker rule (the requirement would be "optional" with
+    no same-ticker row): then the caption names the ticker and the date. A
+    blank `ticker` falls back to the plain caption. Today's market-open date is
+    never required by the same-ticker rule (owner decision 2026-11-14, RecTime
+    Q4 option B), so it keeps the default-now caption.
+    """
+    d = _as_date(trade_date)
+    req = fill_time_requirement(d, now_et, same_ticker is not False)
+    tk = str(ticker or "").strip().upper()
+    if (tk and req == REQ_REQUIRED
+            and fill_time_requirement(d, now_et, False) == REQ_OPTIONAL):
+        if same_ticker is None:
+            return (f"Required: the journal couldn't be read to check for other "
+                    f"{tk} trades on {_fmt_date(d)}, so type the fill time from "
+                    "Robinhood (ET).")
+        return (f"Required: you already logged {tk} on {_fmt_date(d)}, so type "
+                "this fill time from Robinhood (ET) to keep the trades in the "
+                "right order.")
+    return fill_time_caption(req)
 
 
 def pick_date_caption(now_et) -> str:
@@ -511,19 +558,29 @@ def trade_date_widget_reset(stored_value, seeded_on, now_et) -> bool:
     return stored_value is None and default_trade_date(now_et) is not None
 
 
-def fill_time_missing_text(trade_date, now_et, journal_unreadable: bool) -> str:
+def fill_time_missing_text(trade_date, now_et, journal_unreadable: bool, *,
+                           ticker=None, same_ticker=None) -> str:
     """The error when `resolve_traded_at` refuses for want of a fill time.
 
     The plain message, except when the journal couldn't be read and the date is
     a past one outside the pre-open window (where the requirement would be
     "optional" but for the unread same-ticker check): then it says why the time
-    is required.
+    is required. Likewise, when `same_ticker` is True (the
+    `same_ticker_same_day` result), the date would be "optional" without that
+    rule and `ticker` is not blank, it names the ticker and says the time is
+    needed to keep the trades in order. The unreadable-journal message wins
+    when both apply.
     """
     d = _as_date(trade_date)
     if (journal_unreadable and d is not None
             and fill_time_requirement(d, now_et, False) == REQ_OPTIONAL):
         return ("Enter the fill time (ET): the journal couldn't be read to check "
                 "for other trades in this ticker that day, so the time is required.")
+    tk = str(ticker or "").strip().upper()
+    if (same_ticker is True and tk and d is not None
+            and fill_time_requirement(d, now_et, False) == REQ_OPTIONAL):
+        return (f"Enter the fill time (ET): you already logged {tk} that day, so "
+                "the time is needed to keep the trades in the right order.")
     return "Enter the fill time (ET) — it's required for this date."
 
 
@@ -648,7 +705,9 @@ def sell_replay_finding(journal, ticker, shares, traded_at) -> "dict | None":
                 "kind": KIND_SELL_BEFORE_BUY, "severity": SEV_HARD, "group": GROUP_TIME,
                 "text": (f"At {when} your journal holds only {_fmt_shares(max(v['before'], 0.0))} "
                          f"{tk}: the BUY that covers this SELL is stored at a later time "
-                         f"(a BUY logged without a fill time is placed at {anchor} ET), "
+                         f"(a BUY logged without a fill time is placed at {anchor} ET, or "
+                         "at the time you pressed Record if you logged it the same day "
+                         "with the market open), "
                          "so the SELL would be replayed first and count as a sale of "
                          "shares you didn't hold. If this SELL's time is right, the BUY "
                          "covering it is stored too late: delete it in \U0001F4CB History and "
@@ -668,6 +727,114 @@ def sell_replay_finding(journal, ticker, shares, traded_at) -> "dict | None":
                          "before the app."),
             }
     return None
+
+
+# Display cap on the rows `same_day_order_finding` lists (not a policy value).
+_SAME_DAY_ORDER_LIST_MAX = 3
+
+
+def same_day_order_unchecked_finding(ticker) -> dict:
+    """The info finding for "the same-day order check could not run" (never a
+    silent clean). One source for the text: `same_day_order_finding` returns it
+    for an unreadable journal, and the caller returns it when the check raised."""
+    tk = str(ticker or "").strip().upper()
+    return {
+        "kind": KIND_SAME_DAY_ORDER, "severity": SEV_INFO, "group": GROUP_TIME,
+        "text": (f"Couldn't check for other {tk} trades today (the journal "
+                 "couldn't be read). If you logged one, type this trade's fill "
+                 "time from Robinhood so the two stay in the right order."),
+    }
+
+
+def _same_day_order_row_label(action: str, t: datetime, kind: str) -> str:
+    """One existing row for `same_day_order_finding`'s list. A placeholder row
+    carries the time it is STORED at (the 16:00 anchor), because the finding's
+    job is to show the stored order: a later blank-time entry sorts before it."""
+    if kind == trade_time.KIND_PLACEHOLDER:
+        anchor = _fmt_clock(int(IMPORTED_TRADE_ANCHOR_ET_HOUR), 0)
+        return f"{action} (no fill time, placed at {anchor})"
+    if kind == trade_time.KIND_RECORDED:
+        return f"{action} at {_fmt_dt_clock(t)} (time you pressed Record)"
+    return f"{action} at {_fmt_dt_clock(t)}"
+
+
+def same_day_order_finding(journal, ticker, action, traded_at) -> "dict | None":
+    """An info finding for a manual entry logged WITHOUT a fill time when the
+    journal already holds a same-ticker row on the same ET date (owner decision
+    2026-11-14, RecTime Q4 option B: the blank time is not forced, the card says
+    how the trades will be ordered instead).
+
+    PRECONDITION: the caller uses it only for the default-now path (a blank
+    fill time, market open, `traded_at` is the moment Record was pressed, not
+    the 16:00 placeholder), which is why the text says "today" and "when you
+    pressed Record". `action` is "BUY" / "SELL".
+
+    * Journal None, not a frame, or missing `ticker` / `traded_at`: an info
+      finding saying the check couldn't run (never a silent clean).
+    * No existing row for `ticker` (strip, upper) on `traded_at`'s ET date: None.
+    * Otherwise the finding lists up to 3 of those rows in stored-time order
+      ("SELL at 9:56 AM" for a fill time, "... (time you pressed Record)" for a
+      recorded one, "SELL (no fill time, placed at 4:00 PM)" for a placeholder),
+      then ", and N more" past `_SAME_DAY_ORDER_LIST_MAX`. Rows with an
+      unreadable `traded_at` are skipped.
+    * Row kinds come from the frame's `traded_at_time_kind` column. When the
+      column is absent, the same-ticker subset goes through
+      `trade_time.normalize_traded_at` (the classifier `sync_timing` reads, so
+      the card can't disagree with it: it honours `fill_time_typed` and the
+      microsecond rule); if that raises, a row is a placeholder only when its
+      time is the 16:00 anchor, else a fill.
+    `traded_at` unreadable -> ValueError. Plain text, no `$`.
+    """
+    tk = str(ticker or "").strip().upper()
+    if (journal is None or not isinstance(journal, pd.DataFrame)
+            or (not journal.empty
+                and ("ticker" not in journal.columns
+                     or "traded_at" not in journal.columns))):
+        return same_day_order_unchecked_finding(tk)
+    t_new = _to_et_datetime(traded_at)
+    d = trade_time.et_trade_date(traded_at)
+    if journal.empty or not tk or d is None:
+        return None
+    df = journal[journal["ticker"].astype(str).str.strip().str.upper() == tk]
+    if "traded_at_time_kind" not in df.columns:
+        try:
+            norm = trade_time.normalize_traded_at(df)
+            if (isinstance(norm, pd.DataFrame) and len(norm) == len(df)
+                    and "traded_at_time_kind" in norm.columns):
+                df = norm
+        except Exception:
+            pass        # fall back to the 16:00-anchor rule below
+    has_kind = "traded_at_time_kind" in df.columns
+    has_action = "action" in df.columns
+    found = []
+    for _, row in df.iterrows():
+        raw = row.get("traded_at")
+        if trade_time.et_trade_date(raw) != d:
+            continue
+        try:
+            t = _to_et_datetime(raw)
+        except ValueError:
+            continue
+        kind = row.get("traded_at_time_kind") if has_kind else None
+        if kind not in trade_time.TIME_KINDS:
+            kind = (trade_time.KIND_PLACEHOLDER if trade_time.is_placeholder_time(raw)
+                    else trade_time.KIND_FILL)
+        act = str(row.get("action") if has_action else "").strip().upper() or "TRADE"
+        found.append((t, _same_day_order_row_label(act, t, kind)))
+    if not found:
+        return None
+    found.sort(key=lambda x: x[0])
+    listed = ", ".join(label for _, label in found[:_SAME_DAY_ORDER_LIST_MAX])
+    if len(found) > _SAME_DAY_ORDER_LIST_MAX:
+        listed += f", and {len(found) - _SAME_DAY_ORDER_LIST_MAX} more"
+    act_new = str(action or "").strip().upper() or "trade"
+    return {
+        "kind": KIND_SAME_DAY_ORDER, "severity": SEV_INFO, "group": GROUP_TIME,
+        "text": (f"You already logged {tk} today: {listed}. Without a fill time this "
+                 f"{act_new} is placed at {_fmt_dt_clock(t_new)} (when you pressed "
+                 "Record), so the journal orders them by those times. If that "
+                 "order is wrong, type this trade's fill time from Robinhood."),
+    }
 
 
 # ── price ────────────────────────────────────────────────────────────────────
