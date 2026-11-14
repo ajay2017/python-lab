@@ -363,7 +363,7 @@ Do not re-open these without new evidence.
    all** — a JSON roster is a few KB, edits happen ~4×/year/table, pruning buys nothing for
    years. A "restore a prior payload" UI button is a nice-to-have, deferred; the *read*
    (who changed what, when) is the actual requirement.
-5. **`SP500_SECTOR_WEIGHTS` — RESOLVED: later phase, not v1.** Confirmed a genuinely
+5. **`SP500_SECTOR_WEIGHTS` — QUEUED by the owner 2026-11-14 (build before ~2027-02-10, after #26 C3c; see CLAUDE.md "Waiting for a date or data"). The 2026-11-14 refresh (`1d2f809`, iShares IVV as of 11-12) was a code edit + Opus review, which is the chore this removes; a live Yahoo `funds_data` source was probed and rejected the same day (Morningstar-style sectors, Tech 38.23% SPY / 40.48% VOO vs GICS 36.13%). Earlier: RESOLVED: later phase, not v1.** Confirmed a genuinely
    different shape (`portfolio.py:817` — `{GICS-sector-name: float}`, must sum ≈ 100),
    feeding `portfolio_vs_sp500` (`portfolio.py:888-898`, display/awareness, not a gate). Its
    stale failure mode is a **wrong number**, not silent omission — a higher validation bar
