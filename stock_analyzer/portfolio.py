@@ -1150,9 +1150,15 @@ def relative_strength_table(
 # from the provider's raw .info["sector"]) but normally discarded in favor of
 # TICKER_SECTORS by resolve_sector() — reused here for free, zero new fetches.
 
-# S&P 500 GICS sector weights. Source: English Wikipedia, "S&P 500" article,
-# GICS sector weighting table, as of 2026-08-12 (refreshed 2026-09-07;
-# prior snapshot was 2026-07-01). Static reference data (no live
+# S&P 500 GICS sector weights. Source: iShares Core S&P 500 ETF (IVV) product
+# page, "Sector" table, "% of Market Value as of Nov 12, 2026" (refreshed
+# 2026-11-14; the English Wikipedia "S&P 500" article, which cites this same
+# iShares page, still showed its 2026-08-12 list). IVV's table also has a 0.08%
+# "Cash and/or Derivatives" row, so the 11 sectors sum to 99.92. Prior snapshots: 2026-08-12 (Wikipedia,
+# refreshed 2026-09-07) and 2026-07-01. Yahoo's `funds_data.sector_weightings`
+# for SPY / VOO was probed 2026-11-14 as a live alternative and rejected: its
+# Morningstar-style sectors put Technology at 38.23% (SPY) and 40.48% (VOO) vs
+# GICS 36.13%. Static reference data (no live
 # benchmark-weight source exists in the provider layer) — refresh
 # periodically (every 6-12 months) since it will silently drift stale
 # otherwise. NOT a decision threshold (never gates), so it stays here next to
@@ -1160,18 +1166,21 @@ def relative_strength_table(
 # precedent above.
 # Shelf life: registered in stock_analyzer/reference_shelf.py — update its as_of date when you refresh this list.
 SP500_SECTOR_WEIGHTS = {
-    "Information Technology":  37.4,
-    "Financials":              12.2,
-    "Communication Services":   9.67,
-    "Consumer Discretionary":   9.34,
-    "Health Care":              9.09,
-    "Industrials":              8.68,
-    "Consumer Staples":         4.49,
-    "Energy":                   3.27,
-    "Utilities":                2.01,
-    "Materials":                1.82,
-    "Real Estate":              1.79,
+    "Information Technology":  36.13,
+    "Financials":              12.49,
+    "Health Care":             10.37,
+    "Consumer Discretionary":   9.52,
+    "Communication Services":   8.88,   # iShares labels it "Communication"
+    "Industrials":              8.21,
+    "Consumer Staples":         5.08,
+    "Energy":                   3.57,
+    "Utilities":                2.10,
+    "Real Estate":              1.84,
+    "Materials":                1.73,
 }
+# Shown under the 🥧 Portfolio Overview tilt chart. Update it in the SAME edit as the
+# dict above (and reference_shelf.py's as_of) so the screen never names a stale source.
+SP500_SECTOR_WEIGHTS_SOURCE = "iShares Core S&P 500 ETF (IVV) sector table, as of 2026-11-12"
 
 # Normalizes a provider's raw .info["sector"] string (Yahoo/Morningstar-style
 # naming differs from GICS-11 naming in several cases) onto the GICS-11 keys

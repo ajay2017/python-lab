@@ -303,3 +303,15 @@ def test_diversify_map_keys_and_values_resolve():
             assert bucket in discovery_universe_keys, (
                 f"{sector!r} maps to discovery_universe bucket {bucket!r}, which no longer exists"
             )
+
+
+def test_sp500_weights_source_caption_names_the_shelf_as_of_date():
+    """The 🥧 Portfolio Overview tilt caption shows SP500_SECTOR_WEIGHTS_SOURCE;
+    its date must be the same as reference_shelf's as_of for the table, so a
+    refresh can't update one and leave the screen naming a stale source
+    (caught by the 2026-11-14 review: the caption still said 2026-08-12)."""
+    from stock_analyzer import reference_shelf
+    from stock_analyzer.portfolio import SP500_SECTOR_WEIGHTS_SOURCE
+    entry = next(e for e in reference_shelf._REFERENCE_TABLES
+                 if e.key == "sp500_sector_weights")
+    assert entry.as_of.isoformat() in SP500_SECTOR_WEIGHTS_SOURCE

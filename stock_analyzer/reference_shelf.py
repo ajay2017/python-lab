@@ -275,7 +275,9 @@ _REFERENCE_TABLES: tuple[_RefTable, ...] = (
         label="S&P 500 benchmark sector weights",
         location="stock_analyzer/portfolio.py — SP500_SECTOR_WEIGHTS",
         kind=KIND_AS_OF,
-        as_of=date(2026, 8, 12),
+        # 2026-11-14 refresh from iShares IVV's sector table (data as of
+        # 2026-11-12); see the source comment above SP500_SECTOR_WEIGHTS.
+        as_of=date(2026, 11, 12),
         consequence="the Portfolio-vs-S&P 500 sector tilt shows a wrong number "
                     "(this one misleads rather than merely omitting)",
     ),

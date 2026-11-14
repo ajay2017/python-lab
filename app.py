@@ -326,6 +326,7 @@ from stock_analyzer.portfolio import (
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
+    SP500_SECTOR_WEIGHTS_SOURCE,
     real_sector_exposure_with_lookthrough, combined_name_exposure,
     classify_book_corr, expected_beta_after_add,
     correlation_sample_state, CORR_SAMPLE_THIN, CORR_SAMPLE_UNKNOWN,
@@ -23524,7 +23525,7 @@ elif page == "🥧 Portfolio Overview":
                 st.caption(
                     "🟢 Green = overweight this real sector vs. the S&P 500  |  "
                     "🔴 Red = underweight  |  "
-                    "S&P 500 GICS weights: Wikipedia \"S&P 500\" article, as of 2026-08-12 "
+                    f"S&P 500 GICS weights: {SP500_SECTOR_WEIGHTS_SOURCE} "
                     "(static reference — refresh periodically)."
                 )
                 st.dataframe(
