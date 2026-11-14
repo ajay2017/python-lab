@@ -68,6 +68,10 @@
 --           stored); EOG 06-15 (a real sell + rebuy); PLTR 2026-10-14 (a real
 --           sell + rebuy: SELL 10 @ 200.58 on 10-14, BUY 5 @ 195.00 on 10-15).
 --           Baseline raised 2 -> 3 on 2026-10-17 after the owner's SQL.
+--           Raised 3 -> 4 on 2026-11-14: SPCX 2026-10-16, a real sell-out
+--           and rebuy (SELL 5 on 10-15, SELL 10 on 10-16 = 0 held at the
+--           close, BUY 5 on 10-19); it surfaced after the 2026-11-09 nightly
+--           per-ticker reconcile made the 10-16 rows match the journal.
 --   D5   3  INTC/QCOM/MU 2026-05-26/28: composite column not yet populated.
 --   E1  0, E2 0  (2026-10-19, owner SQL: 438 / 1,273 rows).
 --   E3  11  (2026-10-20, owner SQL, 11 of 184): every one a SELL marked

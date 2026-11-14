@@ -66,7 +66,7 @@ _RESIDUAL: "dict[str, tuple[str, int]]" = {
     "C2": (ACCRUING, 6),
     "C3": (FROZEN, 2),
     "C7": (FROZEN, 3),
-    "C8": (FROZEN, 3),   # MU 06-25 hole, EOG 06-15 + PLTR 10-14 real sell-and-rebuy (owner SQL 2026-10-17)
+    "C8": (FROZEN, 4),   # MU 06-25 hole, EOG 06-15 + PLTR 10-14 (owner SQL 2026-10-17) + SPCX 10-16 (owner SQL 2026-11-14) real sell-and-rebuy
     "C9": (FROZEN, 5),   # derived from Q1's C1 detail; confirm on first automated run
     "D5": (FROZEN, 3),
     # E3 first run 2026-10-20 (owner SQL): 11 of 184 -- all SELLs marked
