@@ -286,7 +286,7 @@ Only #1 is mechanically guarded; #2–#8 are the author's checklist. Run all eig
 
 ### Waiting for a date or data (don't build early)
 
-- **Gate Suppression Ledger:** next look ~2026-10-26. G-20 counterfactual still unobserved. Retirement review ~2027-08-27 (retiring is the success condition).
+- **Gate Suppression Ledger:** looked 2026-11-14 (firm: G-06 −10.09% from one 09-14→09-23 episode, G-07 −1.02%, G-13 +2.80% = watch, don't act; G-20 counterfactual still unobserved; G-06's app-row gap after 09-23 checked = no defect (no Watchlist visits on firing days); detail at the top of `docs/plans/gate-suppression-ledger.md`). Next look ~2026-12-10. Retirement review ~2027-08-27 (retiring is the success condition).
 - **~11-10:** Anthropic console usage, 2 weeks after the Phase 3 switch vs the 30 days before; `SP500_SECTOR_WEIGHTS` shelf-life tripwire. **~11-23:** data-maintenance Phase 2's 8-week window ends (then the owner-invoked F1 delete with confirmation; DQ-Orphan's INTL / DELL rows are its first targets).
 - **Earnings rating-change shadow readout (finding #22):** at 20 flagged + 20 unflagged matured earnings events in `earnings_revision_shadow`, or ~May 2027, whichever first (pre-registered in `docs/plans/earnings-revision-shadow.md`). Before it: the owner sets the re-enable margin, and the read-only retro study (U5) runs. The flag sizes nothing until then, and re-enabling needs planner + reviewer + fresh approval, tightening-only.
 - **#26 C3c persisted stop floor: build by 2026-12-07** or on the first day a data-caused degraded-basis banner appears (plan `docs/plans/held-trailing-stop.md`; C3 live since 2026-10-31, `d4ecd73`).
