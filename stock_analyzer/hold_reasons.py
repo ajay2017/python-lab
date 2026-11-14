@@ -138,7 +138,10 @@ def budget_note(status, ctx=None) -> str:
 
 
 def budget_over_line(pct_used) -> str:
-    """Logged buys alone are already above the budget."""
-    return (f"Today's new buys are {_pct(pct_used, '?%')} of net capital — above the "
+    """Logged buys alone are already above the budget.  Worded "Logged buys
+    alone" (#21, owner 2026-11-14): the status line beside it counts logged +
+    emailed allocations + this list, so both lines reading "today's new buys"
+    showed two different percentages for what looked like one thing."""
+    return (f"Logged buys alone are {_pct(pct_used, '?%')} of net capital — above the "
             f"{DAILY_NEW_POSITION_BUDGET_PCT:g}% daily budget; nothing new "
             f"sized today.")

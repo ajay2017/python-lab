@@ -310,6 +310,17 @@ def test_budget_texts_never_say_not_one_of_todays_picks():
     assert hr.budget_note("pick_cap") == ""
 
 
+def test_over_line_and_status_line_cannot_both_read_as_todays_new_buys():
+    # #21 (seen live 2026-10-29): "New positions today: 99.6%" (logged + allocated
+    # + list) beside "Today's new buys are 84.3%" (logged only) read as two figures
+    # for one thing. The over line names its narrower population.
+    over = hr.budget_over_line(84.3)
+    status = hr.budget_status_line(99.6, 1000, 2000, 1000, 0)
+    assert over.startswith("Logged buys alone are 84.3% of net capital")
+    assert "today's new buys" not in over.lower()
+    assert "logged" in status.lower() and "allocated" in status.lower()
+
+
 def test_budget_wording_interpolates_constant():
     pct = f"{DAILY_NEW_POSITION_BUDGET_PCT:g}%"
     assert pct in hr.budget_note("budget_exhausted")

@@ -1,5 +1,7 @@
 # Net capital checked against Robinhood's own positions (bug register U7, #21)
 
+**Status (2026-11-14): OWNER ACCEPTED U1–U10 as recommended, including the two new constants (`BROKER_FRAME_PAIR_MAX_MINUTES` = 10, `NET_CAPITAL_BROKER_GAP_NOTE_PCT` = 1.0).** C0 done: 🏠 Home ⚠️ Alerts showed no broker-drift line (owner screenshot 2026-11-14), so no standing journal-vs-Robinhood gap would bind on wiring. C5 (#21 wording) built the same day. Lead re-check against HEAD before C1: (a) failure path 2 below (a log-time SELL counted twice in the budget lag) is largely closed by RecTime C3 (`ab65a8b`: a SELL whose fill time can't be placed against the sync is no longer added to the budget basis; a typed fill time is placed correctly), so the frame's remaining job is U7 itself (an unlogged pre-sync sell), F-255's missing lag after a logged BUY, and #34c's cached-cash case; (b) the new module is named `stock_analyzer/broker_frame.py`, not `capital_basis.py` (`capital_basis` is already a dict key and `margin.capital_basis_weight` a function); (c) the app.py / headless line numbers below are from 2026-11-07 and must be re-located at C3 / C4. `budget_view.over_line_text`'s docstring still quotes the old #21 wording: fix it in C3 (gate file).
+
 **Status:** DESIGNED 2026-11-07 (Opus planner, `claude-opus-5-5`: **PROCEED WITH CHANGES**). Nothing built. **Waiting on the owner's answers to U1–U10 below** before C1. #21 is separate and small (C5, can ship first).
 
 > Status convention: newer status lines are prepended above this one as work lands.
