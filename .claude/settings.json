@@ -74,7 +74,8 @@
       "Bash(python -m py_compile app.py stock_analyzer/signal_hysteresis.py stock_analyzer/constants.py)",
       "PowerShell(git push origin main)",
       "Bash(python -m py_compile stock_analyzer/risk_advisor.py stock_analyzer/portfolio.py stock_analyzer/constants.py)",
-      "Bash(python -m py_compile stock_analyzer/constants.py stock_analyzer/portfolio.py stock_analyzer/risk_advisor.py stock_analyzer/daily_briefing.py)"
+      "Bash(python -m py_compile stock_analyzer/constants.py stock_analyzer/portfolio.py stock_analyzer/risk_advisor.py stock_analyzer/daily_briefing.py)",
+      "Bash(rm -f .git/COMMIT_MSG_SP500.txt .git/sp500_commit.log)"
     ],
     "additionalDirectories": [
       "C:\\Users\\ajay.x.ku\\python-lab\\python-lab\\.git"
