@@ -987,6 +987,31 @@ def signal_flow(enriched: list[dict], rec_types: tuple = ("new_pick",)) -> dict:
     return out
 
 
+def skipped_names_avg_alpha(enriched: list[dict], rec_types: tuple = ("new_pick",)) -> "float | None":
+    """Average alpha vs SPY (percentage points) of the names counted as SKIPPED in
+    `signal_flow` (the monthly "Names you skipped" tile).
+
+    Population, stated plainly: every matured, priced surfacing in `rec_types` scope
+    (`outcome_pct` present, not `outcome_maturing`, `alpha_pct` present) of a ticker
+    that was NEVER acted on via ANY surfacing of ANY rec_type in `enriched` (the acted
+    set is built exactly as `signal_flow` builds it, over the full set).  A name bought
+    on one day of its run therefore contributes none of its other surfacings, unlike
+    `summary_stats["avg_missed_alpha"]`, which averages per-surfacing `acted_on=False`.
+    Rounded to 2 dp like `summary_stats`; None when no such surfacing exists."""
+    acted_tickers = {r["ticker"] for r in enriched if r.get("acted_on")}
+    vals = [
+        r["alpha_pct"] for r in enriched
+        if (rec_types is None or r.get("rec_type") in rec_types)
+        and r["ticker"] not in acted_tickers
+        and r.get("outcome_pct") is not None
+        and not r.get("outcome_maturing")
+        and r.get("alpha_pct") is not None
+    ]
+    if not vals:
+        return None
+    return round(sum(vals) / len(vals), 2)
+
+
 def report_viz_snapshot(enriched: list[dict], rec_types: tuple = ("new_pick",)) -> dict:
     """
     Everything the F-4 Monthly report's THREE visuals need, computed from ONE

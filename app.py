@@ -114,6 +114,7 @@ from stock_analyzer import trade_entry_checks
 from stock_analyzer import journal_broker_match
 from stock_analyzer import pending_import_verdict
 from stock_analyzer import journal_match_view
+from stock_analyzer import report_display as _rdisp   # not `_rd`: app.py reuses `_rd` as a local (regime rows)
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
@@ -4067,12 +4068,21 @@ def _cached_analyst_coverage_recent() -> dict:
 # History page and the 📄 Reports monthly decision review so the two can never drift.
 # Returns a go.Figure, or None when there's nothing to draw.
 def _signal_flow_sankey(flow: dict, title: str):
-    _labels = [
+    _base_labels = [
         "New Positions Surfaced",
         "Acted",        "Not acted",
         "Win (acted)",  "Loss (acted)",  "Flat / Open (acted)",
         "Rose (missed)", "Fell — dodged", "Flat / Open (missed)",
     ]
+    # Each node's label ends with its count (" · N"): the surfaced total, then the
+    # same numbers the links carry. Reports polish 2026-11-14.
+    _node_n = [
+        flow["n_acted"] + flow["n_missed"],
+        flow["n_acted"], flow["n_missed"],
+        flow["acted_win"], flow["acted_loss"], flow["acted_flat"],
+        flow["missed_win"], flow["missed_loss"], flow["missed_flat"],
+    ]
+    _labels = [f"{_lb} · {_n}" for _lb, _n in zip(_base_labels, _node_n)]
     _ncolor = [
         "#60a5fa",
         "#34d399", "#94a3b8",
@@ -4087,9 +4097,9 @@ def _signal_flow_sankey(flow: dict, title: str):
         flow["missed_win"], flow["missed_loss"], flow["missed_flat"],
     ]
     _lc = [
-        "rgba(99,179,237,0.45)",  "rgba(148,163,184,0.3)",
-        "rgba(134,239,172,0.45)", "rgba(252,165,165,0.45)", "rgba(100,116,139,0.3)",
-        "rgba(134,239,172,0.3)",  "rgba(248,113,113,0.3)",  "rgba(71,85,105,0.2)",
+        "rgba(99,179,237,0.7)",   "rgba(148,163,184,0.55)",
+        "rgba(134,239,172,0.7)",  "rgba(252,165,165,0.7)",  "rgba(100,116,139,0.55)",
+        "rgba(134,239,172,0.55)", "rgba(248,113,113,0.55)", "rgba(71,85,105,0.4)",
     ]
     _pairs = [(s, t, v, c) for s, t, v, c in zip(_src, _tgt, _val, _lc) if v > 0]
     if not _pairs:
@@ -4103,7 +4113,7 @@ def _signal_flow_sankey(flow: dict, title: str):
     ))
     _fig.update_layout(
         height=360, margin=dict(l=0, r=0, t=36, b=8), template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)", font=dict(size=11, color="#cbd5e1"),
+        paper_bgcolor="rgba(0,0,0,0)", font=dict(size=12, color="#f1f5f9"),
         title=dict(text=title, font=dict(size=13), x=0),
     )
     return _fig
@@ -42319,20 +42329,6 @@ elif page == "📄 Reports":
     # Decision Review branches both use it; a secrets read, no network).
     _ai_api_key = _anthropic_key()
     st.title("📄 Reports")
-    st.markdown(
-        "**Which report answers what**\n"
-        "- **📈 Performance Review**: what your account did over a period, and why. "
-        "Recomputed each time you open it; Last week, Last month, "
-        "This/Last quarter, This tax year, Since tracking or Custom.\n"
-        "- **🗓️ Weekly Debrief**: an AI narrative of the week, using the same numbers as "
-        "Performance Review → Last week. A saved debrief keeps the figures it was generated "
-        "with; the page says when they differ from Performance Review → Last week.\n"
-        "- **🧭 Monthly Decision Review (AI)**: is the engine picking well, and do you act "
-        "on what it surfaces. Frozen once generated; it is not a returns report "
-        "(for the month's result, use Performance Review → Last month).\n"
-        "- **🧾 Tax Report**: realized short- and long-term gains by tax year, "
-        "with wash-sale flags."
-    )
     # 2026-11-10: moved here from the 💰 Account page's third tab. Step 2 (same
     # day) opened the page to the read-only viewer so they keep the Weekly
     # Debrief and the monthly review they had on 🧠 AI Insights; Performance
@@ -42344,6 +42340,21 @@ elif page == "📄 Reports":
          "🧭 Monthly Decision Review (AI)", "🧾 Tax Report"],
         horizontal=True, key="_rpt_kind_radio",
     )
+    # 2026-11-14 (Reports polish): the guide sits under the picker, collapsed.
+    with st.expander("ℹ️ Which report answers what", expanded=False):
+        st.markdown(
+            "- **📈 Performance Review**: what your account did over a period, and why. "
+            "Recomputed each time you open it; Last week, Last month, "
+            "This/Last quarter, This tax year, Since tracking or Custom.\n"
+            "- **🗓️ Weekly Debrief**: an AI narrative of the week, using the same numbers as "
+            "Performance Review → Last week. A saved debrief keeps the figures it was generated "
+            "with; the page says when they differ from Performance Review → Last week.\n"
+            "- **🧭 Monthly Decision Review (AI)**: is the engine picking well, and do you act "
+            "on what it surfaces. Frozen once generated; it is not a returns report "
+            "(for the month's result, use Performance Review → Last month).\n"
+            "- **🧾 Tax Report**: realized short- and long-term gains by tax year, "
+            "with wash-sale flags."
+        )
     if db.is_readonly() and _rpt_kind in ("📈 Performance Review", "🧾 Tax Report"):
         st.info(
             "🔒 Performance Review and Tax Report are owner-only and aren't "
@@ -42729,40 +42740,30 @@ elif page == "📄 Reports":
                                         + " Holdings only — can't reconcile to your account this period.")
                             _pr_wf = _pa_mod.waterfall_rows(_pr_recon)
                             if _pr_wf:
-                                st.dataframe(
-                                    pd.DataFrame([
-                                        {
-                                            "Where the change came from":
-                                                ("   ↳ " if _w["indent"] else "") + _w["label"]
-                                                + (f" ({_w['note']})" if _w["note"] else ""),
-                                            "$": _m_usd(_w["value"], plus=not _w["total"]),
-                                        }
-                                        for _w in _pr_wf
-                                    ]),
-                                    # Sized to the row count so no row (the first ones
-                                    # included) scrolls out of view.
-                                    hide_index=True, width="stretch",
-                                    height=(len(_pr_wf) + 1) * 35 + 3,
-                                )
+                                # Compact markdown table (Reports polish 2026-11-14):
+                                # amounts beside labels, sign colours, bold subtotal /
+                                # total; Hide values greys every colour.
+                                st.markdown(_rdisp.waterfall_markdown(
+                                    _pr_wf, mask=st.session_state.get("_privacy", True)))
                             _pr_res = _pr_recon["residual"]
                             if _pr_res is not None:
                                 _pr_book_side_extra = _pa_mod.book_side_extra(_pr_recon)
                                 with st.expander("What's in Unexplained"):
-                                    st.dataframe(
-                                        pd.DataFrame([
-                                            {"Part": "Cash side (cash change not explained by trades, deposits and income)",
-                                             "$": _m_usd(_pr_res["cash"])},
-                                            {"Part": "Book side (recorded book vs trade-journal replay"
-                                                     + _pr_book_side_extra + ")",
-                                             "$": _m_usd(_pr_res["book"])},
-                                            {"Part": "Book gap at start (recorded minus replayed)",
-                                             "$": _m_usd(_pr_recon["book_gap_start"])},
-                                            {"Part": "Book gap at end (recorded minus replayed)",
-                                             "$": _m_usd(_pr_recon["book_gap_end"])},
-                                        ]),
-                                        hide_index=True, width="stretch",
-                                        height=(4 + 1) * 35 + 3,   # 4 rows, none scrolled out
-                                    )
+                                    st.markdown(_rdisp.money_table_markdown(
+                                        "Part",
+                                        [
+                                            {"label": "Cash side (cash change not explained by trades, deposits and income)",
+                                             "value": _pr_res["cash"]},
+                                            {"label": "Book side (recorded book vs trade-journal replay"
+                                                      + _pr_book_side_extra + ")",
+                                             "value": _pr_res["book"]},
+                                            {"label": "Book gap at start (recorded minus replayed)",
+                                             "value": _pr_recon["book_gap_start"]},
+                                            {"label": "Book gap at end (recorded minus replayed)",
+                                             "value": _pr_recon["book_gap_end"]},
+                                        ],
+                                        mask=st.session_state.get("_privacy", True),
+                                    ))
                             # "Unexplained" exists only when the account was reconciled
                             # (ok / partial); in pre_coverage there is no such row.
                             _pr_where = (
@@ -43240,7 +43241,7 @@ elif page == "📄 Reports":
                 _open_tickers = set(st.session_state.holdings_df["Ticker"].astype(str).str.upper())
             _wd_df = _ai_db.load_weekly_debriefs(limit=8)
             # ── Weekly Portfolio Debrief ──────────────────────────────────────────────
-            st.subheader("📊 Weekly Portfolio Debrief")
+            st.subheader("🗓️ Weekly Debrief")
             st.markdown(
                 "A weekly retrospective: what happened to your portfolio, which signals "
                 "you acted on or ignored, and what behavioural patterns showed up."
@@ -43359,7 +43360,7 @@ elif page == "📄 Reports":
                                 ]:
                                     if _wd_result.get(_col):
                                         st.markdown(f"**{_lbl}**")
-                                        st.markdown(_dba.escape_md_dollars(_wd_result[_col]))
+                                        st.markdown(_rdisp.report_markdown(_wd_result[_col]))
 
             # Display most recent debrief
             if _wd_df.empty:
@@ -43389,7 +43390,7 @@ elif page == "📄 Reports":
                     return "unknown" if (v is None or v != v) else f"{v:+.1f}{suffix}"
                 if _wd_cur:
                     _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
-                    _wd_col1.metric("Account %", _wd_fmt(_wd_perf, "%"))
+                    _wd_col1.metric("Your account %", _wd_fmt(_wd_perf, "%"))
                     _wd_col2.metric("SPY %, same dates", _wd_fmt(_wd_spy, "%"))
                     _wd_col3.metric("vs SPY (pp)", _wd_fmt(_wd_alpha, ""))
                     # A stored debrief is a dated artifact: if the account record behind it
@@ -43452,13 +43453,19 @@ elif page == "📄 Reports":
                         x=_wt_x, y=_wt_a,
                         marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _wt_a],
                         text=[f"{v:+.1f}" for v in _wt_a], textposition="outside",
+                        hovertemplate="Week ending %{x}<br>Alpha %{y:+.1f} pp<extra></extra>",
                     ))
                     _wt_fig.update_layout(
                         title=dict(text="Weekly alpha vs SPY (percentage points)", font=dict(size=13), x=0),
                         height=240, margin=dict(l=8, r=8, t=36, b=8),
                         template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                         yaxis=dict(title="Alpha (pp)", zeroline=True, zerolinecolor="#475569"),
-                        xaxis=dict(title=None), showlegend=False,
+                        # One tick per bar, naming the week's end (a date axis made
+                        # Plotly pick its own mid-week ticks).
+                        xaxis=dict(title=None, type="category", tickmode="array",
+                                   tickvals=_wt_x,
+                                   ticktext=[_rdisp.week_tick_label(_x) for _x in _wt_x]),
+                        showlegend=False,
                     )
                     st.plotly_chart(_wt_fig, width="stretch")
                     _wt_beat = sum(1 for v in _wt_a if v > 0)
@@ -43484,7 +43491,7 @@ elif page == "📄 Reports":
                 ]:
                     if _wd.get(_wd_col):
                         st.markdown(f"**{_wd_label}**")
-                        st.markdown(_dba.escape_md_dollars(_wd.get(_wd_col)))
+                        st.markdown(_rdisp.report_markdown(_wd.get(_wd_col)))
                         st.markdown("")
 
             # Numbers behind the debrief just generated (flash slot, popped so it shows once).
@@ -43505,8 +43512,8 @@ elif page == "📄 Reports":
                     _wdf_wf = _wdf_wf if isinstance(_wdf_wf, dict) else {}
                     for _wdf_lbl, _wdf_key in (
                         ("Price moves on positions held through", "held_through"),
-                        ("Last-day moves on positions sold", "sold_leg"),
-                        ("First-day moves on positions bought", "bought_leg"),
+                        ("Last-day moves on positions you sold", "sold_leg"),
+                        ("First-day moves on positions you bought", "bought_leg"),
                         ("Same-day round trips", "round_trip"),
                         ("Deposits / withdrawals", "flows_net"),
                         ("Dividends", "dividends"),
@@ -43663,7 +43670,7 @@ elif page == "📄 Reports":
                                 ]:
                                     if _mr_result.get(_col):
                                         st.markdown(f"**{_lbl}**")
-                                        st.markdown(_mr_result[_col])
+                                        st.markdown(_rdisp.report_markdown(_mr_result[_col]))
 
             # Display most recent report
             if _mr_df.empty:
@@ -43799,38 +43806,29 @@ elif page == "📄 Reports":
                 _mr_acted_n  = _mr_flow["n_acted"]  if _mr_flow else _mr.get("acted_count")
                 _mr_missed_n = _mr_flow["n_missed"] if _mr_flow else _mr.get("missed_count")
 
-                def _mr_colour(v):
-                    try:
-                        return "#22c55e" if v is not None and float(v) >= 0 else "#ef4444"
-                    except (TypeError, ValueError):
-                        return "#94a3b8"
-
-                _mrc1, _mrc2, _mrc3 = st.columns(3)
-                with _mrc1:
-                    st.markdown(
-                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Engine alpha (acted)</div>"
-                        f"<div style='font-size:1.4em;font-weight:700;color:{_mr_colour(_mr_alpha)}'>"
-                        f"{'N/A' if _mr_alpha is None else f'{float(_mr_alpha):+.1f}%'}</div></div>",
-                        unsafe_allow_html=True,
-                    )
-                with _mrc2:
-                    st.markdown(
-                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Acted on (names)</div>"
-                        f"<div style='font-size:1.4em;font-weight:700'>{_mr_acted_n if _mr_acted_n is not None else '—'}</div></div>",
-                        unsafe_allow_html=True,
-                    )
-                with _mrc3:
-                    st.markdown(
-                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Not acted (names)</div>"
-                        f"<div style='font-size:1.4em;font-weight:700'>{_mr_missed_n if _mr_missed_n is not None else '—'}</div></div>",
-                        unsafe_allow_html=True,
-                    )
+                # Two "count + average vs SPY" tiles (Reports polish 2026-11-14). The skipped
+                # average is frozen with the report from the first report that saved it; an
+                # older report or the live fallback reads "not saved", never a live figure.
+                # The delta text starts with its sign so Streamlit colours it correctly.
+                _mr_skip_avg, _mr_skip_saved = _rdisp.skipped_avg_state(_mr_viz, _mr_frozen)
+                _mrc1, _mrc2 = st.columns(2)
+                _mrc1.metric(
+                    "Names you bought",
+                    str(_mr_acted_n) if _mr_acted_n is not None else "—",
+                    delta=_rdisp.avg_delta_text(_mr_alpha),
+                )
+                _mrc2.metric(
+                    "Names you skipped",
+                    str(_mr_missed_n) if _mr_missed_n is not None else "—",
+                    delta=_rdisp.avg_delta_text(_mr_skip_avg),
+                )
                 st.caption(
                     "Counts are **distinct New-Position tickers** this period — a name surfaced "
                     "across many days counts once (not daily surfacings). "
                     + ("Frozen as generated, so the report reads the same whenever you open it."
                        if _mr_frozen
                        else "Recomputed live (saved before report-freezing was added).")
+                    + _rdisp.monthly_tiles_caption_suffix(_mr_alpha, _mr_skip_avg, _mr_skip_saved)
                 )
                 st.markdown("")
 
@@ -43857,7 +43855,7 @@ elif page == "📄 Reports":
                 ]:
                     if _mr.get(_mr_col):
                         st.markdown(f"**{_mr_label}**")
-                        st.markdown(_mr.get(_mr_col))
+                        st.markdown(_rdisp.report_markdown(_mr.get(_mr_col)))
                         st.markdown("")
 
                 # Q0 evidence — average alpha by composite band. Does higher conviction
@@ -43934,6 +43932,31 @@ elif page == "📄 Reports":
                 "before filing."
             )
             st.caption(_TRADE_GAP_NOTE)
+            # Reports polish 2026-11-14: the warning is up first (so it shows even if the
+            # ledger build raises), then the ledger, then the downloads right above the
+            # table, only when the year has sales.
+            _rpt_priv = st.session_state.get("_privacy", True)
+            _rpt_ledger = (
+                _tax_report.build_realized_lot_ledger(
+                    _rpt_trades_df, _rpt_year, today=_today_et(),
+                ) if _rpt_trades_df is not None else None
+            )
+            if _rpt_ledger is not None and _rpt_ledger["rows"]:
+                _rpt_csv = _tax_report.format_ledger_csv(_rpt_ledger).to_csv(index=False)
+                _rpt_md = _tax_report.format_ledger_markdown(_rpt_ledger)
+                _rcol1, _rcol2 = st.columns(2)
+                with _rcol1:
+                    st.download_button(
+                        "⬇️ Download CSV", data=_rpt_csv,
+                        file_name=f"tax_report_{_rpt_year}.csv", mime="text/csv",
+                        key="_rpt_dl_csv",
+                    )
+                with _rcol2:
+                    st.download_button(
+                        "⬇️ Download Markdown", data=_rpt_md,
+                        file_name=f"tax_report_{_rpt_year}.md", mime="text/markdown",
+                        key="_rpt_dl_md",
+                    )
             if _rpt_trades_df is None:
                 st.error(
                     "⛔ Couldn't load your trade history right now — the tax "
@@ -43941,9 +43964,6 @@ elif page == "📄 Reports":
                     "shortly."
                 )
             else:
-                _rpt_ledger = _tax_report.build_realized_lot_ledger(
-                    _rpt_trades_df, _rpt_year, today=_today_et(),
-                )
                 if not _rpt_ledger["rows"]:
                     st.info(f"No realized sales found for {_rpt_year}.")
                 else:
@@ -43970,7 +43990,7 @@ elif page == "📄 Reports":
 
                     _rpt_table_rows = []
                     for _rr in _rpt_ledger["rows"]:
-                        _rr_ws_label = _tax_report.wash_sale_label(_rr)
+                        _rr_ws_label = _tax_report.wash_sale_label(_rr, short=True)
                         _rpt_table_rows.append({
                             "Ticker": _rr["ticker"],
                             "Buy Date": _rr["buy_date"] or "—",
@@ -43979,26 +43999,34 @@ elif page == "📄 Reports":
                             "Proceeds": _rr["proceeds"],
                             "Cost": _rr["cost"] if _rr["cost"] is not None else None,
                             "Gain": _rr["gain"] if _rr["gain"] is not None else None,
-                            "Days Held": _rr["days_held"] if _rr["days_held"] is not None else None,
+                            "Days": _rr["days_held"] if _rr["days_held"] is not None else None,
                             "Term": _rr["term"],
                             "Wash Sale": _rr_ws_label,
                         })
-                    st.dataframe(pd.DataFrame(_rpt_table_rows), hide_index=True, width="stretch")
-
-                _rpt_csv = _tax_report.format_ledger_csv(_rpt_ledger).to_csv(index=False)
-                _rpt_md = _tax_report.format_ledger_markdown(_rpt_ledger)
-                _rcol1, _rcol2 = st.columns(2)
-                with _rcol1:
-                    st.download_button(
-                        "⬇️ Download CSV", data=_rpt_csv,
-                        file_name=f"tax_report_{_rpt_year}.csv", mime="text/csv",
-                        key="_rpt_dl_csv",
-                    )
-                with _rcol2:
-                    st.download_button(
-                        "⬇️ Download Markdown", data=_rpt_md,
-                        file_name=f"tax_report_{_rpt_year}.md", mime="text/markdown",
-                        key="_rpt_dl_md",
+                    _rpt_table_rows.append(_rdisp.tax_total_table_row(_rpt_ledger["rows"]))
+                    # Privacy on: the money columns are built as "••••••" strings in the
+                    # frame itself (raw amounts never reach the browser) and there is no
+                    # gain colour. Privacy off: numeric columns (sortable), Styler display.
+                    _rpt_money = ["Proceeds", "Cost", "Gain"]
+                    _rpt_df = pd.DataFrame(_rpt_table_rows)
+                    _rpt_df["Days"] = pd.to_numeric(_rpt_df["Days"], errors="coerce").astype("Int64")
+                    if _rpt_priv:
+                        for _rc in _rpt_money:
+                            _rpt_df[_rc] = [_rdisp.tax_money_text(_v, mask=_rpt_priv) for _v in _rpt_df[_rc]]
+                        st.dataframe(_rpt_df, hide_index=True, width="stretch")
+                    else:
+                        _rpt_styler = (
+                            _rpt_df.style
+                            .format(lambda v: "" if pd.isna(v) else f"{v:,.4f}".rstrip("0").rstrip("."),
+                                    subset=["Shares"])
+                            .format(na_rep="", subset=["Days"])
+                            .format(lambda v: _rdisp.tax_money_text(v, mask=_rpt_priv), subset=_rpt_money)
+                            .map(lambda v: _rdisp.gain_css(v, mask=_rpt_priv), subset=["Gain"])
+                        )
+                        st.dataframe(_rpt_styler, hide_index=True, width="stretch")
+                    st.caption(
+                        "wash sale (deferred) = the loss is deferred, all or part; "
+                        "the downloads carry the full wording."
                     )
 
 elif page == "🔔 Catalyst Watch":
@@ -45623,7 +45651,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Lives on the 📄 Reports page, and uses the same numbers as 📄 Reports → Performance Review → Last week when it is generated; your account's net-equity change vs SPY over the same dates. A saved debrief keeps the figures it was generated with, and the page says when they differ from Performance Review → Last week (for example after the account record was repaired, or when it is for an earlier week).
 
-- **🧭 Monthly Decision Review (AI) — "is the engine picking well, and am I acting well?"** Lives on the 📄 Reports page. A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
+- **🧭 Monthly Decision Review (AI) — "is the engine picking well, and am I acting well?"** Lives on the 📄 Reports page. A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. Two tiles open it: **Names you bought** and **Names you skipped**, each a count of distinct names with its average alpha vs SPY in percentage points (bought: over the matured surfacings you acted on; skipped: over every matured surfacing of the names you never bought). The skipped average is saved from the first report generated after this update (2026-11-14); an older report says it wasn't saved rather than recomputing it. The report is visual (funnel chart with each step's count, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
 - **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A position whose label changed since the last day it was scored auto-expands with a **"🆕 Changed since your last visit"** badge, so a real tier shift can't get missed just because this tab only recomputes once per trading day. Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears in the "⚠️ Alerts" group near the top of 🏠 Home (alongside Day Shock, price cross-check, and the other awareness banners) when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
 
@@ -45713,7 +45741,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 
 **8. 📄 Reports — its own page in the left menu (MAIN, right below 💰 Account), with four report types:** 📈 Performance Review (opens first) and 🧾 Tax Report, owner-only and described below, plus the 🗓️ Weekly Debrief and the 🧭 Monthly Decision Review (AI), which a read-only viewer can also open (see the 🧠 AI section of this guide).
 
-**Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ wash sale (loss deferred, all or part) / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. Download the full lot table as CSV or a formatted Markdown report. **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
+**Tax Report:** pick a tax year and see your realized gains/losses split into short-term vs. long-term, reconstructed lot-by-lot in the order you actually bought (FIFO) rather than the single blended average-cost number shown elsewhere in the app. Each closed lot also gets a wash-sale flag (⛔ wash sale (loss deferred, all or part), shortened on screen to "⛔ wash sale (deferred)" while the downloads keep the full wording / ⏳ pending / ✅ clean) reusing the same check the Tax lens on 🥧 Portfolio Overview already applies to harvested losses. A reconciliation line compares this report's total to the app's own stored average-cost total — they can legitimately differ on a position you sold in parts at different prices, and the report says so rather than picking one silently. The table ends with a **Total** row over the lots whose gain is known (a lot with an unknown cost is left out of all three totals and the row says how many), and with 🙈 Hide values on its money columns read ••••••. Download the full lot table as CSV or a formatted Markdown report (the buttons appear under the not-tax-advice note, only when the year has sales). **This is not tax advice** — it's an informational reconciliation tool; verify every figure against your broker's official 1099-B before filing.
 
 **Performance Review:** pick a period (Last week — the last completed Mon–Sun — Last month, This quarter, Last quarter, This tax year, Since tracking once your account history covers enough, or a custom date range) for a point-in-time, downloadable snapshot. **At the top: a data-trust strip, then "1 · Period result" and "3 · Leverage & margin"** (see the paragraph below). Everything described next sits under a **"More from this period"** expander: **Account Return vs SPY** (your real account return, read from your recorded account value just before the period started and at its end, adjusted for any deposits/withdrawals in between, next to SPY's return over those SAME dates — a "Month by month" expander breaks it down by calendar month; shown only when your daily account history covers the start of the period, otherwise withheld with a note on what sub-range IS covered); **Return on Capital Cycled Through Closed Trades** (realized P&L divided by the summed cost basis of every closed lot that period — capital reused across several round trips is counted once per trade, so this reads closer to an average per-trade return than a period return, and it's **not your account's own return**; realized only, doesn't include gains/losses still sitting unrealized in open positions); **Trade Behavior** (trades closed, total realized P&L, win rate, trigger breakdown, monthly trend); **Recommendations Acted vs Skipped** and **Gates Fired** (period counts pulled from the same ledgers behind 🎖️ Recommendation Outcomes and 🛑 The Road Not Taken — a short period will usually sit below those pages' minimum-sample floor, so this shows plain counts rather than a "verdict," which always stays on the two standalone pages so the two can never disagree); **Risk Discipline** (R-Multiple — closed trades' realized P&L measured against the planned risk at entry, reconstructed from the app's ATR-baseline or your own saved risk plan; per-trade detail always shown, plus mean/median/worst-loss stats once enough matured episodes exist); and **Portfolio Risk Drift** (start-vs-end change over the period, reusing your existing risk-snapshot history; the old leverage-cushion drift now lives in section 3). Downloads as CSV or Markdown, same as the Tax Report.
 

@@ -258,7 +258,12 @@ def test_reports_page_and_email_share_the_rows_and_the_formatter():
     seg = source_segment(text, next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
                                     and n.name == "_m_usd"))
     assert "_pa_mod.usd_plain(v, plus=plus)" in seg
-    assert '_m_usd(_w["value"], plus=not _w["total"])' in text
+    # the page renders the rows through report_display.waterfall_markdown, which formats each
+    # cell with the same usd_plain(value, plus=not total) (pinned in tests/test_report_display.py)
+    assert "_rdisp.waterfall_markdown(" in text
+    rd_tree = parse_file_cached(ROOT / "stock_analyzer" / "report_display.py")
+    assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "usd_plain"
+               for n in ast.walk(rd_tree))
     # the email: the package builds its rows with the same function; notify formats with the same rule
     da_tree = parse_file_cached(ROOT / "stock_analyzer" / "debrief_advisor.py")
     assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "waterfall_rows"

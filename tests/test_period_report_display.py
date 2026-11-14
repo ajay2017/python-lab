@@ -81,17 +81,20 @@ def test_dollar_helpers_read_non_finite_as_unknown():
     assert pa._usd(1313.4) == bs + "$1,313"
 
 
-def test_period_report_tables_are_sized_to_their_rows():
+def test_period_report_tables_are_markdown_tables_not_scrolling_dataframes():
+    # Reports polish 2026-11-14: the waterfall and the Unexplained table render as
+    # compact markdown tables (every row visible, nothing to size or scroll).
     tree = parse_file_cached(Path(__file__).resolve().parent.parent / "app.py")
-    hits = 0
+    md_hits = 0
     for n in ast.walk(tree):
-        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                and n.func.attr == "dataframe" and n.args):
-            seg = source_segment(_SRC, n) or ""
-            if "Where the change came from" in seg or "Book gap at end" in seg:
-                assert any(k.arg == "height" for k in n.keywords), seg[:80]
-                hits += 1
-    assert hits == 2
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.args):
+            continue
+        seg = source_segment(_SRC, n) or ""
+        if n.func.attr == "dataframe":
+            assert "Where the change came from" not in seg and "Book gap at end" not in seg, seg[:80]
+        if n.func.attr in ("waterfall_markdown", "money_table_markdown"):
+            md_hits += 1
+    assert md_hits == 2
 
 
 def test_book_side_extra_names_left_out_positions():

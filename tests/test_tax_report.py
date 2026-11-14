@@ -278,6 +278,20 @@ def test_wash_sale_label_violation_reads_loss_deferred():
     assert "violation" not in tr.wash_sale_label(row)
 
 
+def test_wash_sale_label_short_form_shortens_the_violation_case_only():
+    row = {"wash_sale_status": {"status": "violation"}, "gain": -50.0}
+    assert tr.wash_sale_label(row, short=True) == "⛔ wash sale (deferred)"
+    assert tr.wash_sale_label(row, emoji=False, short=True) == "wash sale (deferred)"
+    # the default (CSV / Markdown exports) keeps the full wording
+    assert tr.wash_sale_label(row) == "⛔ wash sale (loss deferred, all or part)"
+    assert tr.wash_sale_label(row, emoji=False) == "wash sale (loss deferred, all or part)"
+    # every other status is unchanged by short=True
+    assert tr.wash_sale_label({"wash_sale_status": {"status": "pending"}, "gain": -1.0}, short=True) == "⏳ pending"
+    assert tr.wash_sale_label({"wash_sale_status": {"status": "clean"}, "gain": -1.0}, short=True) == "✅ clean"
+    assert tr.wash_sale_label({"wash_sale_status": None, "gain": 5.0}, short=True) == "n/a (gain)"
+    assert tr.wash_sale_label({"wash_sale_status": None, "gain": None}, short=True) == "—"
+
+
 def test_wash_sale_label_pending_and_clean_keep_their_wording():
     assert tr.wash_sale_label({"wash_sale_status": {"status": "pending"}, "gain": -1.0}) == "⏳ pending"
     assert tr.wash_sale_label({"wash_sale_status": {"status": "clean"}, "gain": -1.0}) == "✅ clean"

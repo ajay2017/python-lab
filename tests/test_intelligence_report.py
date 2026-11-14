@@ -142,6 +142,9 @@ def test_build_report_package_flow_n_total_zero_returns_before_stats(monkeypatch
     assert result["n_total"] == 0
     assert result["action_rate"] is None
     assert result["n_graded"] == 0  # never reached summary_stats
+    # The skipped average is frozen only on the path that computed stats; the early
+    # return leaves the key absent, which the app reads as "not saved".
+    assert "avg_skipped_names_alpha" not in result["viz"]
 
 
 def _fake_pipeline(monkeypatch, n_priced, min_graded_check_value=None):
@@ -182,6 +185,37 @@ def test_build_report_package_fully_populated_pipeline(monkeypatch):
     assert result["q0_ready"] is True  # 5 >= min_graded(5)
     assert len(result["weekly_trajectory"]) == 1
     assert result["weekly_trajectory"][0]["week_ending"] == "2026-01-25"
+
+
+def test_build_report_package_freezes_skipped_names_avg_alpha_into_viz(monkeypatch):
+    _fake_pipeline(monkeypatch, n_priced=5)
+    seen = {}
+
+    def _fake_skipped(enriched, rec_types=("new_pick",)):
+        seen["enriched"], seen["rec_types"] = enriched, rec_types
+        return -1.5
+
+    monkeypatch.setattr(rh, "skipped_names_avg_alpha", _fake_skipped)
+    recs_df = pd.DataFrame([{"ticker": "AAA"}])
+    result = ir.build_report_package("2026-01-01", "2026-01-31", recs_df, pd.DataFrame(), min_graded=5)
+    assert result["viz"]["avg_skipped_names_alpha"] == -1.5
+    # computed over the FULL enriched set (acted-via-any-rec_type), with the report's scope
+    assert [r["ticker"] for r in seen["enriched"]] == ["AAA", "BBB"]
+    assert seen["rec_types"] == ("new_pick",)
+    # the package-level per-surfacing average keeps its meaning (it feeds the LLM prompt)
+    assert result["avg_missed_alpha"] == -2.0
+    assert "avg_missed_alpha" not in result["viz"]
+    # JSON-safe: the snapshot is written to a jsonb column
+    import json
+    assert json.loads(json.dumps(result["viz"]))["avg_skipped_names_alpha"] == -1.5
+
+
+def test_build_report_package_freezes_none_skipped_avg_as_present_none(monkeypatch):
+    _fake_pipeline(monkeypatch, n_priced=5)   # enriched rows carry no outcomes -> nothing to average
+    recs_df = pd.DataFrame([{"ticker": "AAA"}])
+    result = ir.build_report_package("2026-01-01", "2026-01-31", recs_df, pd.DataFrame(), min_graded=5)
+    assert "avg_skipped_names_alpha" in result["viz"]
+    assert result["viz"]["avg_skipped_names_alpha"] is None
 
 
 def test_build_report_package_q0_ready_boundary(monkeypatch):

@@ -1064,6 +1064,64 @@ def test_signal_flow_basic_scoped_counts():
     assert out["missed_loss"] == 1
 
 
+# ─── skipped_names_avg_alpha (the "Names you skipped" tile's average) ────────
+
+def _srow(ticker, alpha, *, acted=False, rec_type="new_pick", maturing=False,
+          outcome=1.0, day=1):
+    return _erow(ticker=ticker, rec_type=rec_type, acted_on=acted, outcome_pct=outcome,
+                 alpha_pct=alpha, outcome_maturing=maturing, rec_date=date(2026, 1, day))
+
+
+def test_skipped_names_avg_excludes_a_name_bought_on_another_day_of_its_run():
+    # AAA surfaced 3 times, bought on day 2: ALL its surfacings are out, unlike
+    # summary_stats, which would average the two acted_on=False ones as "missed".
+    rows = [
+        _srow("AAA", 10.0, day=1), _srow("AAA", 10.0, acted=True, day=2), _srow("AAA", 10.0, day=3),
+        _srow("BBB", -4.0, day=1), _srow("BBB", -2.0, day=2),
+    ]
+    assert rh.skipped_names_avg_alpha(rows) == -3.0
+    assert rh.summary_stats(rows)["avg_missed_alpha"] != -3.0   # the per-surfacing figure differs
+
+
+def test_skipped_names_avg_name_acted_via_buy_candidate_drops_its_new_pick_rows():
+    rows = [
+        _srow("AAA", 8.0, acted=True, rec_type="buy_candidate", day=1),
+        _srow("AAA", 8.0, day=2),
+        _srow("BBB", -6.0, day=2),
+    ]
+    assert rh.skipped_names_avg_alpha(rows) == -6.0
+    # the acted set matches signal_flow's: one acted name, one missed
+    flow = rh.signal_flow(rows)
+    assert (flow["n_acted"], flow["n_missed"]) == (1, 1)
+
+
+def test_skipped_names_avg_scoped_to_rec_types():
+    rows = [_srow("BBB", -6.0), _srow("CCC", 50.0, rec_type="buy_candidate")]
+    assert rh.skipped_names_avg_alpha(rows) == -6.0
+    assert rh.skipped_names_avg_alpha(rows, rec_types=None) == 22.0
+
+
+def test_skipped_names_avg_ignores_maturing_unpriced_and_alpha_none_rows():
+    rows = [
+        _srow("BBB", -4.0),
+        _srow("CCC", 90.0, maturing=True),
+        _srow("DDD", 90.0, outcome=None),
+        _srow("EEE", None),
+    ]
+    assert rh.skipped_names_avg_alpha(rows) == -4.0
+
+
+def test_skipped_names_avg_none_when_nothing_left():
+    assert rh.skipped_names_avg_alpha([]) is None
+    assert rh.skipped_names_avg_alpha([_srow("AAA", 5.0, acted=True)]) is None
+    assert rh.skipped_names_avg_alpha([_srow("BBB", 5.0, maturing=True)]) is None
+
+
+def test_skipped_names_avg_rounds_to_two_decimals():
+    rows = [_srow("BBB", 1.0), _srow("CCC", 1.0), _srow("DDD", 2.0)]
+    assert rh.skipped_names_avg_alpha(rows) == 1.33
+
+
 # ─── report_viz_snapshot ────────────────────────────────────────────────────
 
 def test_report_viz_snapshot_bands_excludes_none_avg_alpha():

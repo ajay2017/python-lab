@@ -275,17 +275,20 @@ def available_tax_years(trades_df: pd.DataFrame | None) -> list[int]:
     return years
 
 
-def wash_sale_label(row: dict, *, emoji: bool = True) -> str:
+def wash_sale_label(row: dict, *, emoji: bool = True, short: bool = False) -> str:
     """Display label for one lot's wash-sale status. The internal status value
     stays "violation" (it is `tax_advisor.wash_sale_violation_after_harvest`'s
     contract); a wash sale is a DEFERRED loss, not a violation, so the reader
     sees "wash sale (loss deferred, all or part)". A lot with no status reads "n/a (gain)"
     when it is a gain (the rule only applies to realized losses), else "—"
-    (gain unknown). `emoji=False` is the plain form for CSV / Markdown exports."""
+    (gain unknown). `emoji=False` is the plain form for CSV / Markdown exports.
+    `short=True` (on-screen table only) shortens the violation case to
+    "wash sale (deferred)"; every other status is unchanged."""
     ws = (row or {}).get("wash_sale_status")
     status = ws.get("status") if isinstance(ws, dict) else None
     if status == "violation":
-        return ("⛔ " if emoji else "") + "wash sale (loss deferred, all or part)"
+        return ("⛔ " if emoji else "") + (
+            "wash sale (deferred)" if short else "wash sale (loss deferred, all or part)")
     if status == "pending":
         return ("⏳ " if emoji else "") + "pending"
     if status == "clean":

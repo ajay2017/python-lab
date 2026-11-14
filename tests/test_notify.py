@@ -754,14 +754,45 @@ def test_render_intelligence_email_alpha_html_nan_renders_na_not_nan():
 
 def test_render_intelligence_email_alpha_html_normal_value():
     html = notify.render_intelligence_email(_report(engine_alpha=7.5))
-    assert "+7.5%" in html
+    assert "+7.5 pp" in html
     assert "#16a34a" in html
 
 
 def test_render_intelligence_email_alpha_html_negative_value():
     html = notify.render_intelligence_email(_report(engine_alpha=-2.5))
-    assert "-2.5%" in html
+    assert "-2.5 pp" in html
     assert "#dc2626" in html
+
+
+def test_render_intelligence_email_metric_strip_labels():
+    html = notify.render_intelligence_email(_report())
+    for lbl in ("Bought: avg vs SPY", "Skipped: avg vs SPY", "Names you bought", "Names you skipped"):
+        assert lbl in html
+    for old in ("Engine alpha (acted)", "Acted on", "Missed"):
+        assert old not in html
+
+
+def test_render_intelligence_email_skipped_avg_from_frozen_viz():
+    rep = _report()
+    rep["viz_json"] = {"flow": {}, "avg_skipped_names_alpha": -0.8}
+    html = notify.render_intelligence_email(rep)
+    assert "-0.8 pp" in html
+
+
+def test_render_intelligence_email_skipped_avg_absent_key_reads_dash():
+    for viz in (None, {"flow": {}}, "not-a-dict"):
+        rep = _report(engine_alpha=None)
+        rep["viz_json"] = viz
+        html = notify.render_intelligence_email(rep)
+        assert "Skipped: avg vs SPY" in html
+        assert " pp<" not in html
+
+
+def test_render_intelligence_email_skipped_avg_present_but_none_reads_na():
+    rep = _report(engine_alpha=1.0)
+    rep["viz_json"] = {"avg_skipped_names_alpha": None}
+    html = notify.render_intelligence_email(rep)
+    assert "N/A" in html
 
 
 # ─── send_email_resend ───────────────────────────────────────────────────────

@@ -1697,7 +1697,7 @@ def render_intelligence_email(report: dict) -> str:
         if v is None:
             return "<span style='color:#6b7280'>N/A</span>"
         colour = "#16a34a" if v >= 0 else "#dc2626"
-        return f"<span style='color:{colour};font-weight:700'>{v:+.1f}%</span>"
+        return f"<span style='color:{colour};font-weight:700'>{v:+.1f} pp</span>"
 
     def _metric_cell(label: str, inner: str, last: bool = False) -> str:
         border = "" if last else "border-right:1px solid #e5e7eb"
@@ -1708,12 +1708,21 @@ def render_intelligence_email(report: dict) -> str:
             f"<div style='font-size:1.3em;font-weight:700'>{inner}</div></td>"
         )
 
+    # Skipped-names average: frozen in the report's viz snapshot; reports saved before it
+    # was added lack the key and read "—" (never recomputed, never 0).
+    _viz = report.get("viz_json")
+    _skipped_html = (
+        _alpha_html(_viz.get("avg_skipped_names_alpha"))
+        if isinstance(_viz, dict) and "avg_skipped_names_alpha" in _viz else "—"
+    )
+
     perf_block = (
         "<table width='100%' style='border-collapse:collapse;background:#f8fafc;"
         "border:1px solid #e5e7eb;border-radius:8px;margin:20px 0;overflow:hidden'><tr>"
-        + _metric_cell("Engine alpha (acted)", _alpha_html(engine_alpha))
-        + _metric_cell("Acted on", f"{acted if acted is not None else '—'}")
-        + _metric_cell("Missed", f"{missed if missed is not None else '—'}", last=True)
+        + _metric_cell("Bought: avg vs SPY", _alpha_html(engine_alpha))
+        + _metric_cell("Skipped: avg vs SPY", _skipped_html)
+        + _metric_cell("Names you bought", f"{acted if acted is not None else '—'}")
+        + _metric_cell("Names you skipped", f"{missed if missed is not None else '—'}", last=True)
         + "</tr></table>"
     )
 

@@ -207,8 +207,57 @@ def test_every_period_dollar_goes_through_the_masking_helper():
     # no raw usd_plain / _m(usd_plain) left in the render: dollars use _m_usd only
     assert [c for c in ast.walk(region) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
             and c.func.attr == "usd_plain"] == []
+    # 8 direct _m_usd cells; the S1 waterfall and the Unexplained table moved to markdown
+    # tables (Reports polish 2026-11-14), which mask inside report_display via mask=
     assert len([c for c in ast.walk(region) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
-                and c.func.id == "_m_usd"]) >= 10
+                and c.func.id == "_m_usd"]) >= 8
+    tables = [c for c in ast.walk(region) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+              and c.func.attr in ("waterfall_markdown", "money_table_markdown")]
+    assert len(tables) == 2
+    for c in tables:
+        mask = next(k.value for k in c.keywords if k.arg == "mask")
+        # exact text: a False default (`.get("_privacy")`) would leak amounts to a fresh session
+        assert ast.unparse(mask) == "st.session_state.get('_privacy', True)", ast.unparse(c)[:80]
+
+
+def _tax_branch():
+    return next(n for n in ast.walk(_TREE) if isinstance(n, ast.If)
+                and ast.unparse(n.test) == "_rpt_kind == '🧾 Tax Report'")
+
+
+def test_tax_report_masks_money_columns_from_privacy_default_true():
+    # Reports polish 2026-11-14: with privacy on, Proceeds / Cost / Gain are built as
+    # "••••••" strings in the frame itself and carry no gain colour.
+    branch = _tax_branch()
+    assigns = [n for n in ast.walk(branch) if isinstance(n, ast.Assign)
+               and any(isinstance(t, ast.Name) and t.id == "_rpt_priv" for t in n.targets)]
+    assert len(assigns) == 1
+    assert ast.unparse(assigns[0].value) == "st.session_state.get('_privacy', True)"
+
+    def _calls(attr):
+        return [n for n in ast.walk(branch) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == attr]
+
+    money, gain = _calls("tax_money_text"), _calls("gain_css")
+    assert len(money) >= 2 and len(gain) == 1
+    for c in money + gain:
+        assert ast.unparse(_kw(c, "mask")) == "_rpt_priv", ast.unparse(c)
+    # the privacy-on path rewrites the frame's money columns (list comp assigned into _rpt_df)
+    frame_writes = [n for n in ast.walk(branch) if isinstance(n, ast.Assign)
+                    and isinstance(n.targets[0], ast.Subscript)
+                    and ast.unparse(n.targets[0].value) == "_rpt_df"
+                    and isinstance(n.value, ast.ListComp)
+                    and "tax_money_text" in ast.unparse(n.value)]
+    assert frame_writes
+
+
+def test_tax_report_warning_renders_before_the_ledger_is_built():
+    src = _SRC
+    start = src.index('elif _rpt_kind == "🧾 Tax Report":')
+    end = src.index('elif page == "🔔 Catalyst Watch":')
+    seg = src[start:end]
+    assert seg.index("Not tax advice") < seg.index("build_realized_lot_ledger")
+    assert seg.index("build_realized_lot_ledger") < seg.index("Download CSV")
 
 
 def test_trust_strip_is_masked_by_mask_usd_behind_the_privacy_flag():

@@ -169,7 +169,7 @@ def build_report_package(
     """
     from stock_analyzer.recommendations_history import (
         match_recs_to_trades, compute_outcomes, summary_stats,
-        by_composite_band, by_verdict, report_viz_snapshot,
+        by_composite_band, by_verdict, report_viz_snapshot, skipped_names_avg_alpha,
     )
     from stock_analyzer.constants import REC_SCORE_MIN_DAYS
 
@@ -242,7 +242,13 @@ def build_report_package(
     # aggregates (alpha, best/worst), never for the headline name counts above.
     scoped = [r for r in enriched_all if rec_types is None or r.get("rec_type") in rec_types]
     stats  = summary_stats(scoped)
-    package["n_graded"]   = stats["n_priced"]   # surfacings matured enough to grade (internal)
+    # Frozen with the report so the "Names you skipped" tile never recomputes live. It is
+    # the average over the SAME names the tile counts (never acted on via any surfacing),
+    # NOT summary_stats' per-surfacing avg_missed_alpha (that one stays in the package for
+    # the LLM prompt). Absent on the early-return paths above and on reports saved before
+    # this key existed, which the app reads as "not saved" (never as 0).
+    viz["avg_skipped_names_alpha"] = skipped_names_avg_alpha(enriched_all, rec_types=rec_types)
+    package["n_graded"]  = stats["n_priced"]   # surfacings matured enough to grade (internal)
     package["engine_alpha_pct"] = stats["avg_acted_alpha"]   # Q0 headline (mean over acted picks)
     package["avg_acted_pct"]    = stats["avg_acted_pct"]
     package["avg_missed_pct"]   = stats["avg_missed_pct"]
