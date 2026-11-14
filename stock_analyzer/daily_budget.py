@@ -36,6 +36,7 @@ from stock_analyzer.constants import (
     ACCOUNT_CASH_STALE_DAYS,
     DAILY_NEW_POSITION_BUDGET_PCT,
 )
+from stock_analyzer import sync_timing
 from stock_analyzer.sold_today import _et_trade_dates
 
 # Stamped on every budget-processed sizing (version 4 = adds the daily budget;
@@ -64,10 +65,15 @@ def _num(x):
     return v if math.isfinite(v) else None
 
 
-def _trade_rows(trades_df, keep):
-    """[(ticker, action, dollars, utc_ts)] for BUY/SELL rows where
-    `keep(et_date, utc_ts)` is true. None when the log can't be read or a kept
-    row can't be valued (rows that are not kept never poison the result)."""
+def _trade_rows(trades_df, keep, cut=None):
+    """[(ticker, action, dollars, utc_ts, code)] for BUY/SELL rows where
+    `keep(et_date, utc_ts, code)` is true. None when the log can't be read or a
+    kept row can't be valued (rows that are not kept never poison the result).
+
+    `cut` (a tz-aware instant, or None): when given, `code` is the row's
+    `sync_timing.row_codes` verdict against it (`sync_timing.AFTER` / `UNKNOWN` /
+    `BEFORE`); an unreadable sync time reads as an unreadable log (None).
+    Without a `cut`, `code` is None."""
     if trades_df is None:
         return None
     if getattr(trades_df, "empty", True):
@@ -76,6 +82,11 @@ def _trade_rows(trades_df, keep):
         return None
     try:
         traded_at, dates = _et_trade_dates(trades_df)
+        codes = None
+        if cut is not None:
+            codes = sync_timing.row_codes(trades_df, cut)
+            if codes is None:
+                return None
         actions = trades_df["action"].astype(str).str.upper()
         out = []
         for i in range(len(trades_df)):
@@ -85,7 +96,8 @@ def _trade_rows(trades_df, keep):
             ts = traded_at.iloc[i]
             if pd.isna(ts):
                 return None  # a BUY/SELL whose date is unknowable
-            if not keep(dates.iloc[i], ts):
+            code = None if codes is None else int(codes[i])
+            if not keep(dates.iloc[i], ts, code):
                 continue
             tk = trades_df["ticker"].iloc[i]
             sh = _num(trades_df["shares"].iloc[i])
@@ -93,7 +105,7 @@ def _trade_rows(trades_df, keep):
             if sh is None or px is None or sh < 0 or px <= 0 or pd.isna(tk) \
                     or not str(tk).strip():
                 return None  # kept but can't be valued
-            out.append((str(tk).strip().upper(), act, sh * px, ts))
+            out.append((str(tk).strip().upper(), act, sh * px, ts, code))
         return out
     except Exception:
         return None
@@ -101,38 +113,66 @@ def _trade_rows(trades_df, keep):
 
 def buys_on_et_day(trades_df, day) -> "dict[str, float] | None":
     """{ticker: dollars bought on ET `day`} (adds included); None = can't read."""
-    rows = _trade_rows(trades_df, lambda d, ts: d == day)
+    rows = _trade_rows(trades_df, lambda d, ts, c: d == day)
     if rows is None:
         return None
     out: dict[str, float] = {}
-    for tk, act, usd, _ in rows:
+    for tk, act, usd, _, _c in rows:
         if act == "BUY":
             out[tk] = out.get(tk, 0.0) + usd
     return out
 
 
-def trades_after(trades_df, day, after_ts) -> "tuple[float, float] | None":
-    """(buy $, sell $) of EVERY BUY/SELL logged strictly after `after_ts`,
-    whatever its date (a cash record is trusted for days, so an earlier-dated
-    post-cash trade must still be corrected); None = can't read. `day` is
-    accepted for signature symmetry and does not filter. A trade exactly AT
-    `after_ts` is not after it (the cash record already reflects it)."""
+def trades_after_split(trades_df, day, after_ts) -> "dict | None":
+    """Every BUY/SELL logged after `after_ts`, split by how sure we are
+    (RecTime C3, `docs/plans/fill-time-typed.md`); None = can't read.
+
+    `sync_timing.after_sync` decides per row: CERTAIN (the cash record can't
+    contain it) or UNKNOWN (a blank-time or 16:00-anchor row on the cash
+    record's own day: the record may already include it). A row certainly at or
+    before the record is in neither. Returns
+    {"buy", "sell"}                 $ of the CERTAIN-after BUYs / SELLs,
+    {"unknown_buy", "unknown_sell"} $ of the UNKNOWN BUYs / SELLs,
+    {"unknown_tickers"}             sorted tickers of the UNKNOWN rows.
+    Same unreadable rules as before: a BUY/SELL with no readable time, or a
+    certain / unknown row that can't be valued, makes the whole answer None."""
     try:
         cut = pd.to_datetime(after_ts, utc=True)
     except Exception:
         return None
     if pd.isna(cut):
         return None
-    rows = _trade_rows(trades_df, lambda d, ts: ts > cut)
+    rows = _trade_rows(
+        trades_df, lambda d, ts, c: c in (sync_timing.AFTER, sync_timing.UNKNOWN), cut)
     if rows is None:
         return None
-    buy = sell = 0.0
-    for _, act, usd, ts in rows:
-        if act == "BUY":
-            buy += usd
+    buy = sell = u_buy = u_sell = 0.0
+    u_tickers: set = set()
+    for tk, act, usd, _, code in rows:
+        if code == sync_timing.AFTER:
+            if act == "BUY":
+                buy += usd
+            else:
+                sell += usd
         else:
-            sell += usd
-    return buy, sell
+            u_tickers.add(tk)
+            if act == "BUY":
+                u_buy += usd
+            else:
+                u_sell += usd
+    return {"buy": buy, "sell": sell, "unknown_buy": u_buy,
+            "unknown_sell": u_sell, "unknown_tickers": sorted(u_tickers)}
+
+
+def trades_after(trades_df, day, after_ts) -> "tuple[float, float] | None":
+    """(buy $, sell $) of every BUY/SELL CERTAINLY logged after `after_ts`,
+    whatever its date (a cash record is trusted for days, so an earlier-dated
+    post-cash trade must still be corrected); None = can't read. `day` is
+    accepted for signature symmetry and does not filter. A trade exactly AT
+    `after_ts` is not after it (the cash record already reflects it). Rows that
+    may or may not be in the cash record are NOT here: see `trades_after_split`."""
+    ta = trades_after_split(trades_df, day, after_ts)
+    return None if ta is None else (ta["buy"], ta["sell"])
 
 
 def budget_basis(gross_book, net_capital, basis_state, cash_balance,
@@ -142,11 +182,28 @@ def budget_basis(gross_book, net_capital, basis_state, cash_balance,
 
     basis_state is margin.resolve_net_capital's second return value
     ("levered"|"unlevered"|"stale"|"called"), passed as a plain string.
-    Returns {"state": "ok"|"unknown"|"called", "basis", "reason", "lag_adjustment"}.
+    Returns {"state": "ok"|"unknown"|"called", "basis", "reason", "lag_adjustment",
+    "lag_uncertain", "lag_uncertain_tickers"}.
+
+    RecTime C3 (owner Q2, 2026-11-13): a trade CERTAINLY after the cash record
+    (`sync_timing.after_sync`) has its BUY subtracted and its SELL added, as
+    before. A trade that may already be IN the cash record (a blank-time hand log
+    or a 16:00-anchor row on the record's own day) has its BUY still subtracted
+    and its SELL NOT added: the basis can only come out lower, never higher
+    (tightening-only). `lag_adjustment` is that tightened figure.
+
+    `lag_uncertain` is the most the basis may be too LOW because of those rows:
+    the unknown SELL proceeds not added plus the unknown BUY cost subtracted
+    (either may already be in the cash figure), both counted gross, always >= 0;
+    `lag_uncertain_tickers` names them. 0.0 / [] when no row is unknown, and on
+    every state that carries no lag ("unknown", "stale", "called" by margin).
+    An unreadable trade log (or a BUY/SELL with no readable time) still gives
+    state "unknown": nothing is guessed.
     """
-    def _res(state, basis=None, reason=None, lag=0.0):
+    def _res(state, basis=None, reason=None, lag=0.0, unc=0.0, unc_tk=()):
         return {"state": state, "basis": basis, "reason": reason,
-                "lag_adjustment": lag}
+                "lag_adjustment": lag, "lag_uncertain": unc,
+                "lag_uncertain_tickers": list(unc_tk)}
 
     if basis_state == "called":
         return _res("called", _num(net_capital), reason=CALLED_REASON)
@@ -170,14 +227,17 @@ def budget_basis(gross_book, net_capital, basis_state, cash_balance,
         base = None if gb is None or gb <= 0 else gb + cash
     if base is None:
         return _res("unknown", reason="net capital couldn't be determined")
-    ta = trades_after(trades_df, day, cash_as_of)
+    ta = trades_after_split(trades_df, day, cash_as_of)
     if ta is None:
         return _res("unknown", reason="the trade log couldn't be read")
-    lag = ta[1] - ta[0]
+    # Certain rows both ways; unknown BUYs subtracted, unknown SELLs NOT added.
+    lag = ta["sell"] - ta["buy"] - ta["unknown_buy"]
+    unc = ta["unknown_buy"] + ta["unknown_sell"]
     basis = base + lag
     if basis <= 0:
-        return _res("called", basis, reason=CALLED_REASON, lag=lag)
-    return _res("ok", basis, lag=lag)
+        return _res("called", basis, reason=CALLED_REASON, lag=lag, unc=unc,
+                    unc_tk=ta["unknown_tickers"])
+    return _res("ok", basis, lag=lag, unc=unc, unc_tk=ta["unknown_tickers"])
 
 
 def candidate_sort_key(c) -> tuple:

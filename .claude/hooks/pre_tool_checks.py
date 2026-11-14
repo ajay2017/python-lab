@@ -1164,6 +1164,13 @@ _GATE_FILES = {
     # Margin, the budget basis and the broker-drift excuse read it from C3/C4, so
     # a wrong call counts a trade a second time against the anchor or the budget.
     "stock_analyzer/sync_timing.py",
+    # Added 2026-11-13 (RecTime C3, docs/plans/fill-time-typed.md): Capital vs
+    # Margin's cash reconstruction and its self-check (`validate_reconstruction` /
+    # `render_gate`) that withholds the margin verdicts when the rebuilt cash drifts
+    # from the recorded cash; its late-trade anchor decides which same-day trades
+    # are folded into the anchor, so a wrong call fails the self-check or hides a
+    # real drift.
+    "stock_analyzer/capital_vs_margin.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per

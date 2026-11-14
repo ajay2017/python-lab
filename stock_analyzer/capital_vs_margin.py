@@ -54,6 +54,7 @@ from datetime import date as _date, datetime as _datetime, timedelta as _timedel
 import pandas as pd
 
 from stock_analyzer.daily_pnl import today_trade_cash_delta as _trade_cash_delta
+from stock_analyzer import sync_timing as _sync_timing
 from stock_analyzer.market_time import ET as _ET_TZ
 from stock_analyzer import margin as _margin
 from stock_analyzer.broker_sync import dedupe_income_events as _dedupe_income_events
@@ -265,8 +266,8 @@ def resolve_anchor(account_cash_rec: dict | None, recorded_df, stale_days_limit:
 def adjust_anchor_for_late_trades(anchor: "dict | None",
                                    account_cash_rec: "dict | None",
                                    trades_df) -> "dict | None":
-    """Correct a LIVE anchor for a same-day trade with a CONFIRMED real
-    timestamp, filed AFTER the broker's last `account_cash` sync.
+    """Correct a LIVE anchor for a same-day trade CERTAINLY logged AFTER the
+    broker's last `account_cash` sync (`sync_timing.after_sync is True`).
 
     THE BUG THIS FIXES (confirmed 2026-09-11 against a real self-check
     failure): the broker only syncs `account_cash` ~2x/day, so
@@ -291,25 +292,34 @@ def adjust_anchor_for_late_trades(anchor: "dict | None",
     anchor here corrects both symptoms with one fix, since both come from
     the same root cause (the anchor's incomplete cash figure).
 
-    ⚠️ `trades.traded_at` does NOT always carry a real timestamp. A
-    broker-synced row is written as a bare DATE and `trade_time.
-    normalize_traded_at` (already applied inside `db.load_trades()`, i.e.
-    baked into whatever `trades_df` this function receives) re-anchors it
-    to a FABRICATED 16:00 ET stamp, flagging the row `traded_at_time_known
-    = False` for exactly this reason — so a consumer needing a real fill
-    TIME can exclude it rather than trust an invented one. Comparing that
-    fabricated 16:00 against the real sync time would be a coin flip: it
-    could double-count a broker trade already reflected in the sync (if
-    16:00 lands after it) or silently ignore one that genuinely posted
-    late (if 16:00 lands before it). So THIS FUNCTION ONLY ADJUSTS FOR
-    trades where `traded_at_time_known is not False` — i.e. a real,
-    confirmed intraday timestamp (typically a manually-logged trade). A
-    broker-synced same-day trade is deliberately left unadjusted, same
-    reasoning already given below for flows/income: don't guess, let the
-    existing `validate_reconstruction` self-check flag any resulting
-    drift instead. A row missing the column entirely (or `True`/`None`) is
-    treated as "assume real," matching `traded_at_time_known`'s own
-    documented default for the no-provenance / non-import case.
+    ⚠️ `trades.traded_at` is NOT always a real fill time (RecTime,
+    `docs/plans/fill-time-typed.md`). `trade_time.normalize_traded_at` (already
+    applied inside `db.load_trades()`, i.e. baked into whatever `trades_df`
+    this function receives) classifies every row's time in
+    `traded_at_time_kind`:
+      "fill"         a time the owner typed (or a real broker time): compared
+                     as an instant, strictly after the sync.
+      "recorded"     a blank-time hand log: `traded_at` is the moment Record was
+                     pressed, an UPPER bound on the fill. At or before the sync
+                     it is certainly before it; after it, the fill may be
+                     either side of the sync (unknown).
+      "placeholder"  a time the app invented: the 16:00 ET date anchor that
+                     every import and broker-prefill row is written at (since
+                     `fef5c59` these read `traded_at_time_known = True`, so that
+                     column no longer separates them), or a re-anchored bare
+                     date. Only the DATE is real.
+    Comparing a "recorded" or "placeholder" stamp with the sync instant is a
+    coin flip: live 2026-11-13, #494 (BUY 5 MRVL filled 10:21 ET, saved 14:30
+    ET, already in the 11:19 ET sync) was taken off the anchor a second time and
+    the cash self-check failed. So THIS FUNCTION ONLY ADJUSTS FOR rows
+    `sync_timing.after_sync` calls True (owner decision Q1, 2026-11-13). An
+    UNKNOWN row (can't tell) is NOT adjusted; it is reported in the additive
+    `late_trade_unknown_*` keys below so the page can name it. If the unknown
+    row really was missed by the sync, the existing `validate_reconstruction`
+    self-check flags the resulting drift (fail-closed and visible) until the
+    next sync. A frame with no `traded_at_time_kind` column (an older-shaped
+    frame, or a classification failure) reads `traded_at_time_known is False`
+    as "placeholder" and every other row as "fill", the behaviour before RecTime.
 
     SCOPED TO TRADES ONLY (owner-ratified decision, 2026-09-11) —
     deposits/withdrawals (`account_flows.flow_date`) and dividends/interest
@@ -327,23 +337,24 @@ def adjust_anchor_for_late_trades(anchor: "dict | None",
     "live"` (a `"recorded"` anchor is a complete historical EOD snapshot —
     no intraday-sync concept applies, and trades after it fall outside the
     backward-reconstruction window anyway); `account_cash_rec` is missing
-    its `updated_at`; `updated_at` is unparseable; or no trade satisfies
-    ALL of (a) falls on `anchor["date"]` (its ET calendar date), (b) has a
-    timestamp STRICTLY AFTER the parsed `updated_at` (a tie is treated as
-    already-reflected — the conservative choice against double-counting),
-    and (c) `traded_at_time_known is not False` (a confirmed real
-    timestamp, not an invented broker-sync stamp).
+    its `updated_at`; `updated_at` is unparseable; or no trade on
+    `anchor["date"]` (its ET calendar date) is either certainly after the
+    sync or unknown. A tie with the sync instant is "already reflected".
 
-    Otherwise returns `{**anchor, "cash": anchor["cash"] + delta,
-    "late_trade_adjustment": delta, "late_trade_count": n}` — `delta` is
-    the summed cash effect of the qualifying late trades via
-    `daily_pnl.today_trade_cash_delta` (the SAME formula
-    `reconstruct_daily_cash` uses for its own trade-delta subtraction, so
-    the two can never disagree in sign/magnitude; a SPLIT row contributes
-    zero for free, already handled inside that function). The two extra
-    keys are purely additive — no existing caller reads them, so nothing
-    that already consumes `resolve_anchor`'s `{cash, date, src}` shape can
-    break.
+    Otherwise returns `{**anchor, ...}` with these additive keys (no existing
+    caller reads them, so the `{cash, date, src}` shape can't break):
+      * a certain-after row exists: `cash` = `anchor["cash"] + delta`,
+        `late_trade_adjustment` = `delta`, `late_trade_count` = n. `delta` is
+        the summed cash effect of those rows via `daily_pnl.today_trade_cash_delta`
+        (the SAME formula `reconstruct_daily_cash` uses for its own trade-delta
+        subtraction, so the two can never disagree in sign/magnitude; a SPLIT
+        row contributes zero for free).
+      * an unknown row exists: `late_trade_unknown_count` (rows),
+        `late_trade_unknown_tickers` (sorted) and `late_trade_unknown_delta`
+        (the signed cash delta those rows WOULD have moved, SELL +, BUY -, by
+        the same formula; NOT applied to `cash`). Present whenever the unknown
+        count is above zero (and absent otherwise).
+    A row whose `traded_at` can't be parsed is in neither set.
     """
     if anchor is None or anchor.get("src") != "live":
         return anchor
@@ -362,32 +373,84 @@ def adjust_anchor_for_late_trades(anchor: "dict | None",
 
     df = trades_df.copy()
     df["_d"] = df["traded_at"].apply(_to_et_date)
-    df["_ts"] = pd.to_datetime(df["traded_at"], errors="coerce", utc=True, format="ISO8601")
-    # Only trust the timestamp comparison for a CONFIRMED real time — a
-    # broker-synced row's fabricated 16:00 ET stamp (traded_at_time_known
-    # is False) is not a real fill time and must never be treated as
-    # "late" (see docstring). A row lacking the column entirely (e.g. an
-    # older-shaped frame) defaults to "assume real", matching
-    # `trade_time.normalize_traded_at`'s own no-provenance default.
-    if "traded_at_time_known" in df.columns:
-        _time_known = df["traded_at_time_known"].apply(lambda v: v is not False)
-    else:
-        _time_known = pd.Series(True, index=df.index)
-    late = df[(df["_d"] == anchor["date"]) & df["_ts"].notna()
-              & (df["_ts"] > synced_at) & _time_known]
-    if late.empty:
+    day = df[df["_d"] == anchor["date"]]
+    if day.empty:
+        return anchor
+    if "traded_at_time_kind" not in day.columns and "traded_at_time_known" in day.columns:
+        # No kind column: keep the pre-RecTime reading (a `time_known is False`
+        # re-anchored stamp is invented, everything else a real fill time).
+        day = day.assign(traded_at_time_kind=day["traded_at_time_known"].apply(
+            lambda v: "placeholder" if v is False else "fill"))
+    cls = _sync_timing.classify_vs_sync(day, synced_at)
+    if cls is None:
+        return anchor
+    if not cls["after"] and not cls["unknown"]:
         return anchor
 
-    rows = [{"action": r.get("action"), "shares": r.get("shares"), "price": r.get("price")}
-            for _, r in late.iterrows()]
-    delta = _trade_cash_delta(rows)
+    out = dict(anchor)
+    if cls["after"]:
+        delta = float(cls["after_cash_delta"])
+        out["cash"] = anchor["cash"] + delta
+        out["late_trade_adjustment"] = delta
+        out["late_trade_count"] = len(cls["after"])
+    if cls["unknown"]:
+        out["late_trade_unknown_count"] = len(cls["unknown"])
+        out["late_trade_unknown_tickers"] = sorted(cls["unknown_by_ticker"])
+        out["late_trade_unknown_delta"] = float(cls["unknown_cash_delta"])
+    return out
 
-    return {
-        **anchor,
-        "cash": anchor["cash"] + delta,
-        "late_trade_adjustment": delta,
-        "late_trade_count": len(rows),
-    }
+
+def late_trade_unknown_note(anchor, account_cash_rec, today, fmt_usd) -> "str | None":
+    """The ℹ️ line under 💳 Capital vs Margin's anchor for trades the anchor was
+    NOT adjusted for, or None when there are none.
+
+    Reads `adjust_anchor_for_late_trades`' `late_trade_unknown_*` keys. A trade
+    with NO fill time the app can place against the sync (left blank, or an
+    import) is not folded into the anchor, because the app can't tell whether
+    that sync already counted it; the cash
+    self-check below can therefore fail by about the amount named here, which
+    is what the line says. `account_cash_rec["updated_at"]` supplies the sync
+    time (ET, shown as "11:19 AM"); `today` is the ET date, so "today" is only
+    said when the anchor really is today's. `fmt_usd(v)` formats a dollar
+    amount for markdown (the page's privacy mask and `$` escape live there).
+    """
+    if not isinstance(anchor, dict):
+        return None
+    n = anchor.get("late_trade_unknown_count")
+    tickers = anchor.get("late_trade_unknown_tickers")
+    delta = anchor.get("late_trade_unknown_delta")
+    if not n or delta is None:
+        return None
+    if round(abs(float(delta))) < 1:
+        # The unknown rows move no cash (a SPLIT) or net to under a dollar:
+        # nothing the self-check could drift by, so nothing to warn about.
+        return None
+    sync_clause = "the broker sync"
+    try:
+        ts = pd.to_datetime(account_cash_rec["updated_at"], utc=True).tz_convert(_ET_TZ)
+        sync_clause = f"the {ts.strftime('%I:%M %p').lstrip('0')} ET broker sync"
+    except Exception:
+        pass
+    d = anchor.get("date")
+    if d == today:
+        when = "today"
+    elif isinstance(d, _date):
+        when = f"on {d:%a %b} {d.day}"
+    else:
+        when = "today"
+    amount = fmt_usd(abs(float(delta)))
+    names = (", ".join(str(t) for t in tickers) + ", ") if tickers else ""
+    one = n == 1
+    return (
+        f"ℹ️ {n} trade{'' if one else 's'} {when} ({names}about {amount}) "
+        f"{'has' if one else 'have'} no fill time the app can place against "
+        f"{sync_clause} (left blank, or an import), so the app can't tell "
+        f"whether that sync already counted {'it' if one else 'them'}. The "
+        f"anchor isn't adjusted for {'it' if one else 'them'}; if the cash "
+        f"check below fails by about {amount}, this is why. It clears at the "
+        "next broker sync after the trade (for an import, the next day's "
+        "sync). Type Robinhood's fill time when you log later than the fill."
+    )
 
 
 def golive_floor(trades_df, flows_df, income_events: list[dict], daily_snapshots_df) -> "_date | None":

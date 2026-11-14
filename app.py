@@ -99,7 +99,7 @@ from stock_analyzer import forward_sim as _fsim
 from stock_analyzer import attribution_readiness as _attr_ready
 from stock_analyzer.personalized_discovery import build_winner_profile
 from stock_analyzer.daily_pnl import (close_on_date, compute_positions_day_pnl,
-                                      fill_late_logged_baseline, today_trade_cash_delta)
+                                      fill_late_logged_baseline)
 # Module-level (not local at each site) because all three import writers need
 # it and app.py runs top-to-bottom — see feedback_module_def_order.
 from stock_analyzer.market_time import et_anchor_iso as _et_anchor_iso
@@ -108,6 +108,7 @@ from stock_analyzer.pnl_display import signed_display as _signed_display
 from stock_analyzer.session_label import move_when_phrase as _move_when_phrase
 from stock_analyzer import broker_sync
 from stock_analyzer import trade_time
+from stock_analyzer import sync_timing
 from stock_analyzer import trade_confirm
 from stock_analyzer import trade_entry_checks
 from stock_analyzer import journal_broker_match
@@ -9549,6 +9550,10 @@ if page == "🏠 Home":
             _bo = _budget_view.over_line_text(_bud_cache)
             if _bo is not None:
                 st.caption(_bo)
+            _bu = _budget_view.lag_uncertain_text(
+                _bud_cache, mask=st.session_state.get("_privacy", True))
+            if _bu is not None:
+                st.caption(_bu.replace("$", "\\$"))
         new_picks    = grow.get("new_picks", [])
         add_pos      = grow.get("add_positions", [])
         bear_msg     = grow.get("message")
@@ -25898,6 +25903,10 @@ elif page == "📈 Analysis":
             _an_bo = _budget_view.over_line_text(_an_bplan["summary"])
             if _an_bo is not None:
                 st.caption(_an_bo)
+            _an_bu = _budget_view.lag_uncertain_text(
+                _an_bplan["summary"], mask=st.session_state.get("_privacy", True))
+            if _an_bu is not None:
+                st.caption(_an_bu.replace("$", "\\$"))
 
     # ── Summary scorecard ──────────────────────────────────────────────────
     st.subheader("Summary Scorecard")
@@ -29695,6 +29704,10 @@ elif page == "📋 Watchlist":
         _wl_bo = _budget_view.over_line_text(_wl_bplan["summary"])
         if _wl_bo is not None:
             st.caption(_wl_bo)
+        _wl_bu = _budget_view.lag_uncertain_text(
+            _wl_bplan["summary"], mask=st.session_state.get("_privacy", True))
+        if _wl_bu is not None:
+            st.caption(_wl_bu.replace("$", "\\$"))
 
     # ── Per-ticker rows ────────────────────────────────────────────────────────
     _wl_held_hdr_done = False
@@ -40126,25 +40139,16 @@ elif page == "💰 Account":
                 # counts, which had no equivalent disclosure (2026-08-31: a $2,031
                 # gap vs. Robinhood traced entirely to two same-day sells + a buy
                 # that hadn't been picked up by a new sync yet).
-                _acct_traded_since = broker_sync.tickers_traded_since(
+                # RecTime C3: the decision (which trades are CERTAINLY after the
+                # sync, which can't be told) lives in sync_timing; a trade with no
+                # placeable fill time may already be in the sync, so it is named
+                # apart and never summed into the "roughly $N" figure.
+                _acct_sets = sync_timing.account_cash_sets(
                     st.session_state.get("trades_df"), _acct.get("updated_at")
                 )
-                if _acct_traded_since:
-                    _acct_cash_delta_since = None
-                    _tdf_acct = st.session_state.get("trades_df")
-                    try:
-                        _ts_acct = pd.to_datetime(_tdf_acct["traded_at"], utc=True,
-                                                   errors="coerce", format="ISO8601")
-                        _cap_acct = pd.to_datetime(_acct["updated_at"], utc=True,
-                                                    errors="coerce", format="ISO8601")
-                        _rows_acct = _tdf_acct.loc[_ts_acct.notna() & (_ts_acct > _cap_acct)]
-                        _acct_cash_delta_since = today_trade_cash_delta([
-                            {"action": r.get("action"), "shares": r.get("shares"),
-                             "price": r.get("price")}
-                            for _, r in _rows_acct.iterrows()
-                        ])
-                    except Exception:
-                        _acct_cash_delta_since = None
+                if _acct_sets is not None and _acct_sets["certain_tickers"]:
+                    _acct_traded_since = _acct_sets["certain_tickers"]
+                    _acct_cash_delta_since = _acct_sets["certain_delta"]
                     _acct_delta_clause = ""
                     if _acct_cash_delta_since:
                         _acct_delta_word = "more cash (less margin debit)" if _acct_cash_delta_since > 0 \
@@ -40159,6 +40163,12 @@ elif page == "💰 Account":
                         f"(**{', '.join(_acct_traded_since)}**)" + _acct_delta_clause
                         + ". The figures above will catch up automatically at the next scheduled sync."
                     )
+                if _acct_sets is not None:
+                    _acct_unk = sync_timing.account_cash_unknown_sentence(
+                        _acct_sets["unknown_tickers"], _acct_sets["unknown_delta"],
+                        lambda v: _m(f"${v:,.0f}"))
+                    if _acct_unk is not None:
+                        st.caption("ℹ️ " + _acct_unk.replace("$", "\\$"))
             if _levered:
                 st.caption(
                     f"⚖️ **Margin debit \\${abs(_cash):,.0f}** — you hold \\${_equity:,.0f} of stock on "
@@ -41018,6 +41028,14 @@ elif page == "💰 Account":
                 f"for {_cvm_anchor['late_trade_count']} trade(s) logged since the last "
                 "broker sync, so today's figures already reflect them."
             )
+        # Trades with no fill time the app can place against the sync (left blank,
+        # or an import) are not folded in (the app can't tell whether the sync
+        # already counted them): name them, so a
+        # cash-check failure by about their amount is explained (RecTime C3).
+        _cvm_unk_note = capital_vs_margin.late_trade_unknown_note(
+            _cvm_anchor, _acct, _now_et().date(), _cvm_dm)
+        if _cvm_unk_note is not None:
+            st.caption(_cvm_unk_note)
         _cvm_golive = (
             capital_vs_margin.golive_floor(_cvm_trades, _flows, _cvm_income, _cvm_snaps)
             if _cvm_anchor is not None else None
@@ -45279,7 +45297,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 - **"Momentum leads — not checked today"** (collapsed) — hot names Grow Today didn't evaluate today, so they carry no verdict.
 - **"Adds paused on a flat/down day"** (collapsed) — holdings that would qualify for an add-to-winner; adds resume on the next up day.
 
-**Daily new-position budget (since 2026-10-16).** Each idea is capped on its own (15% of the book, 25% of net capital); this caps the **sum**. One trading day's new buys — what you've logged (adds included), sizes already emailed to you today, and newly sized suggestions — are capped at **40% of net capital**. Grow Today, 📋 Watchlist, 📈 Analysis and the three emails each show a *"New positions today: … of net capital … — budget 40%, … left"* line. Sizes already emailed are locked (*"Reserved by today's email run"*); everything later is sized from what's left, highest composite first — Grow Today, then the Watchlist, then Analysis. A name that gets less says *"Sized from what's left of today's budget — n of m shares"*; once it's used, a pick keeps its BUY call but reads *"not sized"* — never dropped, and it resets the next trading day. Sells don't give budget back, and nothing ever trims a holding. If the budget can't be checked (trade log or today's emailed sizes unreadable, cash figure stale or missing) the call still shows and the size is withheld with the reason. A ticker gets one share count a day: a Grow Today pick reads *"Sized in Grow Today today — see 🏠 Home"* on the Watchlist, and Analysis matches the Watchlist's size once you've opened the Watchlist today (and again after logging a trade) — until then it says it doesn't yet count the Watchlist's Ready-to-Enter names. Logging a BUY in the Trade Journal shows today's total including that buy — a heads-up, never a block. It can't see a buy you didn't log, and for up to 5 minutes after an email or a trade logged elsewhere a page can show a pre-update size.
+**Daily new-position budget (since 2026-10-16).** Each idea is capped on its own (15% of the book, 25% of net capital); this caps the **sum**. One trading day's new buys — what you've logged (adds included), sizes already emailed to you today, and newly sized suggestions — are capped at **40% of net capital**. Grow Today, 📋 Watchlist, 📈 Analysis and the three emails each show a *"New positions today: … of net capital … — budget 40%, … left"* line. Sizes already emailed are locked (*"Reserved by today's email run"*); everything later is sized from what's left, highest composite first — Grow Today, then the Watchlist, then Analysis. A name that gets less says *"Sized from what's left of today's budget — n of m shares"*; once it's used, a pick keeps its BUY call but reads *"not sized"* — never dropped, and it resets the next trading day. Sells don't give budget back, and nothing ever trims a holding. If the budget can't be checked (trade log or today's emailed sizes unreadable, cash figure stale or missing) the call still shows and the size is withheld with the reason. A ticker gets one share count a day: a Grow Today pick reads *"Sized in Grow Today today — see 🏠 Home"* on the Watchlist, and Analysis matches the Watchlist's size once you've opened the Watchlist today (and again after logging a trade) — until then it says it doesn't yet count the Watchlist's Ready-to-Enter names. Logging a BUY in the Trade Journal shows today's total including that buy — a heads-up, never a block. It can't see a buy you didn't log, and for up to 5 minutes after an email or a trade logged elsewhere a page can show a pre-update size. The cash figure behind the budget comes from the last broker sync, so a trade logged after it still counts; if a BUY or SELL has no fill time the app can place against that sync (left blank, or an import), the app can't tell whether the sync already included it, so a BUY is still subtracted and a SELL is not added, and Grow Today, the Watchlist and Analysis say *"Budget basis may be up to $X low until the next broker sync after the trade"* (for an import, the next day's sync; typing Robinhood's fill time when you log avoids it). The three emails use the same tightened basis and carry no such line.
 
 **Shared new-entry check (since 2026-10-16).** 📋 Watchlist, its morning Ready-to-Enter email and 📈 Analysis now apply the same entry checks Grow Today uses: no new entry on a bear day, ahead of a HIGH-impact macro release in the stock's sector, on negative news, or on stale data (Analysis also holds off with earnings within 7 days). A Watchlist name that would be READY TO ENTER but fails one shows as **⏸ HELD TODAY**, right under Enter Now, with the reason and what would clear it — but no share size and no Log BUY. On a bear day a Protect Mode banner explains it and says where the market read came from. The email never sends or budgets a held name, and its footer states the market tone it used. On Analysis, a held-back Buy keeps its verdict but shows *Not an entry today* and no size; Hold and Sell verdicts never show a share count. If a check couldn't run, the page says so. A name whose sector the app can't map (since 2026-11-04) is held as **Held: sector unknown (macro check)** while a sector-specific release is near, and clears when the release is out or the ticker gets a sector on the app's curated map that the event doesn't affect; an ETF is held on any sector-specific release, the same rule Grow Today uses for ETF picks.
 
@@ -45627,7 +45645,7 @@ Below the Capital Trend section, the **Leverage & Margin Cushion** chart shows y
 Right below Leverage & Margin Cushion, the **Portfolio Risk Trend** chart plots your portfolio beta and diversification score (0-100, higher = less correlated) day over day, from the same settled end-of-day figures. Like the Leverage chart, it's forward-only (no backfill) and needs a few days of history before it renders. A gap in either line means that metric couldn't be computed that day (e.g. too few price histories to measure correlation) — never filled in as zero or a neutral midpoint. The correlation/diversification figures assume equal weighting across your holdings, a simplification — not the same gate-weighted number used elsewhere in the app. This is the historical counterpart to the Rebalancer's live "if you trim, beta drops to X" and the Diversification Advisor's "if you add, beta goes to X" figures — it answers "did it actually happen," independent of crediting any one recommendation.
 
 **5. Analyze your margin cost (💳 Capital vs Margin analysis).**
-Below the Leverage & Margin Cushion chart, the **Capital vs Margin** section answers **"was trading on margin actually worth it?"** by reconstructing your account's value backward from broker integration (~mid-August) to today and comparing two curves: your actual (levered) equity against a synthetic unlevered curve anchored at the same starting point. The gap between the two is purely margin's cumulative effect. Use the period toggle to zoom in or out — the chart visually distinguishes reconstructed history (before the live daily snapshots began, shown with a dotted line and shaded background) from recorded data (forward from that point, solid line). Below the chart, you'll see: **how much margin earned or cost you** (extra-exposure P&L minus interest paid), **at what annualized book return margin breaks even**, **how margin amplified a specific drawdown** (if you select one), **projected annual interest** at current leverage, and **a deleverage scenario** (if you paid down $X, here's your new interest cost and margin-call buffer). All numbers are awareness-only — the app never recommends de-risking as an enforcement, just as context for your own decision.
+Below the Leverage & Margin Cushion chart, the **Capital vs Margin** section answers **"was trading on margin actually worth it?"** by reconstructing your account's value backward from broker integration (~mid-August) to today and comparing two curves: your actual (levered) equity against a synthetic unlevered curve anchored at the same starting point. The gap between the two is purely margin's cumulative effect. Use the period toggle to zoom in or out — the chart visually distinguishes reconstructed history (before the live daily snapshots began, shown with a dotted line and shaded background) from recorded data (forward from that point, solid line). Below the chart, you'll see: **how much margin earned or cost you** (extra-exposure P&L minus interest paid), **at what annualized book return margin breaks even**, **how margin amplified a specific drawdown** (if you select one), **projected annual interest** at current leverage, and **a deleverage scenario** (if you paid down $X, here's your new interest cost and margin-call buffer). All numbers are awareness-only — the app never recommends de-risking as an enforcement, just as context for your own decision. Today's cash comes from the last broker sync, so the section adjusts it only for a trade you logged with a fill time that falls after that sync; a trade with no fill time the app can place against the sync (left blank, or an import) is not adjusted, because the app can't tell whether the sync already counted it. It is named in an ℹ️ line under the section's intro, and the cash check can fail by about that amount until the next broker sync after the trade (for an import, the next day's sync).
 
 **6. Keeping it in sync with your broker (it's manual for now).**
 The app doesn't auto-connect to your brokerage yet, so you keep it current with two light habits — and they map to the app's only two inputs:

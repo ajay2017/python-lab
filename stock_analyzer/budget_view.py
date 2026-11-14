@@ -210,6 +210,8 @@ def postpass(brief, inputs, trades_df, allocs, today, now, price_map=None) -> di
             "reason": res.get("reason") or basis.get("reason"),
             "basis": basis.get("basis"),
             "lag_adjustment": basis.get("lag_adjustment"),
+            "lag_uncertain": basis.get("lag_uncertain"),
+            "lag_uncertain_tickers": basis.get("lag_uncertain_tickers"),
             "budget": res.get("budget"),
             "used_logged": res.get("used_logged"),
             "used_allocated": res.get("used_allocated"),
@@ -283,6 +285,34 @@ def status_line_text(cache, mask=False, list_label="this list") -> "str | None":
         cache.get("used_allocated"), cache.get("used_list"), cache.get("left"),
         list_label=list_label)
     return _USD_RE.sub(_MASK, line) if mask else line
+
+
+def lag_uncertain_text(cache, mask=False) -> "str | None":
+    """'Budget basis may be up to $X low ...' when trades with NO fill time the
+    app can place against the cash snapshot (left blank, or an import) leave the
+    basis uncertain (RecTime C3), else
+    None. `cache` is the Home budget cache or a `plan_downstream` summary; both
+    carry `lag_uncertain` / `lag_uncertain_tickers` from `budget_basis`. Also
+    said when the budget is "called" (a subtracted unknown BUY can be what
+    pushed net capital to zero); an unchecked budget (None cache) says nothing,
+    its per-card notes carry the reason. A missing / zero / unreadable figure
+    says nothing. `mask` hides the dollar amount (privacy mode)."""
+    if not isinstance(cache, dict) or cache.get("state") not in ("ok", "called"):
+        return None
+    amt = _num(cache.get("lag_uncertain"))
+    tickers = cache.get("lag_uncertain_tickers")
+    if amt is None or amt <= 0 or not tickers:
+        return None
+    names = [str(t) for t in tickers if str(t).strip()]
+    if not names:
+        return None
+    many = len(names) > 1
+    text = (f"Budget basis may be up to ${amt:,.0f} low until the next broker "
+            f"sync after the trade{'s' if many else ''} (for an import, the "
+            f"next day's): {', '.join(names)} {'have' if many else 'has'} no "
+            "fill time the app can place against the cash snapshot (left "
+            "blank, or an import).")
+    return _USD_RE.sub(_MASK, text) if mask else text
 
 
 def over_line_text(cache) -> "str | None":
@@ -807,6 +837,8 @@ def _plan(inputs, trades_df, allocs, cache, today, now, asks_n, mirror_gt,
         "left": res.get("left"),
         "budget": res.get("budget"),
         "over_line_pct": _over_line_pct(res, basis),
+        "lag_uncertain": basis.get("lag_uncertain"),
+        "lag_uncertain_tickers": basis.get("lag_uncertain_tickers"),
     }
     if res["state"] == "unknown":
         summary = None

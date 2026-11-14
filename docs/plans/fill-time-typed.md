@@ -1,6 +1,6 @@
 # RecTime: remember whether a fill time was typed
 
-**Status:** DESIGNED 2026-11-13 (Opus planner PROCEED WITH CHANGES; owner answered Q1, Q2, Q4, Q6 the same evening). C1 SHIPPED 2026-11-13 (`2123174`; Opus FIX-FIRST → SHIP). DDL `docs/sql/trades-fill-time-typed.sql` APPLIED by the owner 2026-11-13 evening (verify: `fill_time_typed`, boolean, nullable). C2 SHIPPED 2026-11-13 (writers set the column; Opus SHIP, 0 blocking). Next: C3. Bug-register row: RecTime (section A). Today's two rows were repaired by hand: `docs/sql/journal-fix-2026-11-13-fill-times.sql` (Opus SHIP after one FIX-FIRST round).
+**Status:** DESIGNED 2026-11-13 (Opus planner PROCEED WITH CHANGES; owner answered Q1, Q2, Q4, Q6 the same evening). C1 SHIPPED 2026-11-13 (`2123174`; Opus FIX-FIRST → SHIP). DDL `docs/sql/trades-fill-time-typed.sql` APPLIED by the owner 2026-11-13 evening (verify: `fill_time_typed`, boolean, nullable). C2 SHIPPED 2026-11-13 (writers set the column; Opus SHIP, 0 blocking). C3 SHIPPED 2026-11-13 (Capital vs Margin, Account cash caption, F-306 budget; Opus SHIP, 0 blocking, wording round confirmed). Next: C4. Bug-register row: RecTime (section A). Today's two rows were repaired by hand: `docs/sql/journal-fix-2026-11-13-fill-times.sql` (Opus SHIP after one FIX-FIRST round).
 
 ## The defect
 

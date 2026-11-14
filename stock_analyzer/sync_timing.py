@@ -24,9 +24,11 @@ instant or an ET calendar date.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from stock_analyzer.daily_pnl import today_trade_cash_delta, today_trade_share_delta
+from stock_analyzer.market_time import ET
 from stock_analyzer.trade_time import (
     KIND_FILL, KIND_PLACEHOLDER, KIND_RECORDED, et_trade_date,
 )
@@ -172,7 +174,92 @@ def classify_vs_sync(trades_df, sync_at) -> "dict | None":
     each row is the frame's `traded_at_time_kind` column; a missing column
     reads every row as "fill" (the status quo). Rows are not filtered by date:
     anything older than the sync's day lands in `before` by construction.
+
+    Cost: a vectorized pre-pass sends every row that is certainly BEFORE the
+    sync (a "fill" / "recorded" row at or before it; a "placeholder" row on an
+    earlier ET date) straight to `before`, so the per-row Python work, and the
+    row-to-dict conversion, run only on the rows left over (typically today's).
+    The result is identical to the all-rows loop (`_classify(..., fast=False)`;
+    a test pins it against `after_sync` row by row).
     """
+    return _classify(trades_df, sync_at, fast=True)
+
+
+# Per-row verdict codes (`row_codes`).
+BEFORE, AFTER, UNKNOWN, UNREADABLE = 0, 1, 2, 3
+
+
+def _normalized_kinds(trades_df) -> "pd.Series":
+    """The frame's kind column as lower-case strings, a missing / NaN kind as
+    "fill" (the same reading as `_kind_or_fill`, vectorized)."""
+    if "traded_at_time_kind" not in trades_df.columns:
+        return pd.Series(KIND_FILL, index=trades_df.index, dtype=object)
+    k = trades_df["traded_at_time_kind"].astype("object")
+    k = k.where(k.notna(), KIND_FILL)
+    return k.astype(str).str.strip().str.lower()
+
+
+def _codes(trades_df, sync: "pd.Timestamp", ts_all, fast: bool) -> "np.ndarray":
+    """int8 verdict per row position (`BEFORE` / `AFTER` / `UNKNOWN` /
+    `UNREADABLE`) for a non-empty frame with a parsed `ts_all`. `fast=False`
+    skips the vectorized pre-pass and runs `_after_sync_ts` on every readable
+    row (the reference path the tests compare against)."""
+    n = len(trades_df)
+    unreadable = ts_all.isna().to_numpy()
+    before_fast = np.zeros(n, dtype=bool)
+    if fast:
+        kinds = _normalized_kinds(trades_df)
+        # "fill" / "recorded" at or before the sync -> certainly before it
+        # (`_after_sync_ts`: fill is `ts > sync`; recorded is `ts <= sync`).
+        fr = kinds.isin([KIND_FILL, KIND_RECORDED]).to_numpy()
+        before_fast |= fr & ~unreadable & (ts_all <= sync).to_numpy()
+        # "placeholder" on an earlier ET date than the sync's -> before.
+        ph = kinds.eq(KIND_PLACEHOLDER).to_numpy() & ~unreadable
+        if ph.any():
+            s_date = et_trade_date(sync)
+            pos = np.flatnonzero(ph)
+            dates = ts_all.iloc[pos].dt.tz_convert(ET).dt.date
+            before_fast[pos[(dates < s_date).to_numpy()]] = True
+
+    codes = np.full(n, BEFORE, dtype=np.int8)
+    codes[unreadable] = UNREADABLE
+    todo = np.flatnonzero(~unreadable & ~before_fast)
+    if len(todo):
+        raw_kinds = (trades_df["traded_at_time_kind"]
+                     if "traded_at_time_kind" in trades_df.columns else None)
+        for pos in todo:
+            verdict = _after_sync_ts(
+                ts_all.iloc[pos],
+                raw_kinds.iloc[pos] if raw_kinds is not None else None, sync)
+            codes[pos] = (AFTER if verdict is True
+                          else BEFORE if verdict is False else UNKNOWN)
+    return codes
+
+
+def row_codes(trades_df, sync_at) -> "np.ndarray | None":
+    """`after_sync` for every row of `trades_df`, as an int8 array aligned to the
+    frame's row POSITIONS: `BEFORE` (0), `AFTER` (1), `UNKNOWN` (2, can't tell)
+    or `UNREADABLE` (3, `traded_at` can't be parsed). An empty frame gives an
+    empty array. `None` when the answer can't be computed (not a DataFrame, a
+    non-empty frame with no `traded_at` column, or an unparseable `sync_at`),
+    which a consumer must not read as "nothing is after the sync". Same
+    vectorized pre-pass as `classify_vs_sync`."""
+    if trades_df is None or not isinstance(trades_df, pd.DataFrame):
+        return None
+    sync = _instant(sync_at)
+    if sync is None:
+        return None
+    if trades_df.empty:
+        return np.zeros(0, dtype=np.int8)
+    if "traded_at" not in trades_df.columns:
+        return None
+    ts_all = pd.to_datetime(trades_df["traded_at"], utc=True, errors="coerce",
+                            format="ISO8601")
+    return _codes(trades_df, sync, ts_all, fast=True)
+
+
+def _classify(trades_df, sync_at, fast: bool) -> "dict | None":
+    """`classify_vs_sync`; `fast=False` is the reference path the tests use."""
     if trades_df is None or not isinstance(trades_df, pd.DataFrame):
         return None
     sync = _instant(sync_at)
@@ -191,33 +278,69 @@ def classify_vs_sync(trades_df, sync_at) -> "dict | None":
     # One vectorized parse, not a per-row `pd.to_datetime`.
     ts_all = pd.to_datetime(trades_df["traded_at"], utc=True, errors="coerce",
                             format="ISO8601")
-    kinds = (trades_df["traded_at_time_kind"]
-             if "traded_at_time_kind" in trades_df.columns else None)
-
+    codes = _codes(trades_df, sync, ts_all, fast)
+    index = trades_df.index
+    after_rows = trades_df.iloc[np.flatnonzero(codes == AFTER)].to_dict("records")
+    unknown_rows = trades_df.iloc[np.flatnonzero(codes == UNKNOWN)].to_dict("records")
     out = dict(empty)
-    out["after"], out["before"], out["unknown"], out["unreadable"] = [], [], [], []
-    after_rows: list[dict] = []
-    unknown_rows: list[dict] = []
-    records = trades_df.to_dict("records")
-    for i, (label, rec) in enumerate(zip(trades_df.index, records)):
-        ts = ts_all.iloc[i]
-        ts = None if pd.isna(ts) else ts
-        if ts is None:
-            out["unreadable"].append(label)
-            continue
-        verdict = _after_sync_ts(ts, kinds.iloc[i] if kinds is not None else None,
-                                 sync)
-        if verdict is True:
-            out["after"].append(label)
-            after_rows.append(rec)
-        elif verdict is False:
-            out["before"].append(label)
-        else:
-            out["unknown"].append(label)
-            unknown_rows.append(rec)
-
+    out["after"] = index[codes == AFTER].tolist()
+    out["before"] = index[codes == BEFORE].tolist()
+    out["unknown"] = index[codes == UNKNOWN].tolist()
+    out["unreadable"] = index[codes == UNREADABLE].tolist()
     out["after_by_ticker"] = _bucket_summary(after_rows)
     out["unknown_by_ticker"] = _bucket_summary(unknown_rows)
     out["after_cash_delta"] = float(today_trade_cash_delta(after_rows))
     out["unknown_cash_delta"] = float(today_trade_cash_delta(unknown_rows))
     return out
+
+
+# ─── 💰 Account cash caption (RecTime C3) ───────────────────────────────────
+
+def account_cash_sets(trades_df, sync_at) -> "dict | None":
+    """What 💰 Account's "traded since this sync" caption should say.
+
+    `{"certain_tickers": sorted [str], "certain_delta": float,
+      "unknown_tickers": sorted [str], "unknown_delta": float}`, or `None` when
+    the log or the sync time can't be read (the caption then says nothing, as it
+    did before when `broker_sync.tickers_traded_since` returned []).
+
+    The CERTAIN set is the tickers of rows certainly AFTER the sync and their
+    net cash effect (SELL +, BUY -): the sync can't contain them, so the cash
+    figure above the caption is that much off. The UNKNOWN set is the tickers of
+    rows with no fill time the app can place against the sync (left blank,
+    or an import; the sync may or may not have counted them) and their cash
+    effect. The two are NEVER summed: adding
+    an unknown row to the certain figure would claim a correction that may not
+    exist. A row whose time can't be read is in neither set.
+    """
+    cls = classify_vs_sync(trades_df, sync_at)
+    if cls is None:
+        return None
+    return {
+        "certain_tickers": sorted(cls["after_by_ticker"]),
+        "certain_delta": float(cls["after_cash_delta"]),
+        "unknown_tickers": sorted(cls["unknown_by_ticker"]),
+        "unknown_delta": float(cls["unknown_cash_delta"]),
+    }
+
+
+def account_cash_unknown_sentence(tickers, delta, fmt_usd=None) -> "str | None":
+    """The 💰 Account caption sentence for the UNKNOWN set, or None when there
+    are no tickers. These rows have no fill time the app can place against the
+    sync (left blank, or an import), so the sync may already include them.
+    `fmt_usd(v)` formats the dollar amount (the page passes its privacy mask);
+    the default is a raw `$` figure, which the caller must escape for Streamlit
+    markdown. The "(about $X)" part is left out when the set nets to under a
+    dollar."""
+    names = [str(t) for t in (tickers or []) if str(t).strip()]
+    if not names:
+        return None
+    many = len(names) > 1
+    amount = ""
+    if delta is not None and round(abs(float(delta))) >= 1:
+        usd = abs(float(delta))
+        amount = f" (about {fmt_usd(usd) if fmt_usd else f'${usd:,.0f}'})"
+    return (f"{', '.join(names)}{amount} {'have' if many else 'has'} no fill "
+            f"time the app can place against this sync (left blank, or an "
+            f"import), so the figures above may already include "
+            f"{'them' if many else 'it'}.")

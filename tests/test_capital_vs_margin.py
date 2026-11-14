@@ -379,8 +379,15 @@ def test_adjust_anchor_for_late_trades_broker_synced_stamp_not_adjusted():
          "price": 74.0, "broker_txn_id": "t1", "traded_at_time_known": False},
     ])
     result = cvm.adjust_anchor_for_late_trades(anchor, account_cash_rec, trades)
-    assert result == anchor
+    # RecTime C3: still NOT adjusted (cash, adjustment keys untouched), but the
+    # same-day row is now REPORTED as unknown so the page can name it. (This
+    # frame has no `traded_at_time_kind`, so `time_known is False` reads as a
+    # "placeholder"; the ticker column is absent, hence no ticker names.)
+    assert result["cash"] == anchor["cash"]
     assert "late_trade_adjustment" not in result
+    assert "late_trade_count" not in result
+    assert result["late_trade_unknown_count"] == 1
+    assert result["late_trade_unknown_delta"] == pytest.approx(-1110.0)
 
 
 def test_adjust_anchor_for_late_trades_manually_logged_confirmed_time_still_adjusted():
