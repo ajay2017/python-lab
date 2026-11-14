@@ -47,6 +47,7 @@ import csv
 import io
 import math
 
+import numpy as np
 import pandas as pd
 
 from stock_analyzer.constants import (
@@ -54,7 +55,9 @@ from stock_analyzer.constants import (
     INCOME_EVENT_DEDUP_DATE_TOL_DAYS,
 )
 from stock_analyzer import asset_type
+from stock_analyzer import sync_timing
 from stock_analyzer import trade_time
+from stock_analyzer.daily_pnl import _is_split
 
 # SnapTrade `type` values that add/remove cash-basis capital — the ONLY types
 # allowed to become an account_flows row. Everything else that touches cash
@@ -669,7 +672,57 @@ def drift_dollar_impact(diff: dict | None, price_map: dict | None) -> dict:
     return out
 
 
-def split_awaiting_sync(diff: dict | None, recent_trade_tickers) -> tuple[dict, list]:
+def _split_awaiting(diff: dict | None, known, untimed) -> tuple[dict, list, list]:
+    """The logic behind `split_awaiting_sync` (RecTime C4, rule R-D).
+
+    `known` is the set of upper-cased tickers with a CERTAIN-after row (the
+    snapshot can't contain it): their drift is excused outright. `untimed` is
+    `{TICKER: net signed shares}` of the rows with no fill time the app can place
+    against the snapshot (`drift_excuses`): that ticker's drift is excused ONLY
+    when it equals those rows' net shares, within `BROKER_DRIFT_SHARE_TOL`. The
+    drift is read as app minus broker shares: a `qty_mismatch` row is
+    `-diff` (its `diff` is broker - app), an `app_only` row is `+shares`, an
+    `rh_only` row is `-shares`. A certain ticker is never also checked against
+    `untimed`.
+
+    Returns `(real, awaiting, awaiting_untimed)`: `awaiting` is every excused
+    ticker, `awaiting_untimed` the sorted subset excused ONLY by the untimed
+    match.
+    """
+    if not diff:
+        return {"rh_only": [], "app_only": [], "qty_mismatch": []}, [], []
+    untimed = {str(t).strip().upper(): float(v)
+               for t, v in (untimed or {}).items()}
+    if not known and not untimed:
+        return diff, [], []
+    real: dict = {}
+    awaiting: list = []
+    awaiting_untimed: list = []
+    for bucket in ("rh_only", "app_only", "qty_mismatch"):
+        keep = []
+        for row in diff.get(bucket, []):
+            tk = row["ticker"]
+            if tk in known:
+                awaiting.append(tk)
+                continue
+            if tk in untimed:
+                if bucket == "qty_mismatch":
+                    app_minus_rh = -float(row.get("diff") or 0.0)
+                elif bucket == "app_only":
+                    app_minus_rh = float(row.get("shares") or 0.0)
+                else:
+                    app_minus_rh = -float(row.get("shares") or 0.0)
+                if abs(app_minus_rh - untimed[tk]) <= BROKER_DRIFT_SHARE_TOL:
+                    awaiting.append(tk)
+                    awaiting_untimed.append(tk)
+                    continue
+            keep.append(row)
+        real[bucket] = keep
+    return real, sorted(set(awaiting)), sorted(set(awaiting_untimed))
+
+
+def split_awaiting_sync(diff: dict | None, recent_trade_tickers,
+                        untimed_shares=None) -> tuple[dict, list]:
     """Separate drift the user has ALREADY EXPLAINED from drift that is real.
 
     The broker snapshot refreshes once a day; the book is diffed live. That
@@ -684,27 +737,77 @@ def split_awaiting_sync(diff: dict | None, recent_trade_tickers) -> tuple[dict, 
     not as an error. Deliberately NOT dropped: a trade on a ticker does not
     prove the resulting share count is right, so it still has to be visible —
     just not as an accusation.
+
+    RecTime C4: `untimed_shares` (`{TICKER: net shares}`, from `drift_excuses`)
+    also excuses a ticker whose drift equals exactly that net (see
+    `_split_awaiting`). Still a 2-tuple `(real, awaiting)`; use `_split_awaiting`
+    for the untimed-only subset.
     """
     known = {str(t).strip().upper() for t in (recent_trade_tickers or [])}
-    if not diff:
-        return {"rh_only": [], "app_only": [], "qty_mismatch": []}, []
-    if not known:
-        return diff, []
-    real: dict = {}
-    awaiting: list = []
-    for bucket in ("rh_only", "app_only", "qty_mismatch"):
-        keep = []
-        for row in diff.get(bucket, []):
-            if row["ticker"] in known:
-                awaiting.append(row["ticker"])
-            else:
-                keep.append(row)
-        real[bucket] = keep
-    return real, sorted(set(awaiting))
+    real, awaiting, _ = _split_awaiting(diff, known, untimed_shares)
+    return real, awaiting
+
+
+def drift_excuses(trades_df, captured_at) -> dict:
+    """What the journal can explain of a drift gap, against the sync at
+    `captured_at` (RecTime C4, rule R-D, `docs/plans/fill-time-typed.md`).
+
+    `{"certain": sorted [TICKER], "untimed": {TICKER: net signed shares}}`.
+
+    CERTAIN = a ticker with a row certainly AFTER the sync (the sync can't
+    contain it), or any SPLIT row that is after OR undetermined (a same-day
+    SPLIT is stored as "recorded", so it can never be "after"; looking in both
+    keeps a split excusing drift, as it always did). Their drift is excused
+    outright.
+
+    UNTIMED = the other tickers that have rows with no fill time the app can
+    place against the sync (a blank-time hand log stores its Record time, an
+    import sits at the 16:00 ET anchor), with those rows' net BUY+/SELL- shares.
+    Such a ticker's drift is excused only if it equals that net
+    (`_split_awaiting`); a raw `traded_at > captured_at` used to excuse ANY
+    drift on it, even when the sync already held the trade and the gap was
+    something else. A row whose time can't be read excuses nothing.
+
+    Returns `{"certain": [], "untimed": {}}` on any failure (None frame or
+    sync time, no `traded_at` column, unparseable `captured_at`): "explain
+    nothing away", the conservative direction that keeps drift visible.
+    """
+    empty = {"certain": [], "untimed": {}}
+    if trades_df is None or captured_at is None:
+        return empty
+    try:
+        cls = sync_timing.classify_vs_sync(trades_df, captured_at)
+        if cls is None:
+            return empty
+        certain = {str(t).strip().upper() for t in cls["after_by_ticker"]}
+        # SPLIT rows by POSITION (`row_codes`), not by index label: a frame with
+        # duplicate labels would otherwise pull in a split from before the sync.
+        if "ticker" in trades_df.columns and "action" in trades_df.columns:
+            codes = sync_timing.row_codes(trades_df, captured_at)
+            if codes is not None and len(codes):
+                pos = np.flatnonzero(np.isin(
+                    codes, (sync_timing.AFTER, sync_timing.UNKNOWN)))
+                sub = trades_df.iloc[pos]
+                for tk, act in zip(sub["ticker"], sub["action"]):
+                    tk = str(tk).strip().upper()
+                    if tk and _is_split(act):
+                        certain.add(tk)
+        certain.discard("")
+        untimed = {
+            str(t).strip().upper(): float(v["net_shares"])
+            for t, v in cls["unknown_by_ticker"].items()
+            if str(t).strip().upper() not in certain
+        }
+        return {"certain": sorted(certain), "untimed": untimed}
+    except Exception:  # noqa: BLE001 — any failure must explain NOTHING away:
+        # a raise would reach the cron email's `book_drift = None` and silence a
+        # real drift verdict on a push surface.
+        return empty
 
 
 def tickers_traded_since(trades_df, captured_at) -> list:
-    """Tickers with a trade logged AFTER `captured_at`.
+    """Tickers CERTAINLY traded AFTER `captured_at` (the snapshot can't contain
+    them), plus any ticker with a SPLIT row after or undetermined.
 
     The broker snapshot refreshes once daily while the book is diffed live, so
     any ticker traded since the capture will differ for a perfectly good reason.
@@ -713,33 +816,28 @@ def tickers_traded_since(trades_df, captured_at) -> list:
     morning the user did everything right, which is how a real warning gets
     ignored.
 
+    RecTime C4 (2026-11-14): this no longer compares the raw `traded_at` with
+    `captured_at`. A blank-time hand log stores its Record time and an import
+    sits at 16:00 ET, so a trade the sync ALREADY contained excused a real,
+    unrelated gap on that ticker. It now returns only the CERTAIN set from
+    `drift_excuses`; the trades with no placeable fill time are handled by the
+    exact-shares match in `_split_awaiting` (callers pass `drift_excuses`'s
+    "untimed" map to `decide_drift_banner`).
+
     Relocated here from app.py 2026-08-24 so the headless cron path (which has
     no Streamlit, no st.session_state) can compute the same drift verdict
     app.py does for the interactive Home render, without importing the
-    Streamlit-laden app.py module. app.py now calls this via
-    `broker_sync.tickers_traded_since`.
+    Streamlit-laden app.py module.
 
     Returns [] (not None) on any failure — an empty set means "explain nothing
     away", i.e. the conservative direction that keeps drift visible.
     """
-    if trades_df is None or captured_at is None:
-        return []
-    try:
-        if getattr(trades_df, "empty", True) or "traded_at" not in trades_df.columns:
-            return []
-        _cap = pd.to_datetime(captured_at, utc=True, errors="coerce", format="ISO8601")
-        if _cap is None or pd.isna(_cap):
-            return []
-        _ts = pd.to_datetime(trades_df["traded_at"], utc=True, errors="coerce",
-                             format="ISO8601")
-        _hit = trades_df.loc[_ts.notna() & (_ts > _cap), "ticker"]
-        return sorted({str(t).strip().upper() for t in _hit if str(t).strip()})
-    except (KeyError, TypeError, ValueError):
-        return []
+    return drift_excuses(trades_df, captured_at)["certain"]
 
 
 def decide_drift_banner(snapshot, holdings_df, now_et, stale_hours,
-                        price_map=None, recent_trade_tickers=None) -> dict:
+                        price_map=None, recent_trade_tickers=None,
+                        untimed_trade_shares=None) -> dict:
     """What 🏠 Home should say about app-vs-broker drift. Pure, no Streamlit.
 
     Extracted as a decision function rather than render-layer `if`s because
@@ -788,12 +886,20 @@ def decide_drift_banner(snapshot, holdings_df, now_et, stale_hours,
     # Drift on a ticker traded since the snapshot is EXPECTED, not an error —
     # the book moved ahead of a once-daily broker capture. Reported separately
     # so a correct trade never renders as a missing one.
-    diff, awaiting = split_awaiting_sync(diff, recent_trade_tickers)
+    # RecTime C4: `recent_trade_tickers` = tickers with a CERTAIN-after row;
+    # `untimed_trade_shares` = {TICKER: net shares} of rows with no placeable
+    # fill time, excused only on an exact-shares match (`drift_excuses`).
+    known = {str(t).strip().upper() for t in (recent_trade_tickers or [])}
+    diff, awaiting, awaiting_untimed = _split_awaiting(
+        diff, known, untimed_trade_shares)
     has_drift = any(diff[k] for k in ("rh_only", "app_only", "qty_mismatch"))
 
     base = {
         "diff": diff,
         "awaiting_sync": awaiting,
+        # Subset of awaiting_sync excused ONLY by the exact-shares match on a
+        # trade with no fill time (RecTime C4); [] when none.
+        "awaiting_untimed": awaiting_untimed,
         "captured_at": captured_at,
         "is_stale": is_stale,
         "all_accounts_ok": all_ok,

@@ -767,15 +767,19 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
                 if not port_df.empty and "Ticker" in port_df.columns and "Price" in port_df.columns
                 else {}
             )
+            # RecTime C4: certain-after tickers excuse drift outright; tickers
+            # with only no-fill-time rows excuse it on an exact-shares match.
+            _drift_ex = broker_sync.drift_excuses(
+                ctx.get("trades_df"), _bsnap.get("captured_at")
+            )
             book_drift = broker_sync.decide_drift_banner(
                 _bsnap,
                 ctx.get("holdings_df"),   # RAW frame — see _build_context's comment on why
                 datetime.now(_ET),
                 SNAPTRADE_BALANCE_STALE_HOURS,
                 price_map=_price_map,
-                recent_trade_tickers=broker_sync.tickers_traded_since(
-                    ctx.get("trades_df"), _bsnap.get("captured_at")
-                ),
+                recent_trade_tickers=_drift_ex["certain"],
+                untimed_trade_shares=_drift_ex["untimed"],
             )
     except Exception:
         book_drift = None

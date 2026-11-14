@@ -1210,7 +1210,8 @@ def _m_usd(v, *, plus: bool = False, md: bool = False) -> str:
 # _tickers_traded_since relocated to stock_analyzer/broker_sync.py 2026-08-24
 # (as `tickers_traded_since`, no leading underscore) so the headless cron path
 # can compute the same broker-drift verdict without importing this
-# Streamlit-laden module. Call sites here now use `broker_sync.tickers_traded_since`.
+# Streamlit-laden module. Since RecTime C4 (2026-11-14) Home calls
+# `broker_sync.drift_excuses` instead (certain-after tickers + untimed shares).
 
 
 def _fmt_asof_et(captured_at) -> str:
@@ -1301,12 +1302,34 @@ def _render_broker_drift(placeholder, verdict) -> str | None:
             # since the snapshot. They did nothing wrong, so this is a caption,
             # not a warning — and it must never say "missing trade".
             _aw_list = verdict.get("awaiting_sync")
-            _aw = ", ".join(_aw_list if isinstance(_aw_list, list) else [])
-            st.caption(
-                f"ℹ️ Waiting on the broker to catch up on **{_aw}** — you logged a trade "
-                f"after the {_asof} broker snapshot, so a difference here is expected. "
-                "Nothing to fix."
-            )
+            _aw_all = _aw_list if isinstance(_aw_list, list) else []
+            _un_list = verdict.get("awaiting_untimed")
+            _un_all = _un_list if isinstance(_un_list, list) else []
+            # RecTime C4: a ticker excused only by an exact-shares match on a
+            # trade with no fill time gets its own sentence (the app can't say
+            # the trade came after the snapshot, only that it would explain it).
+            _aw = ", ".join(t for t in _aw_all if t not in _un_all)
+            _un = ", ".join(_un_all)
+            _parts = []
+            if _aw or not _un:
+                _parts.append(
+                    f"Waiting on the broker to catch up on **{_aw}** — you logged a trade "
+                    f"after the {_asof} broker snapshot, so a difference here is expected. "
+                    "Nothing to fix."
+                )
+            if _un:
+                _snap_txt = ("the last broker snapshot" if _asof == "unknown"
+                             else f"the {_asof} snapshot")
+                _many = len(_un_all) > 1
+                _parts.append(
+                    f"**{_un}** {'differ' if _many else 'differs'} by exactly the shares "
+                    f"of {'trades' if _many else 'a trade'} logged with no fill time "
+                    f"(left blank, or an import), so {_snap_txt} most likely hadn't "
+                    f"counted {'them' if _many else 'it'} yet. If "
+                    f"{'they' if _many else 'it'} still {'differ' if _many else 'differs'} "
+                    "after the next broker sync, check 📒 Trade Journal for a duplicate."
+                )
+            st.caption("ℹ️ " + " ".join(_parts))
             return "caption"
 
         # state == "drift"
@@ -6109,6 +6132,13 @@ if page == "🏠 Home":
             return db.load_broker_position_snapshot()
 
         _bsnap = _cached_broker_snapshot()
+        # RecTime C4: a ticker with a trade CERTAINLY after the capture is
+        # excused outright; one with only no-fill-time rows only on an exact
+        # shares match (`drift_excuses`), computed once for both kwargs.
+        _drift_ex = broker_sync.drift_excuses(
+            st.session_state.get("trades_df"),
+            _bsnap.get("captured_at") if isinstance(_bsnap, dict) else None,
+        )
         _drift_verdict = broker_sync.decide_drift_banner(
             _bsnap,
             st.session_state.get("holdings_df"),
@@ -6116,10 +6146,8 @@ if page == "🏠 Home":
             SNAPTRADE_BALANCE_STALE_HOURS,
             price_map={t: (v or {}).get("price") for t, v in _lp_map.items()},
             # A ticker traded since the capture differs for a good reason.
-            recent_trade_tickers=broker_sync.tickers_traded_since(
-                st.session_state.get("trades_df"),
-                _bsnap.get("captured_at") if isinstance(_bsnap, dict) else None,
-            ),
+            recent_trade_tickers=_drift_ex["certain"],
+            untimed_trade_shares=_drift_ex["untimed"],
         )
     except Exception:
         # Route through the renderer's "unknown" branch so the user sees
@@ -13989,8 +14017,9 @@ elif page == "🧾 Summary":
             "stale_clean":   "No mismatch when last captured, but the snapshot is older "
                              "than the freshness window (or an account didn't respond). "
                              "Clean as of its date — NOT a current clean bill of health.",
-            "awaiting_sync": "Positions differ only on names you have traded since the "
-                             "last broker capture. Expected, not an error.",
+            "awaiting_sync": "Positions differ only on names a trade you logged explains "
+                             "(after the last broker capture, or with no fill time and "
+                             "exactly the share difference). Expected, not an error.",
             "not_checked":   "No broker comparison was made. This is NOT the same as "
                              "'in sync' — it means unknown.",
         }
