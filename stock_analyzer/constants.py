@@ -151,6 +151,17 @@ DAILY_NEW_POSITION_BUDGET_PCT = 40.0  # Owner decision 2026-10-15. Caps the SUM 
 # what's left, highest composite first, and read "not sized" once spent -- never
 # dropped. ADDITIVE to NET_CAPITAL_POSITION_CAP_PCT / SINGLE_NAME_CEILING; never trims
 # a holding; not a leverage gate (sizing only). Investment-policy value.
+BROKER_FRAME_PAIR_MAX_MINUTES = 10  # Owner decision 2026-11-14 (U3,
+# docs/plans/net-capital-broker-frame.md). The broker position snapshot and the
+# account-cash record are treated as ONE broker sync only when their stamps are within
+# this many minutes (inclusive, either direction): one cron run writes positions then
+# cash within ~2 minutes, and syncs are >= 5 h apart. Outside it the net-capital
+# cross-check against Robinhood's positions is skipped and disclosed, never guessed.
+NET_CAPITAL_BROKER_GAP_NOTE_PCT = 1.0  # Owner decision 2026-11-14 (U4, same plan).
+# Only the threshold for SHOWING the "net capital from Robinhood's positions" note on
+# the budget status line: when Robinhood's figure is lower than the journal's by at
+# least this % of the journal's. The lower figure always applies (tightening-only);
+# below 1% the budget room moves < 0.4% and the F-255 cap < 0.25% of net capital.
 SINGLE_NAME_TRIM_TRIGGER = 18.0  # soft trim trigger — position that grew past ceiling (price appreciation after entry)
 SECTOR_REDUCE_TRIGGER = 20.0     # sector diversification EARLY-AWARENESS trigger (not a cap): the 📡 Signals REDUCE card fires above it and sizes the trim back UNDER it (bug SecTrig, 2026-11-03)
 # diversification_recommendations() literals, named per 2026-07-29 audit

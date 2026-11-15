@@ -1171,6 +1171,11 @@ _GATE_FILES = {
     # are folded into the anchor, so a wrong call fails the self-check or hides a
     # real drift.
     "stock_analyzer/capital_vs_margin.py",
+    # Added 2026-11-14 (U7 / net-capital-broker-frame C1, docs/plans/net-capital-broker-frame.md):
+    # the pure check of net capital and the daily-budget basis against Robinhood's own
+    # positions; once wired (C3 / C4) it lowers the F-255 sizing cap and the F-306 budget
+    # basis, so a wrong pairing, share diff or tightening rule mis-sizes every new buy.
+    "stock_analyzer/broker_frame.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per
