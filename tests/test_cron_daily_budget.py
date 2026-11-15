@@ -546,7 +546,7 @@ def test_morning_card_exhausted_keeps_the_pick_wording():
 # ── 10. versioning + row hygiene + crash fallback ───────────────────────────
 
 def test_sizing_formula_version_matches_the_budget_version():
-    assert SIZING_FORMULA_VERSION == daily_budget.BUDGET_SIZING_VERSION == 5
+    assert SIZING_FORMULA_VERSION == daily_budget.BUDGET_SIZING_VERSION == 6
 
 
 def test_non_budget_row_keeps_its_pre_budget_key_set():
@@ -671,9 +671,15 @@ class TestMorningPicksBudgetInputs:
     def test_all_five_fields_when_the_cash_record_is_readable(self):
         stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         out = self._run({"cash_balance": -4000.0, "note": None, "updated_at": stamp})
-        assert out["budget_inputs"] == {
+        bi = dict(out["budget_inputs"])
+        # U7 C3: the sixth key is the Robinhood frame (no snapshot in this test).
+        frame = bi.pop("broker_frame")
+        assert bi == {
             "gross_book": 14000.0, "net_capital": 10000.0, "basis_state": "levered",
             "cash_balance": -4000.0, "cash_as_of": stamp}
+        assert frame["state"] == "no_snapshot"
+        assert out["net_capital_check"] == (
+            "net capital source=journal gap=n/a frame=no_snapshot state=levered")
 
     def test_no_cash_record_is_unlevered_with_null_cash(self):
         bi = self._run(None)["budget_inputs"]

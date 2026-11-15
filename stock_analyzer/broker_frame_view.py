@@ -24,6 +24,7 @@ from stock_analyzer.broker_frame import (
     STATE_IMPLAUSIBLE,
     STATE_NO_CASH,
     STATE_NO_HOLDINGS,
+    STATE_NO_PRICES,
     STATE_NO_SNAPSHOT,
     STATE_OK,
     STATE_UNPAIRED,
@@ -44,6 +45,7 @@ _REASON = {
     STATE_NO_HOLDINGS: "holdings couldn't be read",
     STATE_UNPAIRED: "positions and cash weren't saved by the same sync",
     STATE_IMPLAUSIBLE: "Robinhood's snapshot looks incomplete",
+    STATE_NO_PRICES: "no prices for your holdings yet",
 }
 _REASON_HAND_CASH = "cash was entered by hand"
 

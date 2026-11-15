@@ -72,6 +72,7 @@ import pytz
 
 from stock_analyzer import broker_sync
 from stock_analyzer import db
+from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer import healthcheck_ping
 from stock_analyzer import snaptrade_client
 from stock_analyzer import trade_time
@@ -2016,6 +2017,9 @@ def _run_scan(now_et, force: bool) -> int:
         return _rc
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
+    # U7 C4: which net capital the sizes below were built from (journal, or
+    # Robinhood's positions when they said less).
+    _log(payload.get("net_capital_check") or "net capital source=n/a frame=not computed")
     picks = payload.get("picks", [])
 
     # High-conviction = the green "✅ Go — Composite Confirms" set. Key on the SAME
@@ -2099,7 +2103,8 @@ def _run_scan(now_et, force: bool) -> int:
         _b = _bud["budget"]
         _log(f"budget: state={_b.get('state')} pct_used={_b.get('pct_used')} "
              f"left={_b.get('left')} written={_bud.get('written')}"
-             + (f" · reason={_b.get('reason')}" if _b.get("reason") else ""))
+             + (f" · reason={_b.get('reason')}" if _b.get("reason") else "")
+             + _effective_capital.budget_log_suffix(_b))
         if _bud.get("crashed"):
             failures.append(f"budget: {_bud['crashed']}")
         if _bud.get("save_failed"):
@@ -2430,6 +2435,7 @@ def _run_intraday(now_et, force: bool) -> int:
     payload = compute_morning_picks(today=now_et.date(), scanner_results=scanner_df)
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
+    _log(payload.get("net_capital_check") or "net capital source=n/a frame=not computed")
     _news_line = _news_feed_check(payload.get("news_feed"))
     if _news_line:
         _id_failures.append(_news_line)
@@ -2491,7 +2497,8 @@ def _run_intraday(now_et, force: bool) -> int:
             _id_b = _id_bud["budget"]
             _log(f"intraday budget: state={_id_b.get('state')} left={_id_b.get('left')} "
                  f"written={_id_bud.get('written')}"
-                 + (f" · reason={_id_b.get('reason')}" if _id_b.get("reason") else ""))
+                 + (f" · reason={_id_b.get('reason')}" if _id_b.get("reason") else "")
+                 + _effective_capital.budget_log_suffix(_id_b))
             if _id_bud.get("crashed"):
                 _id_failures.append(f"budget: {_id_bud['crashed']}")
             if _id_bud.get("save_failed"):

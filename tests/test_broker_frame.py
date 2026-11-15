@@ -178,14 +178,22 @@ def test_netting_sell_larger_than_priced_buy_tightens_by_net():
 # -- symbol alias ------------------------------------------------------------
 
 def test_symbol_alias_is_not_merged_it_binds_and_lists():
-    hold = _hold([("BRK-B", 10)])
-    f = bf.broker_frame(_snap({"BRK.B": 10}), _cash(), hold, {"BRK-B": 400.0}, NOW,
-                        pair_max_minutes=PAIR)
+    # A shared ticker (A) keeps the snapshot plausible; the alias pair differs.
+    hold = _hold([("A", 100), ("BRK-B", 10)])
+    f = bf.broker_frame(_snap({"A": 100, "BRK.B": 10}), _cash(), hold,
+                        {"A": 100.0, "BRK-B": 400.0}, NOW, pair_max_minutes=PAIR)
     assert f["state"] == "ok"
     assert [r["ticker"] for r in f["rows"]] == ["BRK-B"]
     assert f["adjust"] == pytest.approx(4000.0)         # journal side unmatched: binds
     assert f["unpriced"] == ["BRK.B"]                   # broker side listed, not merged
-    assert bf.reconcile_net_capital(9000.0, "levered", f)["net"] == pytest.approx(5000.0)
+    assert bf.reconcile_net_capital(19000.0, "levered", f)["net"] == pytest.approx(15000.0)
+
+
+def test_a_lone_alias_holding_reads_implausible_never_bound():
+    # Only holding is BRK-B, the snapshot says BRK.B: shares no held ticker.
+    f = bf.broker_frame(_snap({"BRK.B": 10}), _cash(), _hold([("BRK-B", 10)]),
+                        {"BRK-B": 400.0}, NOW, pair_max_minutes=PAIR)
+    assert f["state"] == "implausible" and f["adjust"] is None
 
 
 def test_ticker_case_and_whitespace_are_normalised():
@@ -358,7 +366,8 @@ def test_budget_basis_preserves_lag_uncertain_fields_and_only_lowers_basis():
         assert rb[k] == b[k]
     assert rb["basis"] <= b["basis"]
     assert b["basis"] == 10000.0                        # the input dict is not mutated
-    assert set(rb) - set(b) == {"source", "gap", "checked", "journal_net", "frame_state"}
+    assert set(rb) - set(b) == {"source", "gap", "checked", "journal_net", "frame_state",
+                                "frame_adjust"}
 
 
 def test_budget_basis_unusable_inputs_unchecked():
@@ -454,8 +463,9 @@ def _rec_with_gap(gap, jnet=10000.0):
 def test_disclosure_shows_exactly_at_the_note_threshold():
     one_pct = 10000.0 * NOTE_PCT / 100.0
     txt = bf.disclosure_text(_rec_with_gap(one_pct), NOTE_PCT)
-    assert "net capital from Robinhood's positions" in txt
-    assert f"~${one_pct:,.0f} more" in txt and "broker check on Home" in txt
+    assert "net capital taken from Robinhood's positions" in txt
+    assert f"~${one_pct:,.0f} below your journal's figure" in txt
+    assert "💰 Account → Net capital check" in txt
 
 
 def test_disclosure_hidden_just_below_the_threshold():
@@ -482,13 +492,14 @@ def test_disclosure_budget_rec_uses_the_basis_as_the_denominator():
     f = _frame({"A": 100})                              # basis 10,000 -> 5,000: 50%
     rb = bf.reconcile_budget_basis(
         {"state": "ok", "basis": 10000.0, "reason": None}, GROSS, CASH, f)
-    assert "~$5,000 more" in bf.disclosure_text(rb, NOTE_PCT)
+    assert "~$5,000 below your journal's figure" in bf.disclosure_text(rb, NOTE_PCT)
 
 
 def test_disclosure_unchecked_says_not_cross_checked_and_why():
     for st, why in (("unpaired", "weren't read together"),
                     ("no_snapshot", "no Robinhood positions snapshot"),
-                    ("implausible", "no positions"),
+                    ("implausible", "none of the positions your journal holds"),
+                    ("no_prices", "no prices for your holdings"),
                     ("no_cash", "no cash record"),
                     ("no_holdings", "holdings couldn't be read"),
                     ("unreadable", "unreadable")):
@@ -513,6 +524,162 @@ def test_disclosure_dollars_are_maskable_like_budget_view():
     txt = bf.disclosure_text(_rec_with_gap(1234.0), NOTE_PCT)
     assert "$1,234" in txt
     assert "$" not in _USD_RE.sub(_MASK, txt)
+
+
+# -- U7 C3: implausible / no_prices / split guard ------------------------------
+
+def test_disjoint_snapshot_is_implausible_even_when_not_empty():
+    f = _frame({"ZZZ": 5})                              # journal holds A, B; snapshot only ZZZ
+    assert f["state"] == "implausible" and f["adjust"] is None
+    r = bf.reconcile_net_capital(10000.0, "levered", f)
+    assert r["net"] == 10000.0 and r["checked"] is False and r["source"] == "journal"
+
+
+def test_one_shared_ticker_is_enough_to_be_plausible():
+    f = _frame({"A": 100})                              # B gone, A shared
+    assert f["state"] == "ok"
+
+
+def test_dust_journal_holding_is_not_held():
+    # Journal holds only dust (<= tolerance) of B plus real A; the snapshot holds A.
+    f = _frame({"A": 100}, hold=_hold([("A", 100), ("B", 0.0004)]))
+    assert f["state"] == "ok"
+    # Journal that is ALL dust is "holds nothing": never implausible.
+    f = _frame({"A": 100}, hold=_hold([("B", 0.0004)]))
+    assert f["state"] == "ok"
+
+
+def test_broker_ticker_at_zero_is_not_held():
+    # Snapshot lists A and B at 0: it shares nothing held with the journal.
+    f = _frame({"A": 0, "B": 0}, hold=_hold([("A", 100), ("B", 50)]))
+    assert f["state"] == "implausible"
+
+
+def test_single_holding_fully_sold_unlogged_is_an_accepted_detection_loss():
+    f = _frame({}, hold=_hold([("A", 100)]))
+    assert f["state"] == "implausible" and f["adjust"] is None
+    assert "not cross-checked" in bf.disclosure_text(
+        bf.reconcile_net_capital(5000.0, "levered", f), NOTE_PCT)
+
+
+def test_no_prices_for_the_held_names_is_not_a_clean_ok():
+    f = _frame({"A": 100, "B": 50}, px={})
+    assert f["state"] == "no_prices" and f["adjust"] is None
+    f = _frame({"A": 100, "B": 50}, px={"A": float("nan"), "B": 0.0})
+    assert f["state"] == "no_prices"
+    # one priced held name is enough to be a real check
+    f = _frame({"A": 100, "B": 50}, px={"A": 100.0})
+    assert f["state"] == "ok"
+    r = bf.reconcile_net_capital(10000.0, "levered", _frame({"A": 100}, px={}))
+    assert r["net"] == 10000.0 and r["checked"] is False
+    txt = bf.disclosure_text(r, NOTE_PCT)
+    assert "not cross-checked" in txt and "no prices for your holdings" in txt
+
+
+def test_no_prices_never_fires_for_an_empty_journal():
+    f = _frame({"A": 100}, hold=_hold([]), px={})
+    assert f["state"] == "ok"
+
+
+def test_every_state_constant_has_a_disclosure_reason():
+    states = {v for k, v in vars(bf).items() if k.startswith("STATE_")}
+    assert states - {bf.STATE_OK} == set(bf._WHY)
+
+
+def test_exclude_tickers_leaves_a_differing_ticker_out_and_lists_it():
+    f = bf.broker_frame(_snap({"A": 100, "B": 50}), _cash(),
+                        _hold([("A", 100), ("B", 200)]), PX, NOW,
+                        pair_max_minutes=PAIR, exclude_tickers=("b",))
+    assert f["state"] == "ok" and f["adjust"] == 0.0 and f["rows"] == []
+    assert f["excluded"] == [{"ticker": "B", "journal_shares": 200.0,
+                              "broker_shares": 50.0, "diff": 150.0}]
+    # a ticker the books AGREE on is not listed even when excluded
+    f = bf.broker_frame(_snap({"A": 100, "B": 50}), _cash(), JOURNAL, PX, NOW,
+                        pair_max_minutes=PAIR, exclude_tickers=["B"])
+    assert f["excluded"] == []
+    # without the exclusion it binds
+    f = bf.broker_frame(_snap({"A": 100, "B": 50}), _cash(),
+                        _hold([("A", 100), ("B", 200)]), PX, NOW, pair_max_minutes=PAIR)
+    assert f["adjust"] == pytest.approx(15000.0) and f["excluded"] == []
+
+
+def test_every_result_carries_excluded_key():
+    for f in (_frame({"A": 100}), _frame({}), bf.broker_frame(
+            None, None, None, {}, NOW, pair_max_minutes=PAIR)):
+        assert f["excluded"] == []
+
+
+# -- U7 C3: checked only on a usable basis -------------------------------------
+
+def test_ok_frame_with_unusable_basis_is_unchecked_with_no_gap():
+    f = _frame({"A": 100, "B": 50})
+    for bad in (None, float("nan"), float("inf")):
+        rb = bf.reconcile_budget_basis(
+            {"state": "ok", "basis": bad, "reason": None}, GROSS, CASH, f)
+        assert rb["checked"] is False and rb["gap"] is None
+        assert rb["frame_adjust"] is None
+    assert bf.disclosure_text(rb, NOTE_PCT).startswith(" · sizes not cross-checked")
+
+
+def test_called_with_a_numeric_basis_is_checked_and_carries_frame_adjust():
+    f = _frame({"A": 100})
+    rb = bf.reconcile_budget_basis(
+        {"state": "called", "basis": -300.0, "reason": "x"}, GROSS, CASH, f)
+    assert rb["checked"] is True and rb["gap"] == 0.0
+    assert rb["frame_adjust"] == pytest.approx(5000.0)
+    assert rb["state"] == "called" and rb["basis"] == -300.0
+
+
+def test_frame_adjust_is_the_signed_adjust_when_checked():
+    f = _frame({"A": 100, "B": 50, "C": 5}, px=dict(PX, C=100.0))   # broker has an extra C
+    rb = bf.reconcile_budget_basis(
+        {"state": "ok", "basis": 10000.0, "reason": None}, GROSS, CASH, f)
+    assert rb["frame_adjust"] == pytest.approx(-500.0)
+
+
+# -- U7 C3: disclosure wording S1 / S2 -----------------------------------------
+
+def _budget_rec(gap, adjust, jnet=10000.0):
+    return {"state": "ok", "checked": True, "gap": gap, "journal_net": jnet,
+            "source": "broker", "frame_state": "ok", "frame_adjust": adjust}
+
+
+@pytest.mark.parametrize("gap, adjust, s1", [
+    (1000.0, 1000.0, True),         # the books themselves differ
+    (1000.0, 999.0, True),          # exactly gap - 1.0: still S1
+    (1000.0, 998.99, False),        # gap - 1.01: the lag part dominates -> S2
+    (1000.0, 0.0, False),           # nothing at the broker, all lag
+    (1000.0, -50.0, False),         # a negative adjust counts as 0
+])
+def test_disclosure_s1_vs_s2_boundary(gap, adjust, s1):
+    txt = bf.disclosure_text(_budget_rec(gap, adjust), NOTE_PCT)
+    assert "~$1,000 below your journal's figure" in txt
+    if s1:
+        assert txt.endswith("(see 💰 Account → Net capital check)")
+        assert "because" not in txt
+    else:
+        assert ("because a sell logged as after Robinhood's last sync is already in it "
+                "(check that trade's fill time)") in txt
+        assert "Net capital check" not in txt
+
+
+def test_disclosure_without_frame_adjust_reads_s1():
+    txt = bf.disclosure_text(_rec_with_gap(1234.0), NOTE_PCT)
+    assert txt.endswith("(see 💰 Account → Net capital check)")
+
+
+def test_disclosure_budget_one_percent_boundary_with_s_wording():
+    one_pct = 10000.0 * NOTE_PCT / 100.0
+    assert bf.disclosure_text(_budget_rec(one_pct, one_pct), NOTE_PCT) != ""
+    assert bf.disclosure_text(_budget_rec(one_pct - 0.99, one_pct), NOTE_PCT) == ""
+
+
+def test_disclosure_masked_has_no_digit_after_the_tilde():
+    import re
+    from stock_analyzer.budget_view import _MASK, _USD_RE
+    for adj in (1234.0, 0.0):
+        masked = _USD_RE.sub(_MASK, bf.disclosure_text(_budget_rec(1234.0, adj), NOTE_PCT))
+        assert re.search(r"~\d", masked) is None and "$" not in masked and _MASK in masked
 
 
 # -- module hygiene ----------------------------------------------------------

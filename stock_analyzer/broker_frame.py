@@ -24,7 +24,10 @@ TIGHTENING-ONLY by construction: every net / basis returned is <= the one passed
 in. A broker figure that reads HIGHER than the journal's (a BUY logged after the
 sync, an unlogged BUY) is never used to loosen anything.
 
-Not wired into any decision yet (chunks C3 / C4 of the plan).
+Wired into sizing by `stock_analyzer.effective_capital` (U7 C3 / C4): F-255's net
+capital and the F-306 budget basis are the LOWER of the journal figure and this
+frame. This module stays pure; `effective_capital` is the only caller that
+builds the budget inputs.
 """
 from __future__ import annotations
 
@@ -43,7 +46,8 @@ STATE_UNREADABLE = "unreadable"     # a snapshot or cash timestamp / payload is 
 STATE_NO_CASH = "no_cash"           # no account-cash record (or no cash figure)
 STATE_NO_HOLDINGS = "no_holdings"   # the journal holdings couldn't be read
 STATE_UNPAIRED = "unpaired"         # cash not from the same broker sync as the positions
-STATE_IMPLAUSIBLE = "implausible"   # empty snapshot while the journal holds positions
+STATE_IMPLAUSIBLE = "implausible"   # snapshot shares no held ticker with the journal
+STATE_NO_PRICES = "no_prices"       # no price for any ticker the journal holds
 
 # The note `broker_sync.map_balances_to_cash` writes on a broker-synced cash row.
 # A hand-entered cash balance carries a different (or no) note. Pinned equal to
@@ -57,8 +61,13 @@ _WHY = {
     STATE_NO_CASH: "no cash record",
     STATE_NO_HOLDINGS: "your holdings couldn't be read",
     STATE_UNPAIRED: "Robinhood's positions and cash weren't read together",
-    STATE_IMPLAUSIBLE: "Robinhood's snapshot showed no positions while your journal holds some",
+    STATE_IMPLAUSIBLE: "Robinhood's snapshot shows none of the positions your journal holds",
+    STATE_NO_PRICES: "no prices for your holdings",
 }
+
+# Display rounding for the disclosure wording only, not policy (as
+# `broker_frame_view._SAME_BELOW_USD`): the dollar figures read as whole dollars.
+_WORDING_ROUND_USD = 1.0
 
 # net / basis states a disclosure applies to (a status line exists for them).
 _DISCLOSED_STATES = ("ok", "levered", "called")
@@ -154,14 +163,14 @@ def _prices(price_map) -> dict:
 
 
 def _result(state, adjust=None, rows=None, unpriced=None, captured_at=None,
-            age_hours=None) -> dict:
+            age_hours=None, excluded=None) -> dict:
     return {"state": state, "adjust": adjust, "rows": list(rows or []),
             "unpriced": list(unpriced or []), "captured_at": captured_at,
-            "age_hours": age_hours}
+            "age_hours": age_hours, "excluded": list(excluded or [])}
 
 
 def broker_frame(snapshot, cash_rec, holdings_df, price_map, now, *,
-                 pair_max_minutes) -> dict:
+                 pair_max_minutes, exclude_tickers=()) -> dict:
     """Compare Robinhood's own positions to the journal's.
 
     snapshot : `db.load_broker_position_snapshot()` (positions map, captured_at),
@@ -173,15 +182,24 @@ def broker_frame(snapshot, cash_rec, holdings_df, price_map, now, *,
     pair_max_minutes : pass `BROKER_FRAME_PAIR_MAX_MINUTES`. The snapshot and the
         cash record are one broker sync only when their stamps are within this
         many minutes of each other, either direction, inclusive.
+    exclude_tickers : tickers left out of `adjust` / `rows` even when the books
+        differ on them (a SPLIT logged after, or at an unknown time relative to,
+        the sync: the journal's share count and the snapshot's are on different
+        sides of the split). They are listed in `excluded` instead.
 
-    Returns {state, adjust, rows, unpriced, captured_at, age_hours}.
+    Returns {state, adjust, rows, unpriced, captured_at, age_hours, excluded}.
     `state` "ok" carries `adjust` (signed dollars: positive = the journal holds
     more than Robinhood, so net capital is overstated). Every other state
     ("no_snapshot", "unreadable", "no_cash", "no_holdings", "unpaired",
-    "implausible") has `adjust` None. `rows` lists each ticker the books differ
+    "implausible", "no_prices") has `adjust` None. `rows` lists each ticker the books differ
     on beyond BROKER_DRIFT_SHARE_TOL (priced ones only); `unpriced` names the
     differing tickers with no usable price (an unlogged BUY, or an alias symbol):
-    they are left out of `adjust`. `captured_at` is a UTC Timestamp (None when
+    they are left out of `adjust`. `excluded` lists a differing excluded ticker
+    as {ticker, journal_shares, broker_shares, diff} (no price, no dollars).
+    "implausible" = the journal holds positions and the snapshot shares none of
+    them (an empty, failed or wrong-account capture); "no_prices" = no ticker the
+    journal holds has a usable price (an empty price map must not read as
+    "checked, books agree"). `captured_at` is a UTC Timestamp (None when
     unknown); `age_hours` is now - captured_at, None when either is unknown.
     """
     if not isinstance(snapshot, dict):
@@ -219,19 +237,32 @@ def broker_frame(snapshot, cash_rec, holdings_df, price_map, now, *,
             or abs((cap - upd).total_seconds()) > pm * 60.0:
         return _res(STATE_UNPAIRED)
 
-    # An empty snapshot while the journal holds positions is far likelier an
-    # unread / failed capture than a real all-cash account: never act on it.
-    if not broker and any(v > BROKER_DRIFT_SHARE_TOL for v in journal.values()):
+    # A snapshot that shares NO held ticker with the journal (empty, failed, or the
+    # wrong account) is far likelier a bad capture than a real full liquidation:
+    # never act on it. (A single holding fully sold unlogged also reads this way:
+    # an accepted detection loss, shown as not cross-checked.)
+    j_held = {t for t, v in journal.items() if v > BROKER_DRIFT_SHARE_TOL}
+    b_held = {t for t, v in broker.items() if v > BROKER_DRIFT_SHARE_TOL}
+    if j_held and not (j_held & b_held):
         return _res(STATE_IMPLAUSIBLE)
 
     px = _prices(price_map)
+    if j_held and not any(t in px for t in j_held):
+        return _res(STATE_NO_PRICES)
+
+    excl = {_norm(t) for t in (exclude_tickers or ())} - {""}
     rows: list = []
     unpriced: list = []
+    excluded: list = []
     adjust = 0.0
     for tk in sorted(set(journal) | set(broker)):
         js, bs = journal.get(tk, 0.0), broker.get(tk, 0.0)
         diff = js - bs
         if abs(diff) <= BROKER_DRIFT_SHARE_TOL:
+            continue
+        if tk in excl:
+            excluded.append({"ticker": tk, "journal_shares": js,
+                             "broker_shares": bs, "diff": diff})
             continue
         price = px.get(tk)
         if price is None:
@@ -241,7 +272,8 @@ def broker_frame(snapshot, cash_rec, holdings_df, price_map, now, *,
         adjust += dollars
         rows.append({"ticker": tk, "journal_shares": js, "broker_shares": bs,
                      "diff": diff, "price": price, "dollars": dollars})
-    return _res(STATE_OK, adjust=adjust, rows=rows, unpriced=unpriced)
+    return _res(STATE_OK, adjust=adjust, rows=rows, unpriced=unpriced,
+                excluded=excluded)
 
 
 def _frame_adjust(frame) -> "float | None":
@@ -295,6 +327,11 @@ def reconcile_budget_basis(basis_result, gross_book, cash_balance, frame) -> dic
     basis_result : `daily_budget.budget_basis(...)`'s dict (state, basis, reason,
         lag_adjustment, lag_uncertain, lag_uncertain_tickers). Every key is kept
         as is, except `basis` / `state` / `reason` when the broker figure binds.
+        It MUST come from `daily_budget.budget_basis` fed the RAW journal
+        net / state (`margin.resolve_net_capital`); never feed
+        `reconcile_net_capital`'s net: a BUY logged after the sync would be
+        subtracted twice (G + C - 2K). `effective_capital.reconciled_basis` is
+        the one place that does this.
     gross_book, cash_balance : the same two figures `budget_basis` was given.
     frame : `broker_frame(...)`'s result (or None).
 
@@ -302,20 +339,25 @@ def reconcile_budget_basis(basis_result, gross_book, cash_balance, frame) -> dic
     "lagged basis - adjust", which would subtract a post-sync logged BUY twice.
     "called" when basis_eff <= 0. Only state "ok" is tightened; "unknown" and
     "called" pass through. Adds {source: "journal"|"broker", gap, checked,
-    journal_net, frame_state}: `gap` = the dollars the basis was lowered by (0.0
-    when it didn't bind, None when unchecked), `journal_net` = the basis as passed.
+    journal_net, frame_state, frame_adjust}: `gap` = the dollars the basis was
+    lowered by (0.0 when it didn't bind, None when unchecked), `journal_net` =
+    the basis as passed, `frame_adjust` = the frame's signed adjust when checked
+    (None otherwise; the disclosure wording reads it). `checked` is True only
+    when the frame, the gross book, the cash AND the basis are all usable
+    numbers: a basis that cannot be compared is never "checked".
     """
     res = dict(basis_result) if isinstance(basis_result, dict) else {}
     basis = _num(res.get("basis"))
     adj = _frame_adjust(frame)
     gb, cash = _num(gross_book), _num(cash_balance)
     res.update({"source": "journal", "gap": None, "checked": False,
-                "journal_net": res.get("basis"), "frame_state": _frame_state(frame)})
+                "journal_net": res.get("basis"), "frame_state": _frame_state(frame),
+                "frame_adjust": None})
     if res.get("state") not in ("ok", "called") or adj is None or gb is None \
-            or cash is None:
+            or cash is None or basis is None:
         return res
-    res.update(checked=True, gap=0.0)
-    if res.get("state") != "ok" or basis is None:
+    res.update(checked=True, gap=0.0, frame_adjust=adj)
+    if res.get("state") != "ok":
         return res
     frame_basis = gb + cash - adj
     if frame_basis < basis:
@@ -338,15 +380,23 @@ def disclosure_text(rec, note_pct) -> str:
         figure; inclusive). It only decides whether the note SHOWS; the lower
         figure always applies.
 
-    - checked and the broker figure is lower by >= note_pct of the journal's:
-      " · net capital from Robinhood's positions; your journal shows ~$X more
-      (see the broker check on Home)".
+    - checked and the broker figure is lower by >= note_pct of the journal's,
+      worded two ways (the budget's own lag correction can be part of the gap):
+      S1, the books themselves differ (`frame_adjust` accounts for the gap,
+      within a dollar): " · net capital taken from Robinhood's positions: ~$X
+      below your journal's figure (see 💰 Account → Net capital check)";
+      S2, the lag part dominates (a sell logged as after Robinhood's last sync
+      is already in it): the same, "... because a sell logged as after
+      Robinhood's last sync is already in it (check that trade's fill time)".
+      A rec with no `frame_adjust` (the F-255 net rec: gap == max(0, adjust))
+      reads S1.
     - applicable but not checked: " · sizes not cross-checked against Robinhood's
       positions (<why>)".
     - anything else (not a status-line state, or checked and under the note
       threshold): "".
-    Dollar amounts are written as plain "$1,234": the callers mask them with the
-    same `\\$[\\d,]+` pattern budget_view uses and escape `$` for markdown.
+    Dollar amounts are written as plain "$1,234": callers MUST (C3) mask them with
+    `budget_view._USD_RE` and escape `$` for markdown (`budget_view.status_line_text`
+    masks; the app call sites escape).
     """
     if not isinstance(rec, dict) or rec.get("state") not in _DISCLOSED_STATES:
         return ""
@@ -360,5 +410,11 @@ def disclosure_text(rec, note_pct) -> str:
         return ""
     if jnet > 0 and gap / jnet * 100.0 < pct:
         return ""
-    return (f" · net capital from Robinhood's positions; your journal shows "
-            f"~{_usd(gap)} more (see the broker check on Home)")
+    adj = _num(rec.get("frame_adjust"))
+    books = gap if adj is None else max(0.0, adj)
+    head = (f" · net capital taken from Robinhood's positions: ~{_usd(gap)} "
+            "below your journal's figure")
+    if books + _WORDING_ROUND_USD >= gap:
+        return head + " (see 💰 Account → Net capital check)"
+    return (head + ", because a sell logged as after Robinhood's last sync is "
+            "already in it (check that trade's fill time)")

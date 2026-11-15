@@ -603,8 +603,8 @@ def test_render_adapter_sized_add_copies_the_room_fields():
 
 # ── 10. budget ────────────────────────────────────────────────────────────────
 
-def test_versions_are_five_and_equal():
-    assert daily_budget.BUDGET_SIZING_VERSION == daily_briefing.SIZING_FORMULA_VERSION == 5
+def test_versions_are_six_and_equal():
+    assert daily_budget.BUDGET_SIZING_VERSION == daily_briefing.SIZING_FORMULA_VERSION == 6
 
 
 @pytest.mark.parametrize("marker", [

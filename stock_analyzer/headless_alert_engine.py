@@ -59,6 +59,7 @@ from stock_analyzer.constants import (
     DAILY_NEW_POSITION_BUDGET_PCT,
 )
 from stock_analyzer import daily_budget as _daily_budget
+from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.entry_eligibility import (
     classify_tone, resolve_tone_state, watchlist_run_ctx, watchlist_ticker_ctx,
 )
@@ -658,25 +659,51 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     except Exception as e:
         errors.append(f"macro calendar failed: {e}")
 
+    # U7 C4: Robinhood's own positions snapshot and the price map the book was
+    # valued at, read ONCE here (hoisted from the drift block below) so the
+    # net-capital check and the drift verdict see the same snapshot. Each read
+    # has its own try: a failure is None / {} (= not checked), never a crash.
+    _bsnap = None
+    try:
+        _bsnap = db.load_broker_position_snapshot()
+    except Exception:
+        _bsnap = None
+    try:
+        _price_map = (
+            dict(zip(port_df["Ticker"], port_df["Price"]))
+            if not port_df.empty and "Ticker" in port_df.columns and "Price" in port_df.columns
+            else {}
+        )
+    except Exception:
+        _price_map = {}
+
     # F-255: resolve the SEPARATE net-capital sizing cap the same way the app
     # does, so the emailed buy-list respects it too, not just the interactive
     # surfaces. `db.load_account_cash()` is a pure DB read that works headlessly
     # (no Streamlit dependency). None/inert when unlevered, no cash record, or
     # the record is stale — identical no-op posture to every other caller.
-    # The daily new-position budget (docs/plans/daily-new-position-budget.md)
-    # reads the SAME resolution, so `_f255_basis`/`_f255_acct` are kept and
-    # returned as `budget_inputs`; "unknown" (not "unlevered") on a failed
-    # resolution so the budget withholds instead of assuming a basis.
+    # U7 C3/C4: the net capital is the LOWER of the journal figure and Robinhood's
+    # positions (`effective_capital.resolve`, the same helper the app calls, so
+    # the email and the page size from one number). The daily new-position
+    # budget (docs/plans/daily-new-position-budget.md) is fed the RAW journal
+    # pair + the frame through `_f255_eff["budget_inputs"]`; "unknown" (not
+    # "unlevered") on a failed resolution so the budget withholds instead of
+    # assuming a basis.
     _f255_acct = None
-    _f255_basis = "unknown"
+    _j_net, _j_state = None, "unknown"
     try:
         _f255_acct = db.load_account_cash()
-        _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
+        _j_net, _j_state = _margin_mod.resolve_net_capital(
             portfolio_value, _f255_acct, ACCOUNT_CASH_STALE_DAYS, datetime.now(_ET)
         )
     except Exception:
-        _f255_net_cap = None
-        _f255_basis = "unknown"
+        _j_net, _j_state = None, "unknown"
+    _f255_eff = _effective_capital.resolve(
+        portfolio_value, _f255_acct, _j_net, _j_state, _bsnap,
+        ctx.get("holdings_df"), _price_map, datetime.now(_ET),
+        trades_df=ctx.get("trades_df"),
+    )
+    _f255_net_cap, _f255_basis = _f255_eff["net"], _f255_eff["state"]
 
     # ETF new-pick candidate pool (ETF-support Phase 2b) — resolves the
     # owner-curated etf_registry table + the currently-held book into the
@@ -760,13 +787,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     # notify._book_drift_banner: only state=="drift" ever renders anything).
     book_drift = None
     try:
-        _bsnap = db.load_broker_position_snapshot()
         if _bsnap is not None:
-            _price_map = (
-                dict(zip(port_df["Ticker"], port_df["Price"]))
-                if not port_df.empty and "Ticker" in port_df.columns and "Price" in port_df.columns
-                else {}
-            )
             # RecTime C4: certain-after tickers excuse drift outright; tickers
             # with only no-fill-time rows excuse it on an exact-shares match.
             _drift_ex = broker_sync.drift_excuses(
@@ -814,19 +835,17 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     # a reference_shelf failure here can never abort pick computation.
     macro_coverage = grow.get("macro_coverage_expired")   # may be None or []
 
-    _acct_ok = isinstance(_f255_acct, dict)
-    budget_inputs = {
-        "gross_book":   portfolio_value,
-        "net_capital":  _f255_net_cap,
-        "basis_state":  _f255_basis,
-        "cash_balance": _f255_acct.get("cash_balance") if _acct_ok else None,
-        "cash_as_of":   _f255_acct.get("updated_at") if _acct_ok else None,
-    }
+    # Built inside `effective_capital.resolve` from the RAW journal net / state
+    # (never F-255's reconciled net: a post-sync logged BUY would be subtracted
+    # twice) plus the Robinhood frame.
+    budget_inputs = _f255_eff["budget_inputs"]
     return {"picks": grow.get("new_picks", []) or [], "built_at": built_at,
             "errors": errors, "diag": diag, "book_drift": book_drift,
             "macro_coverage": macro_coverage,
             # Daily new-position budget basis inputs (see run_daily_budget).
             "budget_inputs": budget_inputs,
+            # One log line for the net-capital check (the cron logs it).
+            "net_capital_check": _effective_capital.log_line(_f255_eff),
             # grow_today dict — gate_ledger.build_suppression_rows reads the
             # suppression buckets from here (W5 capture half). Additive; existing
             # callers that ignore this key are unaffected.
@@ -1336,14 +1355,37 @@ def compute_watchlist_entries(
         # risk.capital_equivalent_risk reads it as "unknown" (never a false
         # "you're unlevered, nothing to disclose" claim) rather than
         # asserting a specific state we did not actually verify.
+        # U7 C4: tightened to Robinhood's positions exactly as compute_morning_picks
+        # does (`effective_capital.resolve`); its own snapshot read, the raw
+        # holdings read above, this run's trades and the book's own prices.
         _wl_net_cap, _wl_basis = None, "unknown"
+        _wl_acct = None
+        _wl_j_net, _wl_j_state = None, "unknown"
         try:
             _wl_acct = db.load_account_cash()
-            _wl_net_cap, _wl_basis = _margin_mod.resolve_net_capital(
+            _wl_j_net, _wl_j_state = _margin_mod.resolve_net_capital(
                 _wl_pv, _wl_acct, ACCOUNT_CASH_STALE_DAYS, datetime.now(_ET),
             )
         except Exception:
-            _wl_net_cap, _wl_basis = None, "unknown"
+            _wl_j_net, _wl_j_state = None, "unknown"
+        try:
+            _wl_bsnap = db.load_broker_position_snapshot()
+        except Exception:
+            _wl_bsnap = None
+        try:
+            _wl_prices = (
+                dict(zip(port_df["Ticker"], port_df["Price"]))
+                if port_df is not None and not port_df.empty
+                and "Ticker" in port_df.columns and "Price" in port_df.columns
+                else {}
+            )
+        except Exception:
+            _wl_prices = {}
+        _wl_eff = _effective_capital.resolve(
+            _wl_pv, _wl_acct, _wl_j_net, _wl_j_state, _wl_bsnap, holdings_df,
+            _wl_prices, datetime.now(_ET), trades_df=ctx.get("trades_df"),
+        )
+        _wl_net_cap, _wl_basis = _wl_eff["net"], _wl_eff["state"]
         for _e in new_entries:
             try:
                 _e["sizing"] = _position_size_for_render(
@@ -1441,7 +1483,9 @@ def run_daily_budget(today, now, budget_inputs, emailed, others=()) -> dict:
         return {"budget": {"state": "unknown", "reason": why, "pct_used": None,
                            "used_logged": None, "used_allocated": None,
                            "used_list": None, "left": None, "over_line_pct": None,
-                           "save_failed": False},
+                           "save_failed": False,
+                           "basis_source": None, "broker_gap": None,
+                           "broker_rec": None},
                 "per_ticker": {}, "save_failed": False, "save_error": None,
                 "written": 0, "crashed": f"{type(exc).__name__}: {str(exc)[:120]}"}
 
@@ -1469,7 +1513,8 @@ def _run_daily_budget(today, now, budget_inputs, emailed, others=()) -> dict:
 
     Returns {"budget": <flat dict the email renderers read: state, reason,
     pct_used, used_logged, used_allocated, used_list, left, over_line_pct,
-    save_failed>, "per_ticker": {...}, "save_failed": bool,
+    save_failed, basis_source, broker_gap, broker_rec (the Robinhood check;
+    primitives only)>, "per_ticker": {...}, "save_failed": bool,
     "save_error": str | None, "written": int}.
     """
     bi = budget_inputs if isinstance(budget_inputs, dict) else {}
@@ -1486,11 +1531,9 @@ def _run_daily_budget(today, now, budget_inputs, emailed, others=()) -> dict:
     except Exception:
         logged = None
     try:
-        basis = _daily_budget.budget_basis(
-            bi.get("gross_book"), bi.get("net_capital"),
-            bi.get("basis_state") or "unknown", bi.get("cash_balance"),
-            bi.get("cash_as_of"), trades_df, today, now,
-        )
+        # U7 C3: the basis is fed the RAW journal pair, then tightened to
+        # Robinhood's positions when they say less (`effective_capital`).
+        basis = _effective_capital.reconciled_basis(bi, trades_df, today, now)
     except Exception:
         basis = {"state": "unknown", "basis": None,
                  "reason": "net capital couldn't be determined",
@@ -1590,6 +1633,7 @@ def _run_daily_budget(today, now, budget_inputs, emailed, others=()) -> dict:
         "left": res1.get("left"),
         "over_line_pct": over_pct,
         "save_failed": save_failed,
+        **_effective_capital.broker_fields(basis),
     }
     return {"budget": budget, "per_ticker": per, "save_failed": save_failed,
             "save_error": save_error, "written": 0 if save_failed else len(rows)}

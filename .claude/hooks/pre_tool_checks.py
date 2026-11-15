@@ -1176,6 +1176,13 @@ _GATE_FILES = {
     # positions; once wired (C3 / C4) it lowers the F-255 sizing cap and the F-306 budget
     # basis, so a wrong pairing, share diff or tightening rule mis-sizes every new buy.
     "stock_analyzer/broker_frame.py",
+    # Added 2026-11-14 (U7 C3 / C4, docs/plans/net-capital-broker-frame-c3-spec.md):
+    # the one builder of the sizing capital inputs; F-255's net capital and the F-306
+    # budget basis are the lower of the journal figure and Robinhood's positions, and
+    # the budget must be fed the RAW journal net (never the reconciled one: a BUY
+    # logged after the sync would be subtracted twice), so a wrong input here
+    # mis-sizes every new buy in the app and in the emails.
+    "stock_analyzer/effective_capital.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per

@@ -15,8 +15,12 @@ import re
 
 import requests
 
-from stock_analyzer.constants import SINGLE_NAME_CEILING, NET_CAPITAL_POSITION_CAP_PCT
-from stock_analyzer import hold_reasons
+from stock_analyzer.constants import (
+    NET_CAPITAL_BROKER_GAP_NOTE_PCT,
+    NET_CAPITAL_POSITION_CAP_PCT,
+    SINGLE_NAME_CEILING,
+)
+from stock_analyzer import broker_frame, hold_reasons
 from stock_analyzer.entry_eligibility import email_footer_lines
 from stock_analyzer.risk import capital_equivalent_risk
 from stock_analyzer.sizing_path import room_note as _room_note
@@ -90,10 +94,14 @@ def _budget_banner(budget: "dict | None", list_label: str = "this list") -> str:
     state = budget.get("state")
     lines = []
     if state == "ok":
+        # U7 C3: the Robinhood net-capital check's disclosure rides the status
+        # line (escaped with it below; a missing `broker_rec` says nothing).
         lines.append(hold_reasons.budget_status_line(
             budget.get("pct_used"), budget.get("used_logged"),
             budget.get("used_allocated"), budget.get("used_list"),
-            budget.get("left"), list_label=list_label))
+            budget.get("left"), list_label=list_label)
+            + broker_frame.disclosure_text(
+                budget.get("broker_rec"), NET_CAPITAL_BROKER_GAP_NOTE_PCT))
         if budget.get("over_line_pct") is not None:
             lines.append(hold_reasons.budget_over_line(budget.get("over_line_pct")))
     elif state == "called":

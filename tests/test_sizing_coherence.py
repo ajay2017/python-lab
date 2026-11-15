@@ -606,10 +606,11 @@ class TestSizingProvenance:
 
 class TestNetCapitalCap:
 
-    def test_sizing_formula_version_is_5(self):
+    def test_sizing_formula_version_is_6(self):
         # 3 -> 4 with the daily new-position budget (daily_budget.BUDGET_SIZING_VERSION);
-        # 4 -> 5 with S-D (caps bind on the whole position after an add).
-        assert SIZING_FORMULA_VERSION == 5
+        # 4 -> 5 with S-D (caps bind on the whole position after an add);
+        # 5 -> 6 with U7 C3 (net capital / budget basis = lower of journal and Robinhood).
+        assert SIZING_FORMULA_VERSION == 6
 
     def test_net_capital_none_is_byte_identical_to_pre_f255_output(self):
         """_position_size_for_render(..., net_capital=None) (the default, and

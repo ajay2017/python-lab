@@ -147,8 +147,9 @@ def _ledger_composite(composites, ticker):
 #       (daily_budget.BUDGET_SIZING_VERSION): a stored rec_shares now also
 #       depends on the day's other candidates and today's logged buys.
 #   5 = S-D: SINGLE_NAME_CEILING / NET_CAPITAL_POSITION_CAP_PCT bind on the whole position after an add (existing holding value counted); add_winner rec_shares change meaning.
+#   6 = U7 C3: F-255 net capital and the F-306 budget basis are the LOWER of the journal figure and Robinhood's positions snapshot (broker_frame); rec_shares and budget_allocations.basis_dollars can be lower than the journal alone gives.
 # Bump this whenever the formula changes; do NOT reuse a number.
-SIZING_FORMULA_VERSION = 5
+SIZING_FORMULA_VERSION = 6
 
 
 def _position_size_for_render(

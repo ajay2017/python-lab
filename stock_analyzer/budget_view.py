@@ -39,8 +39,13 @@ import re
 
 import pandas as pd
 
-from stock_analyzer import act_today_view, daily_budget, hold_reasons
-from stock_analyzer.constants import DAILY_NEW_POSITION_BUDGET_PCT
+from stock_analyzer import (
+    act_today_view, broker_frame, daily_budget, effective_capital, hold_reasons,
+)
+from stock_analyzer.constants import (
+    DAILY_NEW_POSITION_BUDGET_PCT,
+    NET_CAPITAL_BROKER_GAP_NOTE_PCT,
+)
 
 # Sizing flags a budget-adjusted sizing dict can carry (the Grow Today card
 # blocks must branch on every one -- tests/test_grow_sizing_note_markers.py).
@@ -75,18 +80,11 @@ def rec_budget_state(sz) -> "str | None":
     return None
 
 
-def budget_inputs(gross_book, net_capital, basis_state, acct_rec) -> dict:
-    """The dict `daily_budget.budget_basis` is fed from -- same keys the cron's
-    compute_morning_picks builds. `acct_rec` None / non-dict -> no cash record
-    (-> basis unknown); a failed resolution passes basis_state "unknown"."""
-    ok = isinstance(acct_rec, dict)
-    return {
-        "gross_book":   gross_book,
-        "net_capital":  net_capital,
-        "basis_state":  basis_state or "unknown",
-        "cash_balance": acct_rec.get("cash_balance") if ok else None,
-        "cash_as_of":   acct_rec.get("updated_at") if ok else None,
-    }
+# The one builder of the budget inputs lives in `effective_capital` (U7 C3): the
+# budget must be fed the RAW journal net capital, never F-255's reconciled net.
+# Kept here as an alias so `budget_view.budget_inputs(...)` callers keep working
+# (`frame` defaults to None = no Robinhood check, the old behaviour).
+budget_inputs = effective_capital.budget_inputs
 
 
 def _price_of(item, kind, tk, price_map):
@@ -163,7 +161,8 @@ def postpass(brief, inputs, trades_df, allocs, today, now, price_map=None) -> di
     {"brief": new brief (the input is never mutated), "cache": dict | None,
      "crashed": str | None}.
 
-    `inputs` is `budget_inputs(...)`; `trades_df` is the STRICT trades read
+    `inputs` is `effective_capital.resolve(...)["budget_inputs"]` (the raw
+    journal pair + the Robinhood frame); `trades_df` is the STRICT trades read
     (None = unreadable) and `allocs` the strict allocations read (None =
     unreadable) -- either None withholds every budget-consuming size. `today`
     a plain ET date, `now` a tz-aware datetime. `brief` may be None / an
@@ -175,10 +174,7 @@ def postpass(brief, inputs, trades_df, allocs, today, now, price_map=None) -> di
     try:
         bi = inputs if isinstance(inputs, dict) else {}
         logged = daily_budget.buys_on_et_day(trades_df, today)
-        basis = daily_budget.budget_basis(
-            bi.get("gross_book"), bi.get("net_capital"),
-            bi.get("basis_state") or "unknown", bi.get("cash_balance"),
-            bi.get("cash_as_of"), trades_df, today, now)
+        basis = effective_capital.reconciled_basis(bi, trades_df, today, now)
         grow = brief.get("grow_today") if isinstance(brief, dict) else None
         cands = collect_candidates(grow, price_map)
         res = daily_budget.allocate(basis, logged, allocs, cands)
@@ -212,6 +208,7 @@ def postpass(brief, inputs, trades_df, allocs, today, now, price_map=None) -> di
             "lag_adjustment": basis.get("lag_adjustment"),
             "lag_uncertain": basis.get("lag_uncertain"),
             "lag_uncertain_tickers": basis.get("lag_uncertain_tickers"),
+            **effective_capital.broker_fields(basis),
             "budget": res.get("budget"),
             "used_logged": res.get("used_logged"),
             "used_allocated": res.get("used_allocated"),
@@ -284,6 +281,10 @@ def status_line_text(cache, mask=False, list_label="this list") -> "str | None":
         cache.get("pct_used"), cache.get("used_logged"),
         cache.get("used_allocated"), cache.get("used_list"), cache.get("left"),
         list_label=list_label)
+    # U7 C3: the Robinhood check's disclosure rides the status line, masked with
+    # it (a missing `broker_rec` says nothing).
+    line += broker_frame.disclosure_text(
+        cache.get("broker_rec"), NET_CAPITAL_BROKER_GAP_NOTE_PCT)
     return _USD_RE.sub(_MASK, line) if mask else line
 
 
@@ -316,8 +317,8 @@ def lag_uncertain_text(cache, mask=False) -> "str | None":
 
 
 def over_line_text(cache) -> "str | None":
-    """'Today's new buys are X% ... above the daily budget' when logged buys
-    alone exceed it; else None."""
+    """'Logged buys alone are X% of net capital — above the daily budget' when
+    logged buys alone exceed it; else None."""
     if not isinstance(cache, dict) or cache.get("state") != "ok":
         return None
     pct = cache.get("over_line_pct")
@@ -683,7 +684,8 @@ def plan_downstream(inputs, trades_df, allocs, cache, today, now, asks,
     -> these asks, composite-first. NEVER writes and consumes nothing for any
     other surface; `independent=True` evaluates each ask alone against the same
     leftover (Analysis: a ticker you merely looked at must not eat the room of
-    another). `inputs` = `budget_inputs(...)`; `trades_df` / `allocs` the STRICT
+    another). `inputs` = `effective_capital.resolve(...)["budget_inputs"]`;
+    `trades_df` / `allocs` the STRICT
     reads (None = unreadable). Each ask: {"ticker", "composite", "price", "ps"}
     with `ps` the F-255 `position_sizing` dict (None = no F-255 size).
 
@@ -728,10 +730,7 @@ def _plan(inputs, trades_df, allocs, cache, today, now, asks_n, mirror_gt,
           need_wl=False, wl_cache=None, epoch=None):
     bi = inputs if isinstance(inputs, dict) else {}
     logged = daily_budget.buys_on_et_day(trades_df, today)
-    basis = daily_budget.budget_basis(
-        bi.get("gross_book"), bi.get("net_capital"),
-        bi.get("basis_state") or "unknown", bi.get("cash_balance"),
-        bi.get("cash_as_of"), trades_df, today, now)
+    basis = effective_capital.reconciled_basis(bi, trades_df, today, now)
     known = grow_list_known(cache, today)
     gt_set = {str(t).upper() for t in cache["grow_tickers"]} if known else set()
     per_gt = ({str(k).upper(): v for k, v in cache["per_ticker"].items()}
@@ -839,6 +838,7 @@ def _plan(inputs, trades_df, allocs, cache, today, now, asks_n, mirror_gt,
         "over_line_pct": _over_line_pct(res, basis),
         "lag_uncertain": basis.get("lag_uncertain"),
         "lag_uncertain_tickers": basis.get("lag_uncertain_tickers"),
+        **effective_capital.broker_fields(basis),
     }
     if res["state"] == "unknown":
         summary = None
@@ -892,10 +892,7 @@ def buy_preview(inputs, trades_df, pending_dollars, today, now,
         bi = inputs if isinstance(inputs, dict) else {}
         pend = _num(pending_dollars)
         logged = daily_budget.buys_on_et_day(trades_df, today)
-        basis = daily_budget.budget_basis(
-            bi.get("gross_book"), bi.get("net_capital"),
-            bi.get("basis_state") or "unknown", bi.get("cash_balance"),
-            bi.get("cash_as_of"), trades_df, today, now)
+        basis = effective_capital.reconciled_basis(bi, trades_df, today, now)
         b = _num(basis.get("basis"))
         if pend is None or pend < 0:
             why = "this entry's cost couldn't be read"

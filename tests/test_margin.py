@@ -322,6 +322,7 @@ _GATE_MODULES = [
     "stock_analyzer.budget_view",
     "stock_analyzer.entry_eligibility",
     "stock_analyzer.broker_frame",
+    "stock_analyzer.effective_capital",
 ]
 
 

@@ -117,6 +117,7 @@ _REASONS = {
     bf.STATE_NO_HOLDINGS: "holdings couldn't be read",
     bf.STATE_UNPAIRED: "positions and cash weren't saved by the same sync",
     bf.STATE_IMPLAUSIBLE: "Robinhood's snapshot looks incomplete",
+    bf.STATE_NO_PRICES: "no prices for your holdings yet",
 }
 
 

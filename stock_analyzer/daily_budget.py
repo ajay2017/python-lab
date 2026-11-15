@@ -44,7 +44,10 @@ from stock_analyzer.sold_today import _et_trade_dates
 # Version 5 (S-D, 2026-10-19): the F-255 caps bind on the whole position after an
 # add, so a stored add's rec_shares changed meaning. Kept equal to
 # daily_briefing.SIZING_FORMULA_VERSION (pinned by a test).
-BUDGET_SIZING_VERSION = 5
+# Version 6 (U7 C3): the F-306 budget basis is the LOWER of the journal figure and
+# Robinhood's positions snapshot (broker_frame), so budget_allocations.basis_dollars
+# and a stored rec_shares can be lower than the journal alone gives.
+BUDGET_SIZING_VERSION = 6
 
 SIZED = "sized"
 BUDGET_PARTIAL = "budget_partial"
