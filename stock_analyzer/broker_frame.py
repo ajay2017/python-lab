@@ -36,7 +36,6 @@ import math
 import pandas as pd
 
 from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL
-from stock_analyzer.daily_budget import CALLED_REASON
 
 # Frame states. Only "ok" carries an `adjust`; every other state means "not
 # checked" and `adjust` is None (never 0.0, which would read as "books agree").
@@ -68,6 +67,11 @@ _WHY = {
 # Display rounding for the disclosure wording only, not policy (as
 # `broker_frame_view._SAME_BELOW_USD`): the dollar figures read as whole dollars.
 _WORDING_ROUND_USD = 1.0
+
+# The reason a budget basis driven to "called" by the Robinhood frame carries
+# (text, not a threshold). `daily_budget.CALLED_REASON` is the journal-only one.
+CALLED_BY_BROKER_REASON = ("net capital is at or below zero by Robinhood's "
+                           "positions (see 💰 Account → Net capital check)")
 
 # net / basis states a disclosure applies to (a status line exists for them).
 _DISCLOSED_STATES = ("ok", "levered", "called")
@@ -363,7 +367,7 @@ def reconcile_budget_basis(basis_result, gross_book, cash_balance, frame) -> dic
     if frame_basis < basis:
         res.update(basis=frame_basis, source="broker", gap=basis - frame_basis)
         if frame_basis <= 0:
-            res.update(state="called", reason=CALLED_REASON)
+            res.update(state="called", reason=CALLED_BY_BROKER_REASON)
     return res
 
 

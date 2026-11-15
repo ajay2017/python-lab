@@ -116,9 +116,8 @@ from stock_analyzer import pending_import_verdict
 from stock_analyzer import journal_match_view
 from stock_analyzer import report_display as _rdisp   # not `_rd`: app.py reuses `_rd` as a local (regime rows)
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
-from stock_analyzer.constants import BROKER_FRAME_PAIR_MAX_MINUTES
-from stock_analyzer import broker_frame as _broker_frame
 from stock_analyzer import broker_frame_view as _broker_frame_view
+from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
 # writer cannot silently disarm the imported-trade repair.
@@ -1240,7 +1239,7 @@ def _fmt_asof_et(captured_at) -> str:
         return "unknown"
 
 
-def _render_broker_drift(placeholder, verdict) -> str | None:
+def _render_broker_drift(placeholder, verdict, sizing_clause=None) -> str | None:
     """Render 🏠 Home's app-vs-broker drift banner from a pure verdict.
 
     All the branching lives in `broker_sync.decide_drift_banner`, which is
@@ -1255,6 +1254,9 @@ def _render_broker_drift(placeholder, verdict) -> str | None:
     settlement lag. Suppressing a buy on a phantom would be a hard failure with
     no recourse; this is a user-fixable data error, so the app routes to the
     fix rather than locking the doors.
+
+    `sizing_clause` (U7 C3, from `broker_frame_view.drift_sizing_clause`) is
+    appended to the mismatch warning only, never to the captions.
 
     Returns the tier of what was actually rendered ("warning"/"caption"), or
     `None` on every genuinely silent branch — feeds the home_notices P1 hook
@@ -1382,6 +1384,9 @@ def _render_broker_drift(placeholder, verdict) -> str | None:
               "Portfolio Value. Most likely a trade logged after that snapshot; "
               "otherwise a missing trade — check 📒 Trade Journal or "
               "💰 Account → Broker Sync (full reconciliation)."
+            # U7 C3: when Robinhood's positions say less, say sizing already
+            # follows the lower figure (plain text from broker_frame_view).
+            + (" " + sizing_clause if sizing_clause else "")
             + _stale_note + _partial
         )
         return "warning"
@@ -2827,15 +2832,64 @@ def _publish_brief_coord_caches(brief):
     )
 
 
-def _publish_new_position_budget(raw_brief, gross_book, net_cap, basis_state,
-                                 acct_rec, price_map=None):
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_broker_snapshot():
+    """The latest Robinhood positions snapshot, one read per 120 s for Home's
+    drift check AND every sizing surface (`_effective_net_capital`), so both
+    describe the same snapshot object."""
+    return db.load_broker_position_snapshot()
+
+
+_NC_UNSET = object()
+
+
+def _effective_net_capital(gross_book, *, port_df=None, holdings_df=_NC_UNSET,
+                           acct_rec=_NC_UNSET, book_known=True):
+    """The sizing capital for ONE surface (U7 C3): F-255's net capital and the
+    F-306 budget inputs, each the LOWER of the journal figure and Robinhood's
+    positions. Render-only wiring over `effective_capital.resolve`; never
+    raises. `gross_book` is the portfolio value the surface sized against.
+    `port_df` supplies the prices the gross book was valued at (default: the
+    enriched book); `holdings_df` / `acct_rec` default to the session holdings
+    and a fresh `db.load_account_cash()`; `book_known=False` skips the journal
+    net (-> None, "unknown"). Read `["net"]` / `["state"]` for F-255 and pass
+    the WHOLE dict to `_publish_new_position_budget` / `_budget_downstream_plan`
+    (they read `["budget_inputs"]`: the budget must get the RAW journal net)."""
+    _now = _now_et()
+    if acct_rec is _NC_UNSET:
+        try:
+            acct_rec = db.load_account_cash()
+        except Exception:
+            acct_rec = None
+    try:
+        if not book_known:
+            _jn, _js = None, "unknown"
+        else:
+            _jn, _js = _margin_mod.resolve_net_capital(
+                gross_book, acct_rec, ACCOUNT_CASH_STALE_DAYS, _now)
+    except Exception:
+        _jn, _js = None, "unknown"
+    try:
+        _snap = _cached_broker_snapshot()
+    except Exception:
+        _snap = None
+    if holdings_df is _NC_UNSET:
+        holdings_df = st.session_state.get("holdings_df")
+    _pdf = port_df if port_df is not None else st.session_state.get("_port_df_enriched")
+    return _effective_capital.resolve(
+        gross_book, acct_rec, _jn, _js, _snap, holdings_df,
+        _budget_price_map(_pdf), _now, trades_df=st.session_state.get("trades_df"))
+
+
+def _publish_new_position_budget(raw_brief, ncap, price_map=None):
     """Budget-adjust a RAW Daily Brief and publish `_new_position_budget_cache`
     (None whenever the budget couldn't be checked -- never {}). Returns the
     brief to render; the raw brief (the `_home_synth_cache` copy) is never
-    mutated. Render-only wiring: the decision is `budget_view.postpass`."""
-    _bi = _budget_view.budget_inputs(gross_book, net_cap, basis_state, acct_rec)
+    mutated. Render-only wiring: the decision is `budget_view.postpass`.
+    `ncap` is `_effective_net_capital`'s dict; only `ncap["budget_inputs"]`
+    (the raw journal net + the Robinhood frame) reaches the budget."""
     _out = _budget_view.postpass(
-        raw_brief, _bi, _budget_strict_trades(), _budget_strict_allocations(),
+        raw_brief, ncap["budget_inputs"], _budget_strict_trades(), _budget_strict_allocations(),
         _today_et(), _now_et(), price_map,
     )
     st.session_state["_new_position_budget_cache"] = _out["cache"]
@@ -2864,16 +2918,16 @@ def _budget_price_map(_pdf):
         return {}
 
 
-def _budget_downstream_plan(gross_book, net_cap, basis_state, acct_rec, asks,
+def _budget_downstream_plan(ncap, asks,
                             mirror_gt=False, independent=False, need_wl=False):
     """Watchlist / Analysis sizing from what is LEFT of today's budget.
     Render-only wiring over `budget_view.plan_downstream`: re-reads trades and
     emailed allocations strictly (so a newer email/trade counts) and takes
     Grow Today's picks from Home's published cache only when it describes
-    today. Never writes, never consumes room for another surface."""
-    _bi = _budget_view.budget_inputs(gross_book, net_cap, basis_state, acct_rec)
+    today. Never writes, never consumes room for another surface. `ncap` is
+    `_effective_net_capital`'s dict (only `["budget_inputs"]` is read)."""
     return _budget_view.plan_downstream(
-        _bi, _budget_strict_trades(), _budget_strict_allocations(),
+        ncap["budget_inputs"], _budget_strict_trades(), _budget_strict_allocations(),
         st.session_state.get("_new_position_budget_cache"),
         _today_et(), _now_et(), asks, mirror_gt=mirror_gt, independent=independent,
         # Analysis only: the Watchlist's published plan (day + epoch checked in
@@ -2980,10 +3034,7 @@ def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
         # (budget-free) memo; only the cache is kept -- the next Home render
         # rebuilds the brief against the new book anyway.
         try:
-            _rb_acct = db.load_account_cash()
-            _rb_net, _rb_state = _margin_mod.resolve_net_capital(
-                _value, _rb_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
-            )
+            _rb_nc = _effective_net_capital(_value, port_df=port_df, holdings_df=h_df)
             _rb_memo = _get_or_offline(st.session_state, "_home_synth_cache")
             _rb_raw = _get_or_offline(_rb_memo, "bundle")
             # Only a TODAY memo brief supplies candidates; an older one is
@@ -2993,8 +3044,7 @@ def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
                 if _get_or_offline(_rb_memo, "date") == _today_et().isoformat() else None
             )
             _publish_new_position_budget(
-                _rb_brief, _value, _rb_net,
-                _rb_state, _rb_acct, _budget_price_map(port_df),
+                _rb_brief, _rb_nc, _budget_price_map(port_df),
             )
         except Exception:
             st.session_state["_new_position_budget_cache"] = None
@@ -6139,12 +6189,14 @@ if page == "🏠 Home":
     # Diffs raw `holdings_df`, NOT port_df: build_portfolio_df stores
     # `int(shares)`, so a fractional broker holding would show a permanent
     # phantom mismatch. Matches what the Account panel already does.
+    # U7 C3: F-255's net capital is resolved ONCE per Home render, here, before
+    # the drift banner: the banner's sizing clause reads the same Robinhood frame
+    # the sizing uses. Both Brief builds and both budget postpasses below reuse it.
+    _f255_nc = _effective_net_capital(total_val, port_df=port_df)
+    _f255_net_cap, _f255_basis = _f255_nc["net"], _f255_nc["state"]
+
     _drift_verdict = None
     try:
-        @st.cache_data(ttl=120, show_spinner=False)
-        def _cached_broker_snapshot():
-            return db.load_broker_position_snapshot()
-
         _bsnap = _cached_broker_snapshot()
         # RecTime C4: a ticker with a trade CERTAINLY after the capture is
         # excused outright; one with only no-fill-time rows only on an exact
@@ -6168,7 +6220,9 @@ if page == "🏠 Home":
         # "not checked" rather than silence — silence was backwards (the crash
         # case was quieter than the milder "no snapshot yet" case).
         _drift_verdict = {"state": "unknown", "reason": "check_failed"}
-    _drift_notice_tier = _render_broker_drift(_alert_ph_drift, _drift_verdict)
+    _drift_notice_tier = _render_broker_drift(
+        _alert_ph_drift, _drift_verdict,
+        sizing_clause=_broker_frame_view.drift_sizing_clause(_f255_nc["frame"]))
     if _drift_notice_tier is not None:
         _home_notice("drift", _drift_notice_tier)
     # Published for the F-250 day-P&L captions below, which defer to this
@@ -6305,13 +6359,8 @@ if page == "🏠 Home":
     portfolio_value = total_val                        # drive risk calc from live holdings
     st.session_state["_portfolio_value"] = total_val  # update sidebar display
 
-    # F-255: resolve the net-capital sizing cap ONCE for this Home render — both
-    # the composite-freshness-refresh build_daily_briefing call below and the
-    # full-rebuild one (alternate branches of the same synthesis block) reuse it.
-    _f255_acct = db.load_account_cash()
-    _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
-        total_val, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
-    )
+    # F-255's net capital (`_f255_net_cap` / `_f255_basis`) was resolved above,
+    # before the drift banner, by `_effective_net_capital`.
 
     # Best / worst position tiles stay live (cheap, price-driven) — kept
     # OUT of the memoized synthesis block below.
@@ -6477,7 +6526,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 21  # bumped: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 22  # bumped: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -6497,6 +6546,9 @@ if page == "🏠 Home":
         # Every holding's stop (to the cent) and its basis: a new stop, or a
         # basis change, rebuilds the Brief (finding #26 C3).
         _held_stop_wiring.held_sig(port_df),
+        # The cash record and the positions snapshot the net capital was built
+        # from (U7 C3): a new sync rebuilds the Brief's F-255 sizes.
+        str(_f255_nc["cash_as_of"]), str(_f255_nc["captured_at"]),
     )
     _synth_cache = st.session_state.get("_home_synth_cache")
     # A price move can breach an UNCHANGED stop, which the signature cannot see:
@@ -6673,8 +6725,7 @@ if page == "🏠 Home":
         # budget. Same call as the MISS path below, so the two cannot drift.
         _daily_brief_raw = _daily_brief
         _daily_brief = _publish_new_position_budget(
-            _daily_brief_raw, total_val, _f255_net_cap, _f255_basis,
-            _f255_acct, _budget_price_map(port_df),
+            _daily_brief_raw, _f255_nc, _budget_price_map(port_df),
         )
     else:
         # Computed once, pure/no-LLM — annotates alerts()/rebalance_actions()'s
@@ -7087,8 +7138,7 @@ if page == "🏠 Home":
         # publishes the budget cache for the other surfaces.
         _daily_brief_raw = _daily_brief
         _daily_brief = _publish_new_position_budget(
-            _daily_brief_raw, total_val, _f255_net_cap, _f255_basis,
-            _f255_acct, _budget_price_map(port_df),
+            _daily_brief_raw, _f255_nc, _budget_price_map(port_df),
         )
 
         # Cache sectors Grow Today is already filling so the Watchlist (a separate page)
@@ -25686,10 +25736,10 @@ elif page == "📈 Analysis":
     # F-255: resolve the net-capital sizing cap ONCE for this whole page render
     # (Summary Scorecard + Detailed Analysis tabs below both consume it) rather
     # than re-reading account cash per ticker in either loop.
-    _f255_acct = db.load_account_cash()
-    _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
-        portfolio_value, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
-    )
+    # U7 C3: the LOWER of the journal figure and Robinhood's positions (prices
+    # from the enriched book, the same one `_an_pdf` reads below).
+    _f255_nc = _effective_net_capital(portfolio_value)
+    _f255_net_cap, _f255_basis = _f255_nc["net"], _f255_nc["state"]
 
     # ── Shared new-entry check: may this page offer a share count at all? ──
     # (docs/plans/shared-entry-check.md chunk 6 / D7 / S-A.) The decision lives
@@ -25896,7 +25946,7 @@ elif page == "📈 Analysis":
         _an_asks.append({"ticker": _at, "composite": _ar.get("total"),
                          "price": _ap, "ps": _aps})
     _an_bplan = _budget_downstream_plan(
-        portfolio_value, _f255_net_cap, _f255_basis, _f255_acct, _an_asks,
+        _f255_nc, _an_asks,
         mirror_gt=True, independent=True, need_wl=True,
     )
 
@@ -29704,10 +29754,9 @@ elif page == "📋 Watchlist":
     # F-255: resolve the net-capital sizing cap ONCE for the whole watchlist
     # render, not per row — every row below reads the same portfolio value.
     _f255_wl_pv = st.session_state.get("_portfolio_value") or 0.0
-    _f255_wl_acct = db.load_account_cash()
-    _f255_wl_net_cap, _f255_wl_basis = _margin_mod.resolve_net_capital(
-        _f255_wl_pv, _f255_wl_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
-    )
+    # U7 C3: the LOWER of the journal figure and Robinhood's positions.
+    _f255_wl_nc = _effective_net_capital(_f255_wl_pv)
+    _f255_wl_net_cap, _f255_wl_basis = _f255_wl_nc["net"], _f255_wl_nc["state"]
 
     # Daily new-position budget (docs/plans/daily-new-position-budget.md, rank 3):
     # every ENTER_NOW ask on this page is gathered BEFORE any card renders and
@@ -29723,8 +29772,7 @@ elif page == "📋 Watchlist":
             net_capital=_f255_wl_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
         ),
     )
-    _wl_bplan = _budget_downstream_plan(
-        _f255_wl_pv, _f255_wl_net_cap, _f255_wl_basis, _f255_wl_acct, _wl_budget_asks)
+    _wl_bplan = _budget_downstream_plan(_f255_wl_nc, _wl_budget_asks)
     # Publish the Watchlist's ASKS (not its results) for 📈 Analysis: Analysis
     # re-runs this same plan against its own current inputs, so it always shows
     # what this page would show now (one share count per ticker; Analysis is
@@ -31368,14 +31416,11 @@ elif page == "📒 Trade Journal":
         # computed says so instead of going silent.
         try:
             _pb_pv = float(st.session_state.get("_portfolio_value") or 0.0)
-            _pb_acct = db.load_account_cash()
-            if _pb_pv > 0:
-                _pb_net, _pb_bstate = _margin_mod.resolve_net_capital(
-                    _pb_pv, _pb_acct, ACCOUNT_CASH_STALE_DAYS, _now_et())
-            else:   # portfolio not loaded this session -> no honest basis
-                _pb_net, _pb_bstate = None, "unknown"
+            # book_known False (portfolio not loaded this session) -> no honest
+            # basis. U7 C3: the preview's % reads the lower of journal / Robinhood.
+            _pb_nc = _effective_net_capital(_pb_pv, book_known=_pb_pv > 0)
             _pb_prev = _budget_view.buy_preview(
-                _budget_view.budget_inputs(_pb_pv, _pb_net, _pb_bstate, _pb_acct),
+                _pb_nc["budget_inputs"],
                 _budget_strict_trades(), float(_pb_shares) * float(_pb_price),
                 _today_et(), _now_et(), pending_traded_at=_pending_buy.get("traded_at"))
         except Exception:
@@ -31433,6 +31478,10 @@ elif page == "📒 Trade Journal":
                 else:
                     st.session_state.trades_df = db.load_trades()
                 _pb_h_df   = st.session_state.holdings_df.copy()
+                # The PRE-trade book: the add-concentration net-capital leg below
+                # is sized on the pre-trade gross book, so its Robinhood
+                # comparison must use the same holdings (U7 C3).
+                _pb_pre_h_df = _pb_h_df.copy()
                 _pb_h_mask = _pb_h_df["Ticker"] == _pb_ticker
                 if _pb_h_mask.any():
                     _pb_h_idx      = _pb_h_df[_pb_h_mask].index[0]
@@ -31511,10 +31560,12 @@ elif page == "📒 Trade Journal":
                             # the plain gross book value (_pb_cc_pv), not the already-gated
                             # _pb_cc_denom, since resolve_net_capital re-derives its own
                             # margin/equity split from account cash.
-                            _f255_acct = db.load_account_cash()
-                            _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
-                                _pb_cc_pv, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
-                            )
+                            # U7 C3: the lower of the journal figure and Robinhood's
+                            # positions, both on the PRE-trade book (pre-trade holdings
+                            # and prices, as `_pb_cc_pv`).
+                            _f255_nc = _effective_net_capital(
+                                _pb_cc_pv, port_df=_pb_cc_pdf, holdings_df=_pb_pre_h_df)
+                            _f255_net_cap, _f255_basis = _f255_nc["net"], _f255_nc["state"]
                             _pb_cc = assess_add_concentration(
                                 ticker=_pb_ticker, add_shares=_pb_shares, price=_pb_price,
                                 existing_name_mv=_pb_cc_existing_mv, sector_mv=_pb_cc_sector_mv,
@@ -40230,17 +40281,15 @@ elif page == "💰 Account":
                         lambda v: _m(f"${v:,.0f}"))
                     if _acct_unk is not None:
                         st.caption("ℹ️ " + _acct_unk.replace("$", "\\$"))
-            # U7 C2 (shadow): net capital from Robinhood's own positions beside
-            # the journal figure, ~5 trading days before C3 wires it into sizing.
-            # DISPLAY ONLY: one read per number (this page's _acct / _acc_pdf /
-            # holdings_df), no session_state write, every decision in
-            # broker_frame / broker_frame_view.
+            # U7 net capital check: Robinhood's own positions beside the journal
+            # figure. Since C3 sizing follows the LOWER of the two; this line is
+            # the readout. One read per number: the frame comes from
+            # `_effective_net_capital`, the same helper (and cached snapshot) the
+            # sizing pages use, fed this page's _acct / _acc_pdf. No session_state
+            # write; every decision is in broker_frame / broker_frame_view.
             try:
-                _bf_frame = _broker_frame.broker_frame(
-                    db.load_broker_position_snapshot(), _acct,
-                    st.session_state.get("holdings_df"),
-                    dict(zip(_acc_pdf["Ticker"], _acc_pdf["Price"])),
-                    _now_et(), pair_max_minutes=BROKER_FRAME_PAIR_MAX_MINUTES)
+                _bf_frame = _effective_net_capital(
+                    _equity, port_df=_acc_pdf, acct_rec=_acct)["frame"]
                 _bf_view = _broker_frame_view.shadow_lines(
                     _bf_frame, _total_acct,
                     mask=st.session_state.get("_privacy", True),
@@ -40250,7 +40299,7 @@ elif page == "💰 Account":
                     with st.expander(_bf_view["detail_title"]):
                         st.dataframe(pd.DataFrame(_bf_view["detail_rows"]),
                                      hide_index=True, width="stretch")
-            except Exception:  # noqa: BLE001 - a shadow readout must never break the page
+            except Exception:  # noqa: BLE001 - a readout must never break the page
                 st.caption("🧪 Net capital check unavailable right now")
             if _levered:
                 st.caption(
@@ -40478,8 +40527,13 @@ elif page == "💰 Account":
                            else "Open Home to load your equity as a reference.")
                     ),
                 )
+                # D4 (U7 C3): a synced note pre-fills blank, so a hand-saved balance
+                # doesn't keep the "Synced via SnapTrade" note that pairs it with
+                # the positions snapshot.
                 _new_note = st.text_input(
-                    "Note (optional)", value=(_acct.get("note") if _acct else "") or ""
+                    "Note (optional)",
+                    value=_broker_frame_view.cash_note_default(
+                        _acct.get("note") if _acct else None),
                 )
                 _cash_submit = st.form_submit_button("Save cash balance")
             if _cash_submit:
@@ -40497,9 +40551,11 @@ elif page == "💰 Account":
                     )
                     _cash_implausible = True
                 if _cash_implausible:
-                    st.session_state["_acct_implausible_pending"] = (_new_cash, _new_note or None)
+                    st.session_state["_acct_implausible_pending"] = (
+                        _new_cash, _broker_frame_view.cash_note_to_save(_new_note))
                 else:
-                    if db.save_account_cash(_new_cash, _new_note or None):
+                    if db.save_account_cash(
+                            _new_cash, _broker_frame_view.cash_note_to_save(_new_note)):
                         st.success("Saved.")
                         st.rerun()
                     else:
@@ -45332,7 +45388,7 @@ The Home brief is split into **offense** (left) and **defense** (right).
 
 **Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape. An add to a holding gets the same entry check as a new buy: it's held — and listed under **"📰 Adds held — entry check"** with the reason and what clears it — when the holding's news averages −0.15 or worse, earnings are within 7 days, or its data is stale. A holding that already has a card today (a trim, an exit, a Monitoring watch) isn't suggested as an add, and a line names it. An add is sized so the whole position stays at or under 15% of the book and under 25% of your net capital — what you already hold counts toward both; if there's no room left, the name is listed under **"🔒 Add Suppressed — Position Already at the Cap"**. A single mild negative headline doesn't pause an add on its own: the add card says "📰 Also in Review: …" so you see it.
 
-**About the suggested share count.** It comes from the same sizing rule the whole app uses: risk 1.5% of the book on the trade, with the stop set 2× ATR below price, then **cap the position at the 15% single-name ceiling**. When your account is leveraged with a fresh cash balance, a second, separate ceiling also applies — 25% of your net capital (equity after margin debit), not just 15% of gross book — since leverage can make a "small" position a much bigger bet against the money you actually own. If the app does not know your portfolio value yet in this session — for example you opened 📈 Analysis or 📋 Watchlist directly without visiting 🏠 Home — it will **propose no share count at all** rather than guess against an assumed account size, and will say so. The card will disclose either ceiling if it binds, and both together if both do. Three things follow. First, when a cap binds, the card says so and tells you what the uncapped risk-budget size would have been — it never quietly shrinks a number on you. Second, **a suggested size is a per-idea maximum, not a portfolio plan**: at 15% apiece a book only funds about six full positions, so the sizes on screen are not meant to be taken all at once. Third, the app will suggest **no size at all** — and say which of the two reasons applies — when a single share would already exceed the ceiling (that's an account-size limit; changing the stop won't fix it) or when the price has fallen to or below the name's ATR stop (no room between entry and stop to size against). It never leaves the size line blank without a reason. On 📋 Watchlist only a **Ready to Enter** row gets a share count; a row that isn't ready says "No size yet", and one for a name you already hold points you to Grow Today's add call on 📈 Analysis.
+**About the suggested share count.** It comes from the same sizing rule the whole app uses: risk 1.5% of the book on the trade, with the stop set 2× ATR below price, then **cap the position at the 15% single-name ceiling**. When your account is leveraged with a fresh cash balance, a second, separate ceiling also applies — 25% of your net capital (equity after margin debit), not just 15% of gross book — since leverage can make a "small" position a much bigger bet against the money you actually own. Net capital here is the **lower of your journal's figure and Robinhood's own positions** (see 💰 Account → Net capital check), so it can only make a size smaller. If the app does not know your portfolio value yet in this session — for example you opened 📈 Analysis or 📋 Watchlist directly without visiting 🏠 Home — it will **propose no share count at all** rather than guess against an assumed account size, and will say so. The card will disclose either ceiling if it binds, and both together if both do. Three things follow. First, when a cap binds, the card says so and tells you what the uncapped risk-budget size would have been — it never quietly shrinks a number on you. Second, **a suggested size is a per-idea maximum, not a portfolio plan**: at 15% apiece a book only funds about six full positions, so the sizes on screen are not meant to be taken all at once. Third, the app will suggest **no size at all** — and say which of the two reasons applies — when a single share would already exceed the ceiling (that's an account-size limit; changing the stop won't fix it) or when the price has fallen to or below the name's ATR stop (no room between entry and stop to size against). It never leaves the size line blank without a reason. On 📋 Watchlist only a **Ready to Enter** row gets a share count; a row that isn't ready says "No size yet", and one for a name you already hold points you to Grow Today's add call on 📈 Analysis.
 
 **Adds count what you already hold (since 2026-10-20).** For an add-to-winner both caps apply to the position you end up with — what you hold plus the new shares — not to the new shares alone. An add onto a name already near 15% of your book (or 25% of your net capital) is sized down to the room left and says "Capped by what you already hold"; a name with no room left gets no size and is listed under "🔒 Add Suppressed — Position Already at the Cap". The ⚖️ Rebalancer, the 🧩 Diversification Advisor and the 📡 Signals "Undersized" card never size a buy: they show drift or a sector gap and point to Grow Today / 📈 Analysis.
 
@@ -45398,7 +45454,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 - **"Momentum leads — not checked today"** (collapsed) — hot names Grow Today didn't evaluate today, so they carry no verdict.
 - **"Adds paused on a flat/down day"** (collapsed) — holdings that would qualify for an add-to-winner; adds resume on the next up day.
 
-**Daily new-position budget (since 2026-10-16).** Each idea is capped on its own (15% of the book, 25% of net capital); this caps the **sum**. One trading day's new buys — what you've logged (adds included), sizes already emailed to you today, and newly sized suggestions — are capped at **40% of net capital**. Grow Today, 📋 Watchlist, 📈 Analysis and the three emails each show a *"New positions today: … of net capital … — budget 40%, … left"* line. Sizes already emailed are locked (*"Reserved by today's email run"*); everything later is sized from what's left, highest composite first — Grow Today, then the Watchlist, then Analysis. A name that gets less says *"Sized from what's left of today's budget — n of m shares"*; once it's used, a pick keeps its BUY call but reads *"not sized"* — never dropped, and it resets the next trading day. Sells don't give budget back, and nothing ever trims a holding. If the budget can't be checked (trade log or today's emailed sizes unreadable, cash figure stale or missing) the call still shows and the size is withheld with the reason. A ticker gets one share count a day: a Grow Today pick reads *"Sized in Grow Today today — see 🏠 Home"* on the Watchlist, and Analysis matches the Watchlist's size once you've opened the Watchlist today (and again after logging a trade) — until then it says it doesn't yet count the Watchlist's Ready-to-Enter names. Logging a BUY in the Trade Journal shows today's total including that buy — a heads-up, never a block. It can't see a buy you didn't log, and for up to 5 minutes after an email or a trade logged elsewhere a page can show a pre-update size. The cash figure behind the budget comes from the last broker sync, so a trade logged after it still counts; if a BUY or SELL has no fill time the app can place against that sync (left blank, or an import), the app can't tell whether the sync already included it, so a BUY is still subtracted and a SELL is not added, and Grow Today, the Watchlist and Analysis say *"Budget basis may be up to $X low until the next broker sync after the trade"* (for an import, the next day's sync; typing Robinhood's fill time when you log avoids it). The three emails use the same tightened basis and carry no such line.
+**Daily new-position budget (since 2026-10-16).** Each idea is capped on its own (15% of the book, 25% of net capital); this caps the **sum**. One trading day's new buys — what you've logged (adds included), sizes already emailed to you today, and newly sized suggestions — are capped at **40% of net capital**. Grow Today, 📋 Watchlist, 📈 Analysis and the three emails each show a *"New positions today: … of net capital … — budget 40%, … left"* line. Sizes already emailed are locked (*"Reserved by today's email run"*); everything later is sized from what's left, highest composite first — Grow Today, then the Watchlist, then Analysis. A name that gets less says *"Sized from what's left of today's budget — n of m shares"*; once it's used, a pick keeps its BUY call but reads *"not sized"* — never dropped, and it resets the next trading day. Sells don't give budget back, and nothing ever trims a holding. If the budget can't be checked (trade log or today's emailed sizes unreadable, cash figure stale or missing) the call still shows and the size is withheld with the reason. A ticker gets one share count a day: a Grow Today pick reads *"Sized in Grow Today today — see 🏠 Home"* on the Watchlist, and Analysis matches the Watchlist's size once you've opened the Watchlist today (and again after logging a trade) — until then it says it doesn't yet count the Watchlist's Ready-to-Enter names. Logging a BUY in the Trade Journal shows today's total including that buy — a heads-up, never a block. It can't see a buy you didn't log, and for up to 5 minutes after an email or a trade logged elsewhere a page can show a pre-update size. The cash figure behind the budget comes from the last broker sync, so a trade logged after it still counts; if a BUY or SELL has no fill time the app can place against that sync (left blank, or an import), the app can't tell whether the sync already included it, so a BUY is still subtracted and a SELL is not added, and Grow Today, the Watchlist and Analysis say *"Budget basis may be up to $X low until the next broker sync after the trade"* (for an import, the next day's sync; typing Robinhood's fill time when you log avoids it). The three emails use the same tightened basis and carry no such line. The budget's net capital is also the **lower of your journal's figure and Robinhood's own positions** (see 💰 Account → Net capital check): when that makes it lower by 1% or more, the status line adds a note that net capital was taken from Robinhood's positions, with the dollar gap — and, when a sell logged as after Robinhood's last sync is already part of that gap, a pointer to check that trade's fill time. When Robinhood's positions can't be compared, the line says the sizes were not cross-checked and why, and the journal figure is used. The three emails carry the same note.
 
 **Shared new-entry check (since 2026-10-16).** 📋 Watchlist, its morning Ready-to-Enter email and 📈 Analysis now apply the same entry checks Grow Today uses: no new entry on a bear day, ahead of a HIGH-impact macro release in the stock's sector, on negative news, or on stale data (Analysis also holds off with earnings within 7 days). A Watchlist name that would be READY TO ENTER but fails one shows as **⏸ HELD TODAY**, right under Enter Now, with the reason and what would clear it — but no share size and no Log BUY. On a bear day a Protect Mode banner explains it and says where the market read came from. The email never sends or budgets a held name, and its footer states the market tone it used. On Analysis, a held-back Buy keeps its verdict but shows *Not an entry today* and no size; Hold and Sell verdicts never show a share count. If a check couldn't run, the page says so. A name whose sector the app can't map (since 2026-11-04) is held as **Held: sector unknown (macro check)** while a sector-specific release is near, and clears when the release is out or the ticker gets a sector on the app's curated map that the event doesn't affect; an ETF is held on any sector-specific release, the same rule Grow Today uses for ETF picks.
 
@@ -45719,7 +45775,7 @@ On the 💰 Account page, enter your **Net cash / margin ($)**:
 - A **negative** number = a **margin debit** (you've borrowed to hold more stock than your cash covers). The app handles this correctly — your Total, Growth, and Return all subtract the loan.
 - **Don't enter "margin available"** — that's borrowing *capacity*, not money you own.
 
-Under the cash figures, a **🧪 Net capital check (shadow)** line shows your net capital two ways: from your journal (the Total Account Value above) and from Robinhood's own positions saved in the same sync as the cash. When they differ, an expander names each ticker and how many shares each side holds. A sell Robinhood has filled but that isn't in your journal yet makes the journal figure read too high; the plan is to size new buys from the lower of the two. For now it is **shown only, never used for sizing**, so the gaps it finds can be checked first.
+Under the cash figures, a **🧪 Net capital check** line shows your net capital two ways: from your journal (the Total Account Value above) and from Robinhood's own positions saved in the same sync as the cash. When they differ, an expander names each ticker and how many shares each side holds; a name with no price, or one with a stock split logged since the sync, is listed but left out of the figure. A sell Robinhood has filled but that isn't in your journal yet makes the journal figure read too high, so **new-position sizing uses the lower of the two**: when Robinhood's figure is lower the line says its sizes are capped at Robinhood's figure, and when it is higher sizing keeps the journal figure (it can only ever make a size smaller). The same lower figure feeds the 25%-of-net-capital cap and the daily new-position budget on Grow Today, 📋 Watchlist, 📈 Analysis and the emails. When Robinhood's positions can't be compared (no snapshot yet, the cash wasn't saved by the same sync, nothing priced), the line says why and sizing uses the journal figure. If you save the cash balance by hand, the Note box starts blank when the saved note is the sync's, and a hand-saved balance never keeps the sync's note, so it isn't mistaken for a synced one.
 
 Once set, the page shows **Total Account Value** (equity + net cash), **Cash %**, and **true concentration** — each holding as a % of your *whole account*, not just your invested stocks (so a name looks as big as it really is relative to all your money).
 

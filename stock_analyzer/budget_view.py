@@ -899,7 +899,8 @@ def buy_preview(inputs, trades_df, pending_dollars, today, now,
         elif logged is None:
             why = "the trade log couldn't be read"
         elif basis.get("state") == "called":
-            why = daily_budget.CALLED_REASON
+            # the basis's own reason: Robinhood-driven "called" names its cause
+            why = basis.get("reason") or daily_budget.CALLED_REASON
         elif basis.get("state") != "ok" or not b or b <= 0:
             why = basis.get("reason") or "net capital couldn't be determined"
         else:

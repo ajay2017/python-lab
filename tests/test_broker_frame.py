@@ -348,7 +348,11 @@ def test_frame_driving_net_to_zero_or_below_is_called():
     b2 = {"state": "ok", "basis": 5000.0, "reason": None}
     rb2 = bf.reconcile_budget_basis(b2, GROSS, -10000.0, f)   # frame basis = 0
     assert rb2["state"] == "called" and rb2["basis"] == pytest.approx(0.0)
-    assert rb2["reason"] == bf.CALLED_REASON
+    # the reason names Robinhood's positions, not the journal-only wording
+    assert rb2["reason"] == bf.CALLED_BY_BROKER_REASON
+    assert "Robinhood" in rb2["reason"] and "Net capital check" in rb2["reason"]
+    from stock_analyzer import daily_budget as _db
+    assert rb2["reason"] != _db.CALLED_REASON
     # a lag-corrected basis > 0 is lowered to <= 0 -> called
     b3 = {"state": "ok", "basis": 100.0, "reason": None}
     rb3 = bf.reconcile_budget_basis(b3, GROSS, -12000.0, f)   # frame basis = -2,000

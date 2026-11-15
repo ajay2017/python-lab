@@ -1,12 +1,21 @@
 """
-Shadow readout of the Robinhood-positions net capital (U7 plan
-`docs/plans/net-capital-broker-frame.md`, chunk C2).
+The "Net capital check" readout of the Robinhood-positions net capital (U7 plan
+`docs/plans/net-capital-broker-frame.md`, chunks C2 + C3).
 
-Pure text / row builder for the 💰 Account page. DISPLAY ONLY: it reads a
-`broker_frame.broker_frame(...)` result and the journal's Total Account Value and
-returns strings. It decides nothing and feeds no sizing, budget or gate; the
-frame's own decisions (pairing, plausibility, drift tolerance) all live in
-`broker_frame`. C3 is what will wire the lower figure into sizing.
+Pure text / row builder for the 💰 Account page and 🏠 Home's drift banner.
+DISPLAY ONLY: it reads a `broker_frame.broker_frame(...)` result and the
+journal's Total Account Value and returns strings and table rows. It decides
+nothing and feeds no sizing, budget or gate; the frame's own decisions (pairing,
+plausibility, drift tolerance) all live in `broker_frame`, and since C3
+`effective_capital` sizes from the LOWER of the journal figure and that frame.
+The wording says so: "Robinhood lower" means new-position sizes are capped at
+Robinhood's figure, "Robinhood higher" means sizing keeps the journal figure.
+
+Also holds three small pure helpers the Account page and Home call:
+`cash_note_default` / `cash_note_to_save` (a hand-saved cash balance must not
+keep the sync's note, which is what pairs cash with the positions snapshot) and
+`drift_sizing_clause` (the sentence Home's drift banner appends when the
+Robinhood figure binds).
 
 Money is masked when `mask` is True (never a digit) and, in the caption, `$` is
 escaped as `\\$` because `st.caption` renders markdown (two bare `$` render as
@@ -33,6 +42,10 @@ from stock_analyzer.broker_frame import (
 from stock_analyzer.market_time import ET
 
 MASK = "••••••"
+
+# The note a hand-saved cash balance carries when the typed note equals the
+# sync's own (D4): the sync note is what pairs cash with the positions snapshot.
+HAND_CASH_NOTE = "Entered by hand"
 
 # A gap under one dollar is rounding, not a difference between the two books.
 _SAME_BELOW_USD = 1.0
@@ -104,8 +117,8 @@ def _et_stamp(captured_at) -> "str | None":
 
 
 def _not_compared(reason: str) -> dict:
-    return {"caption": ("🧪 Net capital check (shadow): Robinhood positions "
-                        f"not compared — {reason}"),
+    return {"caption": ("🧪 Net capital check: Robinhood positions "
+                        f"not compared — {reason} (sizing uses the journal figure)"),
             "detail_rows": [], "detail_title": None}
 
 
@@ -144,6 +157,18 @@ def _detail(frame, mask: bool) -> "tuple[list, str | None]":
             "Price": "no price",
             "Value of difference (journal − Robinhood)": "no price — left out",
         })
+    # A split logged after (or at an unknown time relative to) the sync: the two
+    # share counts sit on different sides of it, so `broker_frame` left the name out.
+    excluded = frame.get("excluded")
+    for r in (excluded if excluded is not None else []):
+        rows.append({
+            "Ticker": str(r.get("ticker", "?")),
+            "Journal shares": _shares(r.get("journal_shares")),
+            "Robinhood shares": _shares(r.get("broker_shares")),
+            "Price": "—",
+            "Value of difference (journal − Robinhood)":
+                "split since the sync — left out",
+        })
     if not rows:
         return [], None
     n = len(rows)
@@ -151,7 +176,7 @@ def _detail(frame, mask: bool) -> "tuple[list, str | None]":
 
 
 def shadow_lines(frame, journal_total, *, mask, cash_note=_UNSET) -> dict:
-    """{caption, detail_rows, detail_title} for the Account page's shadow line.
+    """{caption, detail_rows, detail_title} for the Account page's net capital check.
 
     frame : `broker_frame.broker_frame(...)`'s result (or None).
     journal_total : invested equity + net cash, the Account page's "Total Account
@@ -162,7 +187,8 @@ def shadow_lines(frame, journal_total, *, mask, cash_note=_UNSET) -> dict:
         the cash was entered by hand rather than "not saved by the same sync".
 
     caption is markdown-safe (`$` escaped). detail_rows are plain-text rows for a
-    dataframe (empty unless the frame is "ok" and at least one name differs).
+    dataframe (empty unless the frame is "ok" and at least one name differs or
+    was left out: no price, or a split since the sync).
     """
     if not isinstance(frame, dict) or frame.get("state") != STATE_OK:
         return _not_compared(_reason(frame, cash_note))
@@ -173,19 +199,51 @@ def shadow_lines(frame, journal_total, *, mask, cash_note=_UNSET) -> dict:
         return _not_compared("the journal total was unavailable")
 
     broker_total = jt - adjust
-    text = ("🧪 Net capital check (shadow — not used for sizing yet): "
+    text = ("🧪 Net capital check: "
             f"journal {_money(jt, mask)} · Robinhood positions "
             f"{_money(broker_total, mask)}")
     if abs(adjust) < _SAME_BELOW_USD:
         text += " · same"
     elif adjust > 0:
-        text += f" · gap {_money(abs(adjust), mask)} (Robinhood lower)"
+        text += (f" · gap {_money(abs(adjust), mask)} (Robinhood lower — "
+                 "new-position sizes are capped at Robinhood's figure)")
     else:
         text += (f" · gap {_money(abs(adjust), mask)} (Robinhood higher — "
-                 "sizing would keep the journal figure)")
+                 "sizing keeps the journal figure)")
     stamp = _et_stamp(frame.get("captured_at"))
     if stamp:
         text += f" · positions synced {stamp}"
 
     rows, title = _detail(frame, mask)
     return {"caption": _esc(text), "detail_rows": rows, "detail_title": title}
+
+
+def drift_sizing_clause(frame) -> "str | None":
+    """The sentence Home's drift banner appends in its mismatch branch when
+    Robinhood's positions say LESS than the journal (so sizing is already capped
+    at Robinhood's figure), else None. Plain text, no money figure. Only an "ok"
+    frame whose `adjust` is at least a dollar counts: a not-compared, same or
+    Robinhood-higher frame says nothing."""
+    if not isinstance(frame, dict) or frame.get("state") != STATE_OK:
+        return None
+    adjust = _num(frame.get("adjust"))
+    if adjust is None or adjust < _SAME_BELOW_USD:
+        return None
+    return "New-position sizes are capped at Robinhood's lower figure until this is fixed."
+
+
+def cash_note_default(stored) -> str:
+    """The cash-note field's pre-filled value: blank over the sync's own note, so a
+    hand-saved balance doesn't inherit it (D4); anything else unchanged."""
+    text = "" if stored is None else str(stored)
+    return "" if text.strip() == BROKER_CASH_NOTE else text
+
+
+def cash_note_to_save(typed) -> "str | None":
+    """The note to persist with a hand-saved cash balance: None when blank,
+    `HAND_CASH_NOTE` when the typed note equals the sync's own (so it can't pass
+    as a synced balance), else the stripped text."""
+    text = "" if typed is None else str(typed).strip()
+    if not text:
+        return None
+    return HAND_CASH_NOTE if text == BROKER_CASH_NOTE else text

@@ -1,5 +1,6 @@
-"""stock_analyzer.broker_frame_view -- the 💰 Account shadow readout of the
-Robinhood-positions net capital (U7 plan C2). Display only: strings and rows."""
+"""stock_analyzer.broker_frame_view -- the 💰 Account "Net capital check" readout
+of the Robinhood-positions net capital (U7 plan C2 + C3), the drift-banner sizing
+clause and the cash-note helpers. Display only: strings and rows."""
 import re
 
 import pandas as pd
@@ -36,7 +37,8 @@ def _unescaped_dollar(s):
 
 def test_ok_same():
     v = bfv.shadow_lines(_frame(adjust=0.4), 10000.0, mask=False)
-    assert v["caption"].startswith("🧪 Net capital check (shadow — not used for sizing yet): ")
+    assert v["caption"].startswith("🧪 Net capital check: ")
+    assert "shadow" not in v["caption"]
     assert "journal \\$10,000 · Robinhood positions \\$10,000 · same" in v["caption"]
     assert "gap" not in v["caption"]
     assert v["detail_rows"] == [] and v["detail_title"] is None
@@ -49,19 +51,20 @@ def test_ok_same_negative_tiny_adjust():
 def test_ok_gap_lower():
     v = bfv.shadow_lines(_frame(adjust=1500.0), 10000.0, mask=False)
     assert ("journal \\$10,000 · Robinhood positions \\$8,500 · gap \\$1,500 "
-            "(Robinhood lower)") in v["caption"]
+            "(Robinhood lower — new-position sizes are capped at Robinhood's "
+            "figure)") in v["caption"]
     assert "same" not in v["caption"]
 
 
 def test_ok_gap_higher():
     v = bfv.shadow_lines(_frame(adjust=-2000.0), 10000.0, mask=False)
     assert ("journal \\$10,000 · Robinhood positions \\$12,000 · gap \\$2,000 "
-            "(Robinhood higher — sizing would keep the journal figure)") in v["caption"]
+            "(Robinhood higher — sizing keeps the journal figure)") in v["caption"]
 
 
 def test_gap_of_exactly_one_dollar_is_a_gap():
     v = bfv.shadow_lines(_frame(adjust=1.0), 10000.0, mask=False)
-    assert "gap \\$1 (Robinhood lower)" in v["caption"]
+    assert "gap \\$1 (Robinhood lower — new-position sizes are capped" in v["caption"]
 
 
 def test_negative_journal_total_formats():
@@ -129,14 +132,15 @@ def test_every_non_ok_state_has_a_reason():
 @pytest.mark.parametrize("state,reason", sorted(_REASONS.items()))
 def test_non_ok_state_reason(state, reason):
     v = bfv.shadow_lines(_frame(state=state, adjust=None), 10000.0, mask=False)
-    assert v["caption"] == ("🧪 Net capital check (shadow): Robinhood positions "
-                            f"not compared — {reason}")
+    assert v["caption"] == ("🧪 Net capital check: Robinhood positions "
+                            f"not compared — {reason} (sizing uses the journal figure)")
     assert v["detail_rows"] == [] and v["detail_title"] is None
 
 
 def test_non_ok_never_shows_a_figure():
     v = bfv.shadow_lines(_frame(state=bf.STATE_UNPAIRED, adjust=None), 10000.0, mask=False)
-    assert "$" not in v["caption"] and "journal" not in v["caption"]
+    assert "$" not in v["caption"]
+    assert not re.search(r"[0-9]", v["caption"])
 
 
 def test_unpaired_hand_entered_cash():
@@ -176,9 +180,10 @@ def test_mask_hides_every_money_digit():
     f = _frame(adjust=1500.0, captured_at=None,
                rows=[_row("A", 100, 85, 100.0)], unpriced=["ZZZ"])
     v = bfv.shadow_lines(f, 123456.0, mask=True)
-    assert v["caption"] == ("🧪 Net capital check (shadow — not used for sizing yet): "
+    assert v["caption"] == ("🧪 Net capital check: "
                             "journal •••••• · Robinhood positions •••••• · gap •••••• "
-                            "(Robinhood lower)")
+                            "(Robinhood lower — new-position sizes are capped at "
+                            "Robinhood's figure)")
     assert not re.search(r"\d", v["caption"]) and "$" not in v["caption"]
     for r in v["detail_rows"]:
         for key in ("Price", "Value of difference (journal − Robinhood)"):
@@ -243,6 +248,43 @@ def test_unpriced_only_still_shows_detail_and_same_caption():
     assert len(v["detail_rows"]) == 1
 
 
+def test_no_user_facing_text_says_shadow():
+    for f in (_frame(), _frame(adjust=500.0), _frame(adjust=-500.0),
+              _frame(state=bf.STATE_UNPAIRED, adjust=None)):
+        assert "shadow" not in bfv.shadow_lines(f, 1000.0, mask=False)["caption"].lower()
+    assert "shadow" not in (bfv.drift_sizing_clause(_frame(adjust=500.0)) or "").lower()
+
+
+def _excl(tk, js, bs):
+    return {"ticker": tk, "journal_shares": js, "broker_shares": bs, "diff": js - bs}
+
+
+def test_excluded_split_rows_listed_without_price_or_dollars():
+    f = _frame(adjust=0.0, excluded=[_excl("NVDA", 10, 40)])
+    v = bfv.shadow_lines(f, 10000.0, mask=False)
+    assert v["detail_title"] == "Where the two figures differ (1 name)"
+    assert v["detail_rows"] == [{
+        "Ticker": "NVDA", "Journal shares": "10", "Robinhood shares": "40",
+        "Price": "—",
+        "Value of difference (journal − Robinhood)": "split since the sync — left out"}]
+    assert " · same" in v["caption"]
+
+
+def test_excluded_rows_count_with_priced_and_unpriced_and_survive_mask():
+    f = _frame(adjust=1000.0, rows=[_row("A", 100, 90)], unpriced=["NEWCO"],
+               excluded=[_excl("NVDA", 10, 40)])
+    v = bfv.shadow_lines(f, 10000.0, mask=True)
+    assert v["detail_title"] == "Where the two figures differ (3 names)"
+    assert [r["Ticker"] for r in v["detail_rows"]] == ["A", "NEWCO", "NVDA"]
+    assert v["detail_rows"][-1]["Price"] == "—"
+
+
+def test_frame_without_excluded_key_still_renders():
+    f = _frame(adjust=500.0, rows=[_row("A", 10, 5, 100.0)])
+    f.pop("excluded", None)
+    assert len(bfv.shadow_lines(f, 10000.0, mask=False)["detail_rows"]) == 1
+
+
 def test_no_detail_when_no_differences():
     v = bfv.shadow_lines(_frame(), 10000.0, mask=False)
     assert v["detail_rows"] == [] and v["detail_title"] is None
@@ -266,6 +308,71 @@ def test_with_real_broker_frame_unlogged_sell():
     frame = bf.broker_frame(snap, cash, hold, PX, NOW,
                             pair_max_minutes=BROKER_FRAME_PAIR_MAX_MINUTES)
     v = bfv.shadow_lines(frame, 10000.0, mask=False, cash_note=cash["note"])
-    assert "Robinhood positions \\$9,000 · gap \\$1,000 (Robinhood lower)" in v["caption"]
+    assert ("Robinhood positions \\$9,000 · gap \\$1,000 (Robinhood lower — "
+            "new-position sizes are capped at Robinhood's figure)") in v["caption"]
     assert v["detail_rows"][0]["Ticker"] == "B"
     assert v["detail_rows"][0]["Value of difference (journal − Robinhood)"] == "+$1,000"
+
+
+# -- Home drift banner clause ------------------------------------------------------
+
+_CLAUSE = "New-position sizes are capped at Robinhood's lower figure until this is fixed."
+
+
+def test_drift_sizing_clause_boundary_is_the_same_below_dollar():
+    just_under = bfv._SAME_BELOW_USD - 0.01
+    assert bfv.drift_sizing_clause(_frame(adjust=just_under)) is None
+    assert bfv.drift_sizing_clause(_frame(adjust=bfv._SAME_BELOW_USD)) == _CLAUSE
+    assert bfv.drift_sizing_clause(_frame(adjust=1500.0)) == _CLAUSE
+
+
+def test_drift_sizing_clause_silent_when_robinhood_higher_same_or_not_compared():
+    assert bfv.drift_sizing_clause(_frame(adjust=0.0)) is None
+    assert bfv.drift_sizing_clause(_frame(adjust=-2000.0)) is None
+    for state in _REASONS:
+        assert bfv.drift_sizing_clause(_frame(state=state, adjust=None)) is None
+        assert bfv.drift_sizing_clause(_frame(state=state, adjust=5000.0)) is None
+
+
+def test_drift_sizing_clause_odd_frames():
+    for bad in (None, {}, "ok", {"state": "ok"}, _frame(adjust=float("nan")),
+                _frame(adjust=None), _frame(adjust="abc")):
+        assert bfv.drift_sizing_clause(bad) is None
+
+
+def test_drift_sizing_clause_has_no_money_or_markup():
+    c = bfv.drift_sizing_clause(_frame(adjust=1500.0))
+    assert "$" not in c and not re.search(r"[0-9]", c) and "*" not in c and "<" not in c
+
+
+# -- cash note (D4) ------------------------------------------------------------------
+
+def test_hand_cash_note_constant_differs_from_the_sync_note():
+    assert bfv.HAND_CASH_NOTE == "Entered by hand"
+    assert bfv.HAND_CASH_NOTE != bf.BROKER_CASH_NOTE
+
+
+def test_cash_note_default_blank_over_the_sync_note():
+    assert bfv.cash_note_default(bf.BROKER_CASH_NOTE) == ""
+    assert bfv.cash_note_default("  " + bf.BROKER_CASH_NOTE + " ") == ""
+    assert bfv.cash_note_default("my own note") == "my own note"
+    assert bfv.cash_note_default(bfv.HAND_CASH_NOTE) == bfv.HAND_CASH_NOTE
+    assert bfv.cash_note_default(None) == ""
+    assert bfv.cash_note_default("") == ""
+
+
+def test_cash_note_to_save():
+    assert bfv.cash_note_to_save(None) is None
+    assert bfv.cash_note_to_save("") is None
+    assert bfv.cash_note_to_save("   ") is None
+    assert bfv.cash_note_to_save(bf.BROKER_CASH_NOTE) == bfv.HAND_CASH_NOTE
+    assert bfv.cash_note_to_save("  " + bf.BROKER_CASH_NOTE + "  ") == bfv.HAND_CASH_NOTE
+    assert bfv.cash_note_to_save("  typed in ") == "typed in"
+
+
+def test_a_hand_saved_balance_can_never_pair_with_a_snapshot():
+    # The saved note must never equal the sync's note (that is what pairs cash
+    # with the positions snapshot), whatever the form pre-filled or the user typed.
+    for typed in (bf.BROKER_CASH_NOTE, bfv.cash_note_default(bf.BROKER_CASH_NOTE),
+                  "x", "", None):
+        assert bfv.cash_note_to_save(typed) != bf.BROKER_CASH_NOTE
