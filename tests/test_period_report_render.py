@@ -30,6 +30,19 @@ def _attr_calls(owner: str, attr: str, root=_TREE):
             and n.func.attr == attr and isinstance(n.func.value, ast.Name) and n.func.value.id == owner]
 
 
+# The 📄 Reports page block. Since 2026-11-15 a second app.py caller exists (the
+# Summary account scorecard, `_scorecard_compute`), so the Reports wiring checks
+# below are scoped to this block and the scorecard's call is pinned separately.
+_LINES = _SRC.splitlines()
+_REPORTS_START = next(i for i, ln in enumerate(_LINES, 1) if ln.startswith('elif page == "📄 Reports":'))
+_REPORTS_END = next(i for i, ln in enumerate(_LINES, 1)
+                    if i > _REPORTS_START and ln.startswith("elif page == "))
+
+
+def _reports_attr_calls(owner: str, attr: str):
+    return [c for c in _attr_calls(owner, attr) if _REPORTS_START < c.lineno < _REPORTS_END]
+
+
 def _kw(call, name):
     return next((k.value for k in call.keywords if k.arg == name), None)
 
@@ -67,8 +80,10 @@ def _calls_in(root, name):
 
 def test_page_calls_the_engine_once_each():
     # the page reaches the engine ONLY through period_inputs: one load, one core run ...
-    assert len(_attr_calls("_pi_mod", "load_engine_inputs")) == 1
+    assert len(_reports_attr_calls("_pi_mod", "load_engine_inputs")) == 1
     assert len(_attr_calls("_pi_mod", "compute_period_core")) == 1
+    # app-wide: exactly one more load, the Summary scorecard's (pinned below)
+    assert len(_attr_calls("_pi_mod", "load_engine_inputs")) == 2
     # ... never directly
     for fn in ("reconcile_period", "leverage_section"):
         assert _attr_calls("_pa_mod", fn) == [], fn
@@ -91,7 +106,7 @@ def test_page_calls_the_engine_once_each():
 
 def test_engine_calls_are_inside_a_try_that_catches_exception():
     # the app-side try still exists: the helper's inputs/core AND the trust strip sit in it
-    for call in (_attr_calls("_pi_mod", "load_engine_inputs")[0], _core_call(),
+    for call in (_reports_attr_calls("_pi_mod", "load_engine_inputs")[0], _core_call(),
                  _attr_calls("_pa_mod", "trust_strip")[0]):
         t = _enclosing_try(call)
         assert t is not None, ast.unparse(call)[:60]
@@ -118,7 +133,7 @@ def test_each_loader_is_the_none_on_failure_variant():
     assert not attrs & {"load_trades", "load_daily_snapshots", "load_snaptrade_income_events",
                         "load_account_flows"}
     # (2) the page hands the helper its own day-cached frames, not fresh lenient loaders
-    li = _attr_calls("_pi_mod", "load_engine_inputs")[0]
+    li = _reports_attr_calls("_pi_mod", "load_engine_inputs")[0]
     trades = _kw(li, "trades_df")
     assert isinstance(trades, ast.Name)
     assert [v.func.attr for v in _assigned_from(trades.id)] == ["load_trades_or_none"]
@@ -134,6 +149,34 @@ def test_each_loader_is_the_none_on_failure_variant():
     assert not [c for c in ast.walk(t) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
                 and c.func.attr in ("load_account_flows", "load_snaptrade_income_events", "load_trades",
                                     "load_daily_snapshots")]
+
+
+def test_scorecard_engine_load_uses_only_none_on_failure_loaders():
+    # The Summary account scorecard is the one other app.py caller of the engine
+    # loader: it sits inside `_scorecard_compute`, and every frame it hands over
+    # comes from a None-on-failure loader, so "couldn't read" never reads as
+    # "nothing happened" (2026-11-15, scorecard C2).
+    others = [c for c in _attr_calls("_pi_mod", "load_engine_inputs")
+              if not (_REPORTS_START < c.lineno < _REPORTS_END)]
+    assert len(others) == 1
+    fn = getattr(others[0], "_parent", None)
+    while fn is not None and not isinstance(fn, ast.FunctionDef):
+        fn = getattr(fn, "_parent", None)
+    assert fn is not None and fn.name == "_scorecard_compute"
+    expected = {"trades_df": "load_trades_or_none",
+                "account_snapshots_df": "load_account_daily_snapshots",
+                "flows": "load_account_flows_for_dedup_check"}
+    for kw, loader in expected.items():
+        v = _kw(others[0], kw)
+        assert isinstance(v, ast.Name), kw
+        srcs = [n.value for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == v.id for t in n.targets)]
+        assert [x.func.attr for x in srcs if isinstance(x, ast.Call)
+                and isinstance(x.func, ast.Attribute)] == [loader], kw
+    lenient = {"load_trades", "load_daily_snapshots", "load_snaptrade_income_events",
+               "load_account_flows"}
+    assert not [c for c in ast.walk(fn) if isinstance(c, ast.Call)
+                and isinstance(c.func, ast.Attribute) and c.func.attr in lenient]
 
 
 def test_reference_leverage_is_the_constant():

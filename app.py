@@ -237,6 +237,8 @@ from stock_analyzer.constants import (
     MARGIN_MAINTENANCE_RATE,
     NET_CAPITAL_POSITION_CAP_PCT,
     LEVERAGE_REFERENCE_TARGET,
+    TAX_RATE_SHORT_TERM,
+    TAX_RATE_LONG_TERM,
     LEVERAGE_GIVEBACK_DRAWDOWN_PCT,
     LEVERAGE_GIVEBACK_LOOKBACK_DAYS,
     LEVERAGE_GIVEBACK_MIN_HISTORY_DAYS,
@@ -282,6 +284,7 @@ from stock_analyzer import tax_report as _tax_report
 from stock_analyzer import performance_review as _perf_review_mod
 from stock_analyzer import period_attribution as _pa_mod
 from stock_analyzer import period_inputs as _pi_mod
+from stock_analyzer import scorecard as _scorecard
 from stock_analyzer import account_row_trust as _art_mod
 from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
@@ -439,7 +442,6 @@ from stock_analyzer.util import catalyst_watch_mini_state
 from stock_analyzer.util import earnings_posture_alert_count
 from stock_analyzer.util import catalyst_watch_nav_badge
 from stock_analyzer.util import signals_advice_nav_badge
-from stock_analyzer.util import benchmark_mirror_summary_state
 from stock_analyzer.util import defense_facet_badge
 from stock_analyzer.util import correlation_unchecked_note, correlation_flat_note
 from stock_analyzer.util import diversification_label_text, pair_trim_withheld_note
@@ -3989,6 +3991,63 @@ def _cached_spy(period: str = "6mo"):
 @st.cache_data(ttl=1800)
 def _cached_tlt(period: str = "3mo"):
     return fetch_tlt(period)
+
+
+# ── 🧾 Summary "Is this account earning extra?" scorecard inputs ─────────────
+# docs/plans/account-scorecard.md (section 8, section 9 "For C2"). The SPY read
+# is keyed on the latest account_daily_snapshots row date, NOT `_cached_spy`'s
+# 30-minute clock: that row is written after the close, so a fetch made once a
+# new row exists carries the final close, and a pre-16:00 fetch can never be
+# served as that day's close. A failed fetch RAISES so it is never cached.
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _scorecard_spy_closes(asof_key: str):
+    _closes = _pi_mod.spy_closes_by_date(fetch_spy("2y"))
+    if _closes is None:
+        raise RuntimeError("SPY history unavailable")
+    return _closes
+
+
+class _ScorecardOffline(Exception):
+    """Carries an offline (since, lev, tax) result out of the cached function so
+    it is returned to the caller but never cached for 15 minutes."""
+
+    def __init__(self, result):
+        super().__init__("scorecard inputs offline")
+        self.result = result
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _scorecard_compute(today_iso: str, asof_key: str, trades_sig: tuple):
+    # today_iso / asof_key / trades_sig only key the cache; the loads happen here.
+    _today = date.fromisoformat(today_iso)
+    _flows = db.load_account_flows_for_dedup_check()
+    _acct = db.load_account_daily_snapshots()
+    _trades = db.load_trades_or_none()
+    try:
+        _spy = _scorecard_spy_closes(asof_key)
+    except Exception:
+        _spy = None
+    _win = _scorecard.leverage_window(_acct, _today)
+    if _win:
+        _inputs = _pi_mod.load_engine_inputs(
+            db, *_win, trades_df=_trades, account_snapshots_df=_acct, flows=_flows,
+        )
+    else:
+        # No complete month yet: leverage_verdict still needs the account frame in
+        # a dict to say "no_complete_month" (a bare None would read as "offline").
+        _inputs = {"account_snapshots_df": _acct}
+    _since = _scorecard.since_start(_flows, _acct, _trades, _spy, today=_today)
+    _lev = _scorecard.leverage_verdict(
+        _inputs, _spy, today=_today, reference_leverage=LEVERAGE_REFERENCE_TARGET,
+    )
+    _tax = _scorecard.tax_triggered(
+        _trades, tax_year=_today.year, st_rate=TAX_RATE_SHORT_TERM,
+        lt_rate=TAX_RATE_LONG_TERM, today=_today,
+    )
+    _res = (_since, _lev, _tax)
+    if any(isinstance(_p, dict) and _p.get("state") == "offline" for _p in _res):
+        raise _ScorecardOffline(_res)
+    return _res
 
 
 # Ticker price history at an explicit span — Prior Trades (F-237) needs bars
@@ -15544,52 +15603,89 @@ elif page == "🧾 Summary":
                 st.session_state["_pending_page"] = "🔔 Catalyst Watch"
                 st.rerun()
 
-        # 📐 Benchmark Mirror pointer card (2026-09-24 app review, C1). The
-        # app's broadest self-measurement — is the active strategy beating a
-        # passive benchmark at all? — was previously visible on exactly ONE
-        # tab of 🎯 My Edge, a page nothing on Summary pointed to. Reads
-        # `_bm_summary_cache`, published by that tab; NEVER recomputes
-        # (would trigger the unmemoized yfinance fetch that tab's own "Load
-        # benchmark data" button exists to gate). The pointer button renders
-        # unconditionally so there is always a path to My Edge; the NUMBER
-        # only renders when this session has already computed it today
-        # (util.benchmark_mirror_summary_state's freshness check) — same
-        # "skip silently rather than show a stale verdict" discipline as the
-        # F-277 protective-track-record caption above.
-        #
-        # Stacked INSIDE this same column (`with _sm_ptr_row1[1]:`), directly
-        # below the Catalyst Watch card, rather than in a separate
-        # `st.columns()` row (2026-09-24, second owner screenshot pass): a
-        # second `st.columns()` call starts an entirely new row below the
-        # TALLEST column of the previous row regardless of which slot you
-        # target within it — Engine Track Record's column [0] is far taller
-        # than Catalyst Watch's, so a slot-[1] card in a NEW row still landed
-        # well below Catalyst Watch's own box, with an empty gap between
-        # them. Nesting it in this column grows [1]'s own height directly,
-        # with no gap, and leaves [0]/[2] unaffected.
-        with st.container(border=True, key="sm_ptr_bm_box"):
-            st.markdown(
-                "<style>.st-key-sm_ptr_bm_box{background:#1b2130}"
-                ".st-key-sm_ptr_bm_box button{color:#6ea8fe !important}</style>",
-                unsafe_allow_html=True,
-            )
-            st.markdown("**📐 Benchmark Mirror**")
-            _sm_bm_state = benchmark_mirror_summary_state(
-                st.session_state.get("_bm_summary_cache"), _today_et().isoformat(),
-            )
-            if _sm_bm_state is None:
-                st.caption("Are your picks beating a passive benchmark? Not computed this session.")
-            else:
-                st.markdown(
-                    f"<div style='font-size:1.1em;font-weight:600;color:{_safe_html(_sm_bm_state['color'])}'>"
-                    f"{_safe_html(_sm_bm_state['value_text'])}</div>"
-                    f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>"
-                    f"{_safe_html(_sm_bm_state['label'])} · {_safe_html(_sm_bm_state['basis'])}</div>",
-                    unsafe_allow_html=True,
+    # ── 🧭 Account scorecard ("Is this account earning extra?"), full width,
+    # below the pointer grid and above State of the Portfolio (owner chose
+    # Option A, docs/plans/account-scorecard.md; replaces the retired
+    # 📐 Benchmark Mirror pointer card and its My Edge-published cache). Every
+    # decision lives in stock_analyzer/scorecard.py; this block only renders the
+    # strings `card_model` returns. Whole block wrapped in try/except: a failure
+    # here must never break the rest of this page. The page's own
+    # `_port_df_enriched` stop above still applies (accepted in the plan).
+    try:
+        _sc_today_iso = _today_et().isoformat()
+        # Reuse the day-scoped shared read (same key as 💰 Account / Reports /
+        # the leverage-giveback caption); its newest row date keys the SPY fetch.
+        _sc_snap_key = f"_account_daily_snapshots_full_cache_{_sc_today_iso}"
+        if st.session_state.get(_sc_snap_key) is None:
+            st.session_state[_sc_snap_key] = db.load_account_daily_snapshots()
+        _sc_snaps = st.session_state[_sc_snap_key]
+        _sc_asof_key = "none"
+        if (_sc_snaps is not None and not _sc_snaps.empty
+                and "snapshot_date" in _sc_snaps.columns):
+            _sc_asof_key = str(_sc_snaps["snapshot_date"].max())[:10]
+        # A newly logged trade changes (row count, max id) and so busts the cache.
+        _sc_tdf = st.session_state.get("trades_df")
+        _sc_trades_sig = (0, None)
+        if _sc_tdf is not None and not _sc_tdf.empty:
+            _sc_max_id = None
+            if "id" in _sc_tdf.columns:
+                _sc_max_id = pd.to_numeric(_sc_tdf["id"], errors="coerce").max()
+                _sc_max_id = None if pd.isna(_sc_max_id) else int(_sc_max_id)
+            _sc_trades_sig = (int(len(_sc_tdf)), _sc_max_id)
+        try:
+            _sc_res = _scorecard_compute(_sc_today_iso, _sc_asof_key, _sc_trades_sig)
+        except _ScorecardOffline as _sc_off:
+            _sc_res = _sc_off.result   # offline: shown, never cached
+        _sc_card = _scorecard.card_model(*_sc_res)
+
+        def _sc_txt(s):
+            if s is None:
+                return None
+            s = s.replace("$", chr(92) + "$")
+            return _pa_mod.mask_usd(s) if st.session_state.get("_privacy", True) else s
+
+        _sc_tone_color = {"pos": "green", "neg": "red"}
+        _sc_chip_color = {"pay": "green", "nopay": "red", "close": "gray"}
+        with st.container(border=True, key="sm_scorecard_box"):
+            st.markdown(f"**{_sc_card['title']}**")
+            if _sc_card.get("asof"):
+                st.caption(_sc_txt(_sc_card["asof"]))
+            if _sc_card.get("headline"):
+                _sc_color = _sc_tone_color.get(_sc_card.get("tone"), "gray")
+                st.markdown(f"#### :{_sc_color}[{_sc_txt(_sc_card['headline'])}]")
+            if _sc_card.get("subline"):
+                st.markdown(_sc_txt(_sc_card["subline"]))
+            if _sc_card.get("warning"):
+                st.warning(_sc_txt(_sc_card["warning"]))
+            if _sc_card.get("info"):
+                st.info(_sc_txt(_sc_card["info"]))
+            with st.expander("How this is worked out"):
+                for _sc_key in ("lev_row", "tax_row"):
+                    _sc_row = _sc_card[_sc_key]
+                    st.markdown(f"**{_sc_txt(_sc_row['heading'])}**")
+                    if _sc_row.get("chip_label"):
+                        _sc_chip = _sc_chip_color.get(_sc_row.get("chip_kind"), "gray")
+                        st.markdown(f":{_sc_chip}[**{_sc_row['chip_label']}**]")
+                    if _sc_row.get("text"):
+                        st.markdown(_sc_txt(_sc_row["text"]))
+                    if _sc_row.get("caption"):
+                        st.caption(_sc_txt(_sc_row["caption"]))
+                st.caption(
+                    "Same question, other views: 📄 Reports shows any chosen period "
+                    "with the full breakdown; 🎯 My Edge shows the live chart, so it "
+                    "can differ intraday from this close-based figure."
                 )
-            if st.button("→ My Edge", key="sm_ptr_bm", type="tertiary"):
-                st.session_state["_pending_page"] = "🎯 My Edge"
-                st.rerun()
+            _sc_b1, _sc_b2, _sc_bsp = st.columns([1, 1, 3])
+            with _sc_b1:
+                if st.button("→ 📄 Reports", key="sm_sc_reports", type="tertiary"):
+                    st.session_state["_pending_page"] = "📄 Reports"
+                    st.rerun()
+            with _sc_b2:
+                if st.button("→ 🎯 My Edge", key="sm_sc_myedge", type="tertiary"):
+                    st.session_state["_pending_page"] = "🎯 My Edge"
+                    st.rerun()
+    except Exception:
+        st.caption("Scorecard couldn't be shown just now.")
 
     # ── 📜 State of the Portfolio — standing thesis (full-width, below the
     # 2×2 pointer grid, collapsed by default). Weekly 5-claim stability ledger
@@ -49544,30 +49640,6 @@ elif page == "🎯 My Edge":
                     and _me_cash < 0 and _me_port_val and _me_port_val > 0):
                 _me_port_beta = _me_port_beta * (_me_equity / _me_port_val)
             _me_beta_adj_alpha = _bm.beta_adjusted_alpha(_me_actual_disp, _me_shadow_disp, _me_port_beta)
-
-            # 2026-09-24 app review, C1: publish the headline result so 🧾
-            # Summary can surface it without recomputing (this app's
-            # coordination pattern) and without triggering the unmemoized
-            # yfinance fetch this tab's own "Load benchmark data" button
-            # exists specifically to gate. Stamped with today's date so
-            # Summary's freshness check (same pattern as `_etr_cache`) can
-            # tell "computed this session, today" from a stale earlier-day
-            # value in a long-lived session — the honest limitation this
-            # creates is that Summary can only show a number once THIS
-            # session has visited this tab and clicked Load; there is no
-            # cross-session persistence (that would need a DB column and its
-            # own reviewed commit, deliberately out of scope here).
-            st.session_state["_bm_summary_cache"] = {
-                "date":           _me_today.isoformat(),
-                "benchmark":      _me_bench_ticker,
-                "range_label":    _me_range_label,
-                "is_ann":         _me_is_ann,
-                "alpha_ann":      _me_alpha_ann,
-                "beta_adj_alpha": _me_beta_adj_alpha,
-                "actual_disp":    _me_actual_disp,
-                "shadow_disp":    _me_shadow_disp,
-                "dollar_gap":     _me_dollar_gap,
-            }
 
             with _me_kpi1:
                 st.metric(
