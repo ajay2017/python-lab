@@ -1,5 +1,10 @@
 # Account scorecard: is this account earning extra?
 
+**Status (2026-11-15, shipping):** C1 SHIPPED (`e483c58`, Opus FIX-FIRST → SHIP). C2 SHIPPED and VERIFIED LIVE (`6c8bccb`; owner screenshots with privacy on and off; every figure cross-checked: $1,123 behind SPY, October Leverage cost you −$332 net, tax ≈ $750 on $2,026, matching the Tax Report total). F-318 in requirements.md.
+- SHIPPED in the next commit (Opus review cited): the owner-approved wording fixes (wash-sale direction, plain spread sentence, drop "(0 this year)") plus the round-2 follow-ups (pre_coverage_reason caption, no nested parentheses); C3, the weekly debrief email block, via the shared `scorecard_inputs.compute`. Live check pending: the first real email on Sunday 2026-11-22.
+- Then C3b (live labels on 💰 Account / 🎯 My Edge) and the User Guide.
+- Still deferred: starting at the first month whose d0 is valid (fails safe today).
+
 **Status (2026-11-15, build): MOCKUP APPROVED (`docs/mockups/2026-11-15-account-scorecard-mockup.html`).** Owner choices:
 - **Placement:** Option A, full width below the pointer grid, above State of the Portfolio.
 - **Headline:** "Is this account earning extra?" kept.

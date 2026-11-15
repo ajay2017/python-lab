@@ -934,21 +934,36 @@ def test_card_no_account_row_keeps_the_starting_point_line():
 def test_card_info_names_the_left_out_dates_and_the_date_it_uses():
     one = sc.card_model(_since_ok(end_date=date(2026, 11, 12), skipped_dates=[D_END]),
                         None, None)
-    assert one["info"] == ("ℹ️ Fri Nov 13's account record was left out (it has no usable "
+    assert one["info"] == ("ℹ️ Fri Nov 13's account record was left out: it has no usable "
                            "end-of-day reading: no net equity, or its cash wasn't read after that "
-                           "day's close), so this uses Thu Nov 12.")
+                           "day's close. This uses Thu Nov 12.")
     carried = sc.card_model(_since_ok(end_date=date(2026, 11, 12), skipped_dates=[D_END],
                                       skipped_reasons={D_END: "its holdings changed"}),
                             None, None)["info"]
-    assert carried == ("ℹ️ Fri Nov 13's account record was left out (its holdings changed), "
-                       "so this uses Thu Nov 12.")
+    assert carried == ("ℹ️ Fri Nov 13's account record was left out: its holdings changed. "
+                       "This uses Thu Nov 12.")
     assert one["asof"].startswith("As of Thu Nov 12 close")
     many = sc.card_model(_since_ok(end_date=date(2026, 11, 11),
                                    skipped_dates=[date(2026, 11, 12), D_END]),
                          None, None)
-    assert many["info"].startswith("ℹ️ These account records were left out: Thu Nov 12 (")
-    assert "; Fri Nov 13 (" in many["info"]
+    assert many["info"].startswith("ℹ️ These account records were left out: Thu Nov 12: ")
+    assert "; Fri Nov 13: " in many["info"]
     assert many["info"].endswith("This uses Wed Nov 11.")
+
+
+def test_card_info_never_nests_parentheses_when_a_reason_has_its_own():
+    why = "its holdings don't match the trade journal (MRVL changed)"
+    one = sc.card_model(_since_ok(end_date=date(2026, 11, 12), skipped_dates=[D_END],
+                                  skipped_reasons={D_END: why}), None, None)["info"]
+    assert one == (f"ℹ️ Fri Nov 13's account record was left out: {why}. This uses Thu Nov 12.")
+    assert one.count("(") == 1 and one.count(")") == 1   # only the reason's own pair
+    many = sc.card_model(_since_ok(end_date=date(2026, 11, 11),
+                                   skipped_dates=[date(2026, 11, 12), D_END],
+                                   skipped_reasons={date(2026, 11, 12): why, D_END: why}),
+                         None, None)["info"]
+    assert many == ("ℹ️ These account records were left out: "
+                    f"Thu Nov 12: {why}; Fri Nov 13: {why}. This uses Wed Nov 11.")
+    assert many.count("(") == 2 and many.count(")") == 2   # the reasons' own pairs only
 
 
 def test_card_start_date_shows_its_year_when_it_differs_from_the_end_year():
@@ -963,8 +978,31 @@ def test_lev_row_normal_matches_the_mockup():
                          "interest posted −$228 → net +$82")
     assert r["chip_label"] == "Too close to call" and r["chip_kind"] == "close"
     assert "$140 of moves couldn't be split between borrowed and own money" in r["caption"]
-    assert "October's own mix" in r["caption"] and "so no verdict" in r["caption"]
+    assert ("Split the same way as the rest of October 2026, those moves could flip the "
+            "result, so there's no verdict.") in r["caption"]
+    assert "own mix" not in r["caption"]
     assert "around the 24th" in r["caption"] and "November joins after its charge posts" in r["caption"]
+
+
+def test_lev_row_spread_sentence_for_paid_and_cost():
+    paid = sc.card_model(_since_ok(), _lev_ok(verdict="paid"), None)["lev_row"]["caption"]
+    assert ("Even if those moves are split the same way as the rest of October 2026, "
+            "leverage still paid.") in paid
+    cost = sc.card_model(_since_ok(), _lev_ok(verdict="cost", net_usd=-82.0),
+                         None)["lev_row"]["caption"]
+    assert ("Even if those moves are split the same way as the rest of October 2026, "
+            "leverage still cost money.") in cost
+    for c in (paid, cost):
+        assert "holds even" not in c and "own mix" not in c
+    # the label is the heading's month label, also for a multi-month window
+    two = sc.card_model(_since_ok(), _lev_ok(verdict="paid", period_end=date(2026, 11, 30)),
+                        None)["lev_row"]
+    assert "the rest of October–November 2026, leverage still paid." in two["caption"]
+    assert two["heading"] == "Borrowed money, October–November 2026"
+    # no material unsplit amount -> no spread sentence at all
+    none = sc.card_model(_since_ok(), _lev_ok(verdict="paid", unsplit_usd=0.0),
+                         None)["lev_row"]["caption"]
+    assert "Even if those moves" not in none
 
 
 @pytest.mark.parametrize("verdict,label,kind", [("paid", "Leverage paid", "pay"),
@@ -1005,8 +1043,11 @@ def test_tax_row_normal_matches_the_mockup():
     assert r["heading"] == "Tax already triggered by 2026 sales (estimate)"
     assert r["text"] == "About $555: net short-term gain of $1,500 at 37%"
     assert "An estimate at the top federal bracket, not your actual tax." in r["caption"]
-    assert "(0 this year)" in r["caption"]
-    assert "2 wash sales are not adjusted for." in r["caption"]
+    assert "unknown holding period" not in r["caption"] and "this year)" not in r["caption"]
+    assert "Short- and long-term results are netted first." in r["caption"]
+    assert ("2 sales were wash sales; their deferred losses aren't reflected here, so the real "
+            "tax may be higher than this estimate.") in r["caption"]
+    assert "not adjusted for" not in r["caption"]
     assert "Ledger reconciles with your journal ✓." in r["caption"]
     assert "The same money left in SPY would owe nothing yet." in r["caption"]
 
@@ -1039,9 +1080,24 @@ def test_tax_row_variants():
     assert loss["text"] == "About $0: net loss of $300 so far"
     assert "wash sale" not in loss["caption"]
     one = sc.card_model(_since_ok(), None, _tax_ok(n_wash=1))["tax_row"]["caption"]
-    assert "1 wash sale is not adjusted for." in one
+    assert ("1 sale was a wash sale; its deferred loss isn't reflected here, so the real tax "
+            "may be higher than this estimate.") in one
     bad = sc.card_model(_since_ok(), None, _tax_ok(reconciles=False))["tax_row"]["caption"]
     assert "does not reconcile" in bad and "reconciles with your journal" not in bad
+
+
+def test_tax_row_unknown_term_clause_only_when_there_is_one():
+    none = sc.card_model(_since_ok(), None, _tax_ok(n_unknown_counted=0,
+                                                    n_unknown_left_out=0))["tax_row"]["caption"]
+    assert "unknown holding period" not in none and "this year)" not in none
+    counted = sc.card_model(_since_ok(), None, _tax_ok(n_unknown_counted=2,
+                                                       n_unknown_left_out=0))["tax_row"]["caption"]
+    assert ("sales with an unknown holding period are counted as short-term (2 this year)."
+            in counted)
+    left = sc.card_model(_since_ok(), None, _tax_ok(n_unknown_counted=0,
+                                                    n_unknown_left_out=1))["tax_row"]["caption"]
+    assert "counted as short-term (0 this year)." in left
+    assert "1 sale couldn't be valued" in left
 
 
 def test_tax_row_offline():
@@ -1123,6 +1179,34 @@ def test_pre_coverage_window_is_incomplete_with_no_verdict(engine, status):
     row = sc.card_model(_since_ok(), r, None)["lev_row"]
     assert row["chip_kind"] is None
     assert "start of the window isn't usable" in row["caption"]
+    assert r["pre_coverage_reason"] is None   # absent reason -> start wording, key still there
+    assert "no usable account record inside the window" not in row["caption"]
+
+
+@pytest.mark.parametrize("reason", ["no_valid_end_record", "no_end_record_yet", "no_sessions"])
+def test_pre_coverage_end_record_reasons_name_the_window_not_the_start(engine, reason):
+    engine.recon = dict(_recon(status="pre_coverage"), pre_coverage_reason=reason)
+    r = _lev(engine)
+    assert r["state"] == "incomplete" and r["verdict"] is None
+    assert r["start_uncovered"] is True and r["pre_coverage_reason"] == reason
+    cap = sc.card_model(_since_ok(), r, None)["lev_row"]["caption"]
+    assert "There's no usable account record inside the window, so these figures" in cap
+    assert "start of the window" not in cap
+
+
+@pytest.mark.parametrize("reason", ["no_start_record", "something_new", None])
+def test_pre_coverage_start_or_unknown_reason_keeps_the_start_wording(engine, reason):
+    engine.recon = dict(_recon(status="pre_coverage"), pre_coverage_reason=reason)
+    r = _lev(engine)
+    assert r["pre_coverage_reason"] == reason
+    cap = sc.card_model(_since_ok(), r, None)["lev_row"]["caption"]
+    assert "The record at the start of the window isn't usable, so these figures" in cap
+    assert "inside the window" not in cap
+
+
+def test_pre_coverage_reason_is_none_for_a_non_string_value(engine):
+    engine.recon = dict(_recon(status="pre_coverage"), pre_coverage_reason=7)
+    assert _lev(engine)["pre_coverage_reason"] is None
 
 
 def test_partial_status_alone_does_not_make_the_window_incomplete(engine):

@@ -2980,8 +2980,25 @@ def _run_debrief(now_et, force: bool) -> int:
     email_to   = os.environ.get("ALERT_EMAIL_TO", "").strip()
     email_from = os.environ.get("ALERT_EMAIL_FROM", "").strip()
     if resend_key and email_to and email_from:
+        # Account scorecard block (docs/plans/account-scorecard.md C3): its own
+        # longer-window reads via the loader the Summary card shares -- the week-scoped
+        # `inputs` above must not be reused. `spy_by_date` is the same 2y SPY
+        # closes dict (not week-scoped). Any failure -> no block, never blocks the email.
+        scorecard_lines = None
+        try:
+            from stock_analyzer import scorecard as _scorecard
+            from stock_analyzer import scorecard_inputs as _scorecard_inputs
+            _sc_since, _sc_lev, _sc_tax = _scorecard_inputs.compute(
+                db, now_et.date(), spy_by_date)
+            scorecard_lines = _scorecard.email_lines(_sc_since, _sc_lev, _sc_tax)
+            _log(f"debrief: scorecard since={_sc_since.get('state')} "
+                 f"lev={_sc_lev.get('state')} tax={_sc_tax.get('state')}")
+        except Exception as _sce:  # noqa: BLE001
+            scorecard_lines = None
+            _log(f"debrief: scorecard skipped — {type(_sce).__name__}")
         html    = _notify.render_debrief_email(
             result, prior=prior_debrief, period=package,
+            scorecard_lines=scorecard_lines,
         )
         subject = f"DRISHTA Weekly Debrief — week of {result['week_ending']}"
         ok, detail = _notify.send_email_resend(

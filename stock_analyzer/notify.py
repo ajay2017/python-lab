@@ -1500,7 +1500,8 @@ def _money_block(pkg: dict) -> str:
 
 
 def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: dict | None = None,
-                         period: dict | None = None) -> str:
+                         period: dict | None = None,
+                         scorecard_lines: list | None = None) -> str:
     """Render the weekly portfolio debrief as a professional HTML email (light-mode-first).
 
     week_had_trades: True when a BUY/SELL landed inside the joined week — the
@@ -1514,6 +1515,10 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
     period: the debrief package (metrics_version 2 only) -- supplies the d0/d1
     close dates, the leverage range and the unknown-result reason the tiles and
     footnote name.  Ignored for a legacy (v1) debrief.
+    scorecard_lines: the account scorecard's plain lines (scorecard.email_lines),
+    or None / [] for no block.  Rendered here, outside the AI package and prompt,
+    as a bordered box between the KPI tiles and the AI-written sections; the
+    first line is the bold title, every line is HTML-escaped.
     """
 
     week_ending  = debrief.get("week_ending", "—")
@@ -1645,6 +1650,17 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
 
     _section = lambda t, c: _email_section(t, c, _SECTION_COLOURS)
 
+    scorecard_block = ""
+    _sc_lines = [str(ln) for ln in scorecard_lines] if scorecard_lines else []
+    if _sc_lines:
+        scorecard_block = (
+            "<div style='border:1px solid #d1d5db;border-radius:6px;padding:10px 12px;"
+            "background:#f9fafb;font-size:0.9em;line-height:1.5;margin:0 0 20px'>"
+            f"<b>{_html.escape(_sc_lines[0])}</b>"
+            + "".join(f"<br>{_html.escape(ln)}" for ln in _sc_lines[1:])
+            + "</div>"
+        )
+
     sections_html = (
         _section("What happened",       debrief.get("section_facts", ""))
         + _section("Decisions you made",  debrief.get("section_decisions", ""))
@@ -1674,6 +1690,7 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: di
         # Body
         f"<div style='padding:24px 24px 20px'>"
         f"{perf_block}"
+        f"{scorecard_block}"
         f"{sections_html}"
         "</div>"
 

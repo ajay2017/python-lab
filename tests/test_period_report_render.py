@@ -30,9 +30,8 @@ def _attr_calls(owner: str, attr: str, root=_TREE):
             and n.func.attr == attr and isinstance(n.func.value, ast.Name) and n.func.value.id == owner]
 
 
-# The 📄 Reports page block. Since 2026-11-15 a second app.py caller exists (the
-# Summary account scorecard, `_scorecard_compute`), so the Reports wiring checks
-# below are scoped to this block and the scorecard's call is pinned separately.
+# The 📄 Reports page block. The Summary account scorecard (`_scorecard_compute`)
+# reaches the engine loader through stock_analyzer/scorecard_inputs.py, not app.py.
 _LINES = _SRC.splitlines()
 _REPORTS_START = next(i for i, ln in enumerate(_LINES, 1) if ln.startswith('elif page == "📄 Reports":'))
 _REPORTS_END = next(i for i, ln in enumerate(_LINES, 1)
@@ -82,8 +81,9 @@ def test_page_calls_the_engine_once_each():
     # the page reaches the engine ONLY through period_inputs: one load, one core run ...
     assert len(_reports_attr_calls("_pi_mod", "load_engine_inputs")) == 1
     assert len(_attr_calls("_pi_mod", "compute_period_core")) == 1
-    # app-wide: exactly one more load, the Summary scorecard's (pinned below)
-    assert len(_attr_calls("_pi_mod", "load_engine_inputs")) == 2
+    # app-wide too: the Summary scorecard's engine load moved into
+    # stock_analyzer/scorecard_inputs.py (pinned in tests/test_scorecard_inputs.py)
+    assert len(_attr_calls("_pi_mod", "load_engine_inputs")) == 1
     # ... never directly
     for fn in ("reconcile_period", "leverage_section"):
         assert _attr_calls("_pa_mod", fn) == [], fn
@@ -151,32 +151,25 @@ def test_each_loader_is_the_none_on_failure_variant():
                                     "load_daily_snapshots")]
 
 
-def test_scorecard_engine_load_uses_only_none_on_failure_loaders():
-    # The Summary account scorecard is the one other app.py caller of the engine
-    # loader: it sits inside `_scorecard_compute`, and every frame it hands over
-    # comes from a None-on-failure loader, so "couldn't read" never reads as
-    # "nothing happened" (2026-11-15, scorecard C2).
-    others = [c for c in _attr_calls("_pi_mod", "load_engine_inputs")
-              if not (_REPORTS_START < c.lineno < _REPORTS_END)]
-    assert len(others) == 1
-    fn = getattr(others[0], "_parent", None)
-    while fn is not None and not isinstance(fn, ast.FunctionDef):
-        fn = getattr(fn, "_parent", None)
-    assert fn is not None and fn.name == "_scorecard_compute"
-    expected = {"trades_df": "load_trades_or_none",
-                "account_snapshots_df": "load_account_daily_snapshots",
-                "flows": "load_account_flows_for_dedup_check"}
-    for kw, loader in expected.items():
-        v = _kw(others[0], kw)
-        assert isinstance(v, ast.Name), kw
-        srcs = [n.value for n in ast.walk(fn) if isinstance(n, ast.Assign)
-                and any(isinstance(t, ast.Name) and t.id == v.id for t in n.targets)]
-        assert [x.func.attr for x in srcs if isinstance(x, ast.Call)
-                and isinstance(x.func, ast.Attribute)] == [loader], kw
-    lenient = {"load_trades", "load_daily_snapshots", "load_snaptrade_income_events",
-               "load_account_flows"}
+def test_scorecard_compute_goes_through_the_shared_loader_and_reads_nothing_itself():
+    # The Summary account scorecard's reads live in scorecard_inputs.compute (shared
+    # with the Sunday email; its loaders are pinned in tests/test_scorecard_inputs.py).
+    # app.py's `_scorecard_compute` must call it, and do no db read of its own (2026-11-15,
+    # scorecard C3).
+    fn = next(n for n in ast.walk(_TREE)
+              if isinstance(n, ast.FunctionDef) and n.name == "_scorecard_compute")
+    calls = [c for c in ast.walk(fn) if isinstance(c, ast.Call)
+             and isinstance(c.func, ast.Attribute) and c.func.attr == "compute"
+             and isinstance(c.func.value, ast.Name) and c.func.value.id == "_scorecard_inputs"]
+    assert len(calls) == 1
+    assert "scorecard_inputs as _scorecard_inputs" in _SRC
+    # no loads of its own, lenient or otherwise
     assert not [c for c in ast.walk(fn) if isinstance(c, ast.Call)
-                and isinstance(c.func, ast.Attribute) and c.func.attr in lenient]
+                and isinstance(c.func, ast.Attribute)
+                and (c.func.attr.startswith("load_") or c.func.attr in ("leverage_window",
+                                                                          "since_start",
+                                                                          "leverage_verdict",
+                                                                          "tax_triggered"))]
 
 
 def test_reference_leverage_is_the_constant():

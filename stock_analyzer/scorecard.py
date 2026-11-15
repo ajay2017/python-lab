@@ -54,6 +54,9 @@ _AMBIGUOUS_TEXT = ("More than one starting point is recorded on \U0001f4b0 Accou
                    "deposits ledger before this can be computed.")
 _NO_ROW_TEXT = ("No end-of-day account record after the starting point is usable yet (its cash "
                 "must be read after the close and match your journal), so nothing is shown.")
+# period_attribution's pre_coverage_reason values that are NOT about the opening record
+# ("no_start_record" is the only start-record one).
+_END_RECORD_REASONS = ("no_valid_end_record", "no_end_record_yet", "no_sessions")
 _NO_READING_WHY = ("it has no usable end-of-day reading: no net equity, or its cash wasn't read "
                    "after that day's close")
 
@@ -144,7 +147,7 @@ def _empty_lev(state: str) -> dict:
         "own_usd": None, "interest_usd": None, "net_usd": None, "unsplit_usd": None,
         "avg_leverage": None, "verdict": None, "gap_months": None,
         "n_unpriced": None, "n_journal_inconsistent": None, "ended_early": None,
-        "start_uncovered": None,
+        "start_uncovered": None, "pre_coverage_reason": None,
     }
 
 
@@ -388,6 +391,8 @@ def leverage_verdict(inputs, spy_closes, *, today, reference_leverage) -> dict:
     # trustworthy start, so it can't carry a verdict either (lead, review round 1).
     start_uncovered = recon.get("status") not in ("ok", "partial")
     out["start_uncovered"] = start_uncovered
+    pcr = recon.get("pre_coverage_reason")
+    out["pre_coverage_reason"] = pcr if isinstance(pcr, str) else None   # which record is missing
     incomplete = (not isinstance(unpriced, list) or not isinstance(bad, list)
                   or not isinstance(early, bool) or bool(unpriced) or bool(bad) or early
                   or start_uncovered)
@@ -590,12 +595,13 @@ def _since_parts(since: dict) -> dict:
         why = why if isinstance(why, dict) else {}
         items = [(_dstr(d), why[d] if isinstance(why.get(d), str) else _NO_READING_WHY)
                  for d in skipped]
+        # The reason is never wrapped in parentheses: some carry their own.
         if len(items) == 1:
-            res["info"] = (f"{_INFO}{items[0][0]}'s account record was left out ({items[0][1]}), "
-                           f"so this uses {_dstr(ed)}.")
+            res["info"] = (f"{_INFO}{items[0][0]}'s account record was left out: {items[0][1]}. "
+                           f"This uses {_dstr(ed)}.")
         else:
             res["info"] = (f"{_INFO}These account records were left out: "
-                           + "; ".join(f"{n} ({w})" for n, w in items)
+                           + "; ".join(f"{n}: {w}" for n, w in items)
                            + f". This uses {_dstr(ed)}.")
 
     gain, pct = _f(since.get("account_gain_usd")), _f(since.get("account_return_pct"))
@@ -648,8 +654,6 @@ def _lev_row(lev: dict) -> dict:
     borrowed, interest = _f(lev.get("borrowed_usd")), _f(lev.get("interest_usd"))
     avg, net = _f(lev.get("avg_leverage")), _f(lev.get("net_usd"))
     unsplit = _f(lev.get("unsplit_usd"))
-    single = (ps.year, ps.month) == (pe.year, pe.month)
-    mix = f"{_month_name(ps.year, ps.month)}'s own mix" if single else "the window's own mix"
     nm = pe.month + 1 if pe.month < 12 else 1
     waits = (f"Only complete months with interest already posted count; Robinhood charges for a "
              f"cycle ending around the 24th, so {_month_name(pe.year, nm)} joins after its "
@@ -685,7 +689,12 @@ def _lev_row(lev: dict) -> dict:
         elif not (isinstance(n_p, int) and isinstance(n_j, int)):
             why.append("some position-days couldn't be checked against your journal")
         if lev.get("start_uncovered") is True:
-            why.append("the record at the start of the window isn't usable")
+            # pre_coverage_reason can name an END-record problem; only the start-record
+            # reasons (and an unknown / absent one) keep the start wording.
+            if lev.get("pre_coverage_reason") in _END_RECORD_REASONS:
+                why.append("there's no usable account record inside the window")
+            else:
+                why.append("the record at the start of the window isn't usable")
         if early is True:
             why.append("the last complete record is before the month's end")
         elif not isinstance(early, bool):
@@ -704,11 +713,13 @@ def _lev_row(lev: dict) -> dict:
     if verdict == "paid":
         row["chip_label"], row["chip_kind"] = "Leverage paid", "pay"
         if material:
-            cap.append(f"The result holds even after spreading that amount at {mix}.")
+            cap.append(f"Even if those moves are split the same way as the rest of {label}, "
+                       "leverage still paid.")
     elif verdict == "cost":
         row["chip_label"], row["chip_kind"] = "Leverage cost you", "nopay"
         if material:
-            cap.append(f"The result holds even after spreading that amount at {mix}.")
+            cap.append(f"Even if those moves are split the same way as the rest of {label}, "
+                       "leverage still cost money.")
     elif verdict == "too_close":
         row["chip_label"], row["chip_kind"] = "Too close to call", "close"
         if net is not None and _whole(net) == "0":
@@ -718,7 +729,8 @@ def _lev_row(lev: dict) -> dict:
         elif avg <= 1:
             cap.append("Average leverage was 1× or less, so no verdict.")
         elif material:
-            cap.append(f"Spread at {mix}, that could flip the result, so no verdict.")
+            cap.append(f"Split the same way as the rest of {label}, those moves could flip the "
+                       "result, so there's no verdict.")
         else:
             cap.append("The net is too close to zero to call.")
     cap.append(waits)
@@ -767,18 +779,26 @@ def _tax_row(tax: dict) -> dict:
                        f"of {_usd0(st)}, net {_usd0(net)}{at_lt}")
 
     counted, left_out = tax.get("n_unknown_counted"), tax.get("n_unknown_left_out")
-    cap = ["An estimate at the top federal bracket, not your actual tax.",
-           "Short- and long-term results are netted first; sales with an unknown holding "
-           f"period are counted as short-term ({counted if isinstance(counted, int) else 0} this year)."]
-    if isinstance(left_out, int) and left_out > 0:
+    n_counted = counted if isinstance(counted, int) else 0
+    has_left_out = isinstance(left_out, int) and left_out > 0
+    cap = ["An estimate at the top federal bracket, not your actual tax."]
+    if n_counted > 0 or has_left_out:
+        cap.append("Short- and long-term results are netted first; sales with an unknown holding "
+                   f"period are counted as short-term ({n_counted} this year).")
+    else:
+        cap.append("Short- and long-term results are netted first.")
+    if has_left_out:
         cap.append("1 sale couldn't be valued (its cost is unknown), so it is left out of this figure."
                    if left_out == 1 else
                    f"{left_out} sales couldn't be valued (their cost is unknown), so they are left "
                    "out of this figure.")
     n_wash = tax.get("n_wash")
     if isinstance(n_wash, int) and n_wash > 0:
-        cap.append("1 wash sale is not adjusted for." if n_wash == 1
-                   else f"{n_wash} wash sales are not adjusted for.")
+        # A disallowed (deferred) loss can only raise the year's taxable gain, never lower it.
+        cap.append("1 sale was a wash sale; its deferred loss isn't reflected here, so the real "
+                   "tax may be higher than this estimate." if n_wash == 1
+                   else f"{n_wash} sales were wash sales; their deferred losses aren't reflected "
+                   "here, so the real tax may be higher than this estimate.")
     rec = tax.get("reconciles")
     if rec is True:
         cap.append("Ledger reconciles with your journal ✓.")

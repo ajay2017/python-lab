@@ -1188,6 +1188,7 @@ _GATE_FILES = {
     # rules are data-integrity rules built on account.py, account_row_trust.py and
     # period_inputs.py.
     "stock_analyzer/scorecard.py",
+    "stock_analyzer/scorecard_inputs.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per

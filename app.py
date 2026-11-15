@@ -285,6 +285,7 @@ from stock_analyzer import performance_review as _perf_review_mod
 from stock_analyzer import period_attribution as _pa_mod
 from stock_analyzer import period_inputs as _pi_mod
 from stock_analyzer import scorecard as _scorecard
+from stock_analyzer import scorecard_inputs as _scorecard_inputs
 from stock_analyzer import account_row_trust as _art_mod
 from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
@@ -4020,31 +4021,13 @@ class _ScorecardOffline(Exception):
 def _scorecard_compute(today_iso: str, asof_key: str, trades_sig: tuple):
     # today_iso / asof_key / trades_sig only key the cache; the loads happen here.
     _today = date.fromisoformat(today_iso)
-    _flows = db.load_account_flows_for_dedup_check()
-    _acct = db.load_account_daily_snapshots()
-    _trades = db.load_trades_or_none()
     try:
         _spy = _scorecard_spy_closes(asof_key)
     except Exception:
         _spy = None
-    _win = _scorecard.leverage_window(_acct, _today)
-    if _win:
-        _inputs = _pi_mod.load_engine_inputs(
-            db, *_win, trades_df=_trades, account_snapshots_df=_acct, flows=_flows,
-        )
-    else:
-        # No complete month yet: leverage_verdict still needs the account frame in
-        # a dict to say "no_complete_month" (a bare None would read as "offline").
-        _inputs = {"account_snapshots_df": _acct}
-    _since = _scorecard.since_start(_flows, _acct, _trades, _spy, today=_today)
-    _lev = _scorecard.leverage_verdict(
-        _inputs, _spy, today=_today, reference_leverage=LEVERAGE_REFERENCE_TARGET,
-    )
-    _tax = _scorecard.tax_triggered(
-        _trades, tax_year=_today.year, st_rate=TAX_RATE_SHORT_TERM,
-        lt_rate=TAX_RATE_LONG_TERM, today=_today,
-    )
-    _res = (_since, _lev, _tax)
+    # The loads and the three scorecard calls are shared with the Sunday email
+    # (stock_analyzer/scorecard_inputs.py); it never raises, a failed read -> offline.
+    _res = _scorecard_inputs.compute(db, _today, _spy)
     if any(isinstance(_p, dict) and _p.get("state") == "offline" for _p in _res):
         raise _ScorecardOffline(_res)
     return _res
