@@ -3937,8 +3937,8 @@ engine, which stays explicitly out of scope for this module.
   would be.
 - **Flow-boundary rule**: deposits/withdrawals are filtered to `d0 < flow_date <= d1` before
   reaching `account.money_weighted_return()` — a flow dated exactly `d0` is excluded, because the
-  EOD snapshot for `d0` already reflects it; `money_weighted_return`'s own internal `fd < d0` check
-  only excludes strictly-before dates, so the caller must apply the `<=` exclusion itself.
+  EOD snapshot for `d0` already reflects it. Since 2026-11-15 (scorecard C3b) `money_weighted_return`
+  itself uses the same (d0, d1] window, so this caller's pre-filter is redundant but harmless.
 - `monthly_account_returns(...)`: one row per calendar month FULLY contained in the selected range
   (a partial edge month is skipped, never clipped to a confusing sub-month figure); each row is an
   independent call back into `_account_return_section`, so a month's figure always equals what a

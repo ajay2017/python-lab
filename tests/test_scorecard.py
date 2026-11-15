@@ -1131,13 +1131,29 @@ def test_email_lines_pending_spy_swaps_the_gap_for_a_warning():
 
 
 def test_email_lines_are_fewer_when_parts_are_unknown():
+    # no_complete_month is "nothing to report yet" (dropped); an OFFLINE tax part now says so.
     lines = sc.email_lines(_since_ok(), {"state": "no_complete_month"}, {"state": "offline"})
-    assert len(lines) == 2
+    assert len(lines) == 3
+    assert lines[2] == "Tax already triggered: couldn't be read this week."
     off = sc.email_lines(sc.since_start(None, None, None, None, today=TODAY),
                          {"state": "offline"}, {"state": "offline", "tax_year": 2026})
-    assert len(off) == 2 and off[0] == "\U0001f9ed Is this account earning extra?"
+    assert len(off) == 4 and off[0] == "\U0001f9ed Is this account earning extra?"
     assert "Couldn't read" in off[1]
-    assert len(sc.email_lines(None, None, None)) == 2
+    assert off[2:] == ["Borrowed money: couldn't be read this week.",
+                       "Tax already triggered: couldn't be read this week."]
+    assert len(sc.email_lines(None, None, None)) == 4
+
+
+def test_email_lines_offline_leverage_and_tax_each_get_a_line_never_dropped():
+    lev_off = sc.email_lines(_since_ok(), {"state": "offline"}, _tax_ok())
+    assert lev_off[2] == "Borrowed money: couldn't be read this week."
+    assert lev_off[3].startswith("Tax already triggered by 2026 sales: about")
+    tax_off = sc.email_lines(_since_ok(), _lev_ok(), {"state": "offline"})
+    assert tax_off[2].startswith("Borrowed money, October 2026")
+    assert tax_off[3] == "Tax already triggered: couldn't be read this week."
+    # Other not-ok states (nothing to report yet) stay silent.
+    quiet = sc.email_lines(_since_ok(), {"state": "no_complete_month"}, {"state": "no_data"})
+    assert len(quiet) == 2
 
 
 def test_email_lines_net_loss_and_interest_gap_variants():
@@ -1146,7 +1162,9 @@ def test_email_lines_net_loss_and_interest_gap_variants():
     assert lines[2].startswith("Borrowed money, October 2026: no net result yet")
     assert lines[3] == "Tax already triggered by 2026 sales: about $0 (net loss so far; estimate)"
     paid = sc.email_lines(_since_ok(), _lev_ok(verdict="paid"), None)
-    assert paid[2].endswith("(leverage paid)") and len(paid) == 3
+    # tax=None is offline: it now says so instead of silently dropping the line.
+    assert paid[2].endswith("(leverage paid)") and len(paid) == 4
+    assert paid[3] == "Tax already triggered: couldn't be read this week."
 
 
 def test_email_lines_level_and_no_hyphen_minus():

@@ -281,3 +281,130 @@ def test_beta_adjusted_alpha_negative_beta():
 def test_beta_adjusted_alpha_negative_benchmark_return():
     # expected = actual - beta*benchmark = 8 - 1.5*(-6) = 17.0
     assert bm.beta_adjusted_alpha(8.0, -6.0, 1.5) == pytest.approx(17.0)
+
+
+# ─── same-day flow double count (C3b): flow window is (baseline, today] ───────
+
+def test_build_shadow_portfolio_deposit_on_baseline_date_not_invested_twice():
+    prices = {"2024-01-01": 100.0, "2024-01-10": 100.0}
+    flows = [_flow("baseline", 1000.0, "2024-01-01"), _flow("deposit", 500.0, "2024-01-01")]
+    result = bm.build_shadow_portfolio(flows, prices, date(2024, 1, 10))
+    # The deposit ON the baseline date is already inside the baseline amount.
+    assert [f["flow_type"] for f in result["flow_attribution"]] == ["baseline"]
+    assert result["shadow_ending_value"] == pytest.approx(1000.0)
+    assert result["total_invested"] == pytest.approx(1000.0)
+
+
+def test_build_shadow_portfolio_deposit_before_baseline_excluded():
+    prices = {"2023-12-20": 100.0, "2024-01-01": 100.0, "2024-01-10": 100.0}
+    flows = [_flow("deposit", 500.0, "2023-12-20"), _flow("baseline", 1000.0, "2024-01-01")]
+    result = bm.build_shadow_portfolio(flows, prices, date(2024, 1, 10))
+    assert result["shadow_ending_value"] == pytest.approx(1000.0)
+
+
+def test_build_shadow_portfolio_later_second_baseline_row_ignored():
+    prices = {"2024-01-01": 100.0, "2024-01-05": 100.0, "2024-01-10": 100.0}
+    flows = [_flow("baseline", 2000.0, "2024-01-05"), _flow("baseline", 1000.0, "2024-01-01")]
+    result = bm.build_shadow_portfolio(flows, prices, date(2024, 1, 10))
+    assert len(result["flow_attribution"]) == 1
+    assert result["flow_attribution"][0]["date"] == date(2024, 1, 1)
+    assert result["shadow_ending_value"] == pytest.approx(1000.0)
+
+
+def test_build_shadow_portfolio_deposit_after_today_ignored_and_one_day_after_baseline_kept():
+    prices = {"2024-01-01": 100.0, "2024-01-02": 100.0, "2024-01-10": 100.0, "2024-01-11": 100.0}
+    flows = [
+        _flow("baseline", 1000.0, "2024-01-01"),
+        _flow("deposit", 100.0, "2024-01-02"),    # first day after the anchor: kept
+        _flow("deposit", 100.0, "2024-01-10"),    # on today: kept
+        _flow("deposit", 900.0, "2024-01-11"),    # after today: ignored
+    ]
+    result = bm.build_shadow_portfolio(flows, prices, date(2024, 1, 10))
+    assert len(result["flow_attribution"]) == 3
+    assert result["shadow_ending_value"] == pytest.approx(1200.0)
+
+
+def test_build_shadow_portfolio_without_a_baseline_row_invests_every_flow_as_before():
+    prices = {"2024-01-01": 100.0, "2024-01-10": 100.0}
+    flows = [_flow("deposit", 500.0, "2024-01-01"), _flow("deposit", 100.0, "2024-01-01")]
+    result = bm.build_shadow_portfolio(flows, prices, date(2024, 1, 10))
+    assert result["shadow_ending_value"] == pytest.approx(600.0)
+
+
+def test_compute_shadow_mwr_deposit_on_baseline_date_excluded_like_no_flow():
+    baseline_date = date(2024, 1, 1)
+    today = date(2024, 3, 1)
+    flows = [_flow("deposit", 100.0, "2024-01-01")]  # ON the baseline date
+    assert (bm.compute_shadow_mwr(1000.0, baseline_date, 1100.0, today, flows)
+            == bm.compute_shadow_mwr(1000.0, baseline_date, 1100.0, today, []))
+
+
+def test_compute_shadow_mwr_deposit_day_after_baseline_is_counted():
+    baseline_date = date(2024, 1, 1)
+    today = date(2024, 3, 1)
+    flows = [_flow("deposit", 100.0, "2024-01-02")]
+    assert (bm.compute_shadow_mwr(1000.0, baseline_date, 1100.0, today, flows)
+            != bm.compute_shadow_mwr(1000.0, baseline_date, 1100.0, today, []))
+
+
+def test_shadow_and_account_mwr_use_the_same_window():
+    """Same flows, same endpoints: the two returns must agree for a flow on the
+    baseline date, the day after it, and after today."""
+    from stock_analyzer.account import money_weighted_return as mwr
+    b, t = date(2024, 1, 1), date(2024, 3, 1)
+    flows = [_flow("deposit", 100.0, "2024-01-01"), _flow("deposit", 50.0, "2024-01-15"),
+             _flow("withdrawal", 20.0, "2024-03-02")]
+    a = mwr(1000.0, b, 1200.0, t, flows)
+    s = bm.compute_shadow_mwr(1000.0, b, 1200.0, t, flows)
+    assert a["period_return_pct"] == s["period_return_pct"]
+    assert a["annualized_pct"] == s["annualized_pct"]
+
+
+# ─── the chart curve uses the same flow window as the KPI (C3b) ───────────────
+
+def test_build_benchmark_curve_deposit_on_baseline_date_counted_once():
+    prices = _daily_prices(date(2024, 1, 1), 10, lambda i: 100.0)
+    flows = [_flow("baseline", 1000.0, "2024-01-01"), _flow("deposit", 500.0, "2024-01-01")]
+    result = bm.build_benchmark_curve(prices, flows, date(2024, 1, 1), date(2024, 1, 10))
+    assert result["2024-01-01"]["shadow_value"] == pytest.approx(1000.0)
+    assert result["2024-01-10"]["shadow_value"] == pytest.approx(1000.0)
+
+
+def test_build_benchmark_curve_later_second_baseline_ignored():
+    prices = _daily_prices(date(2024, 1, 1), 10, lambda i: 100.0)
+    flows = [_flow("baseline", 2000.0, "2024-01-05"), _flow("baseline", 1000.0, "2024-01-01")]
+    result = bm.build_benchmark_curve(prices, flows, date(2024, 1, 1), date(2024, 1, 10))
+    assert result["2024-01-04"]["shadow_value"] == pytest.approx(1000.0)
+    assert result["2024-01-10"]["shadow_value"] == pytest.approx(1000.0)
+
+
+def test_build_benchmark_curve_next_day_deposit_enters_from_its_own_date():
+    prices = _daily_prices(date(2024, 1, 1), 10, lambda i: 100.0)
+    flows = [_flow("baseline", 1000.0, "2024-01-01"), _flow("deposit", 500.0, "2024-01-03")]
+    result = bm.build_benchmark_curve(prices, flows, date(2024, 1, 1), date(2024, 1, 10))
+    assert result["2024-01-02"]["shadow_value"] == pytest.approx(1000.0)
+    assert result["2024-01-03"]["shadow_value"] == pytest.approx(1500.0)
+
+
+def test_build_benchmark_curve_without_a_baseline_row_applies_every_flow_as_before():
+    prices = _daily_prices(date(2024, 1, 1), 10, lambda i: 100.0)
+    flows = [_flow("deposit", 500.0, "2024-01-01"), _flow("deposit", 100.0, "2024-01-01")]
+    result = bm.build_benchmark_curve(prices, flows, date(2024, 1, 1), date(2024, 1, 10))
+    assert result["2024-01-10"]["shadow_value"] == pytest.approx(600.0)
+
+
+def test_curve_last_point_equals_shadow_portfolio_ending_value():
+    prices = _daily_prices(date(2024, 1, 1), 20, lambda i: 100.0 + 1.7 * i)
+    today = date(2024, 1, 20)
+    flows = [
+        _flow("baseline", 1000.0, "2024-01-02"),
+        _flow("deposit", 300.0, "2024-01-02"),      # same day as the anchor: counted once
+        _flow("deposit", 250.0, "2024-01-09"),
+        _flow("withdrawal", 120.0, "2024-01-14"),
+        _flow("baseline", 5000.0, "2024-01-10"),    # later baseline: ignored
+        _flow("deposit", 700.0, "2024-01-01"),      # before the anchor: ignored
+        _flow("deposit", 900.0, "2024-01-25"),      # after today: ignored
+    ]
+    curve = bm.build_benchmark_curve(prices, flows, date(2024, 1, 1), today)
+    shadow = bm.build_shadow_portfolio(flows, prices, today)
+    assert curve[str(today)]["shadow_value"] == pytest.approx(shadow["shadow_ending_value"])

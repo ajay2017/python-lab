@@ -311,3 +311,52 @@ def test_account_money_fields_unlevered_and_nonpositive_equity():
     assert pos["call_distance_pct"] is None
     neg = account_money_fields(1000.0, -1500.0, 0.25)
     assert neg["net_equity"] == -500.0 and neg["leverage"] is None
+
+
+# ─── money_weighted_return flow window is (baseline, end] (C3b) ───────────────
+
+def _mwr_flow(flow_type, amount, flow_date):
+    return {"flow_type": flow_type, "amount": amount, "flow_date": flow_date}
+
+
+def test_mwr_deposit_on_baseline_date_is_excluded_not_double_counted():
+    from stock_analyzer.account import money_weighted_return
+    base = money_weighted_return(1000.0, "2024-01-01", 1100.0, "2024-03-01", [])
+    same_day = money_weighted_return(
+        1000.0, "2024-01-01", 1100.0, "2024-03-01",
+        [_mwr_flow("deposit", 500.0, "2024-01-01")])
+    assert same_day == base
+    assert same_day["net_flow"] == 0.0 and same_day["gain"] == pytest.approx(100.0)
+
+
+def test_mwr_withdrawal_on_baseline_date_is_excluded_too():
+    from stock_analyzer.account import money_weighted_return
+    base = money_weighted_return(1000.0, "2024-01-01", 1100.0, "2024-03-01", [])
+    assert money_weighted_return(
+        1000.0, "2024-01-01", 1100.0, "2024-03-01",
+        [_mwr_flow("withdrawal", 300.0, "2024-01-01")]) == base
+
+
+def test_mwr_flow_before_baseline_excluded():
+    from stock_analyzer.account import money_weighted_return
+    base = money_weighted_return(1000.0, "2024-01-01", 1100.0, "2024-03-01", [])
+    assert money_weighted_return(
+        1000.0, "2024-01-01", 1100.0, "2024-03-01",
+        [_mwr_flow("deposit", 500.0, "2023-12-31")]) == base
+
+
+def test_mwr_flow_the_day_after_baseline_and_on_end_date_are_counted():
+    from stock_analyzer.account import money_weighted_return
+    r = money_weighted_return(
+        1000.0, "2024-01-01", 1700.0, "2024-03-01",
+        [_mwr_flow("deposit", 500.0, "2024-01-02"), _mwr_flow("deposit", 100.0, "2024-03-01")])
+    assert r["net_flow"] == pytest.approx(600.0)
+    assert r["gain"] == pytest.approx(100.0)
+
+
+def test_mwr_flow_after_end_date_excluded():
+    from stock_analyzer.account import money_weighted_return
+    base = money_weighted_return(1000.0, "2024-01-01", 1100.0, "2024-03-01", [])
+    assert money_weighted_return(
+        1000.0, "2024-01-01", 1100.0, "2024-03-01",
+        [_mwr_flow("deposit", 500.0, "2024-03-02")]) == base

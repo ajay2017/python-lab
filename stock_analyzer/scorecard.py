@@ -833,7 +833,9 @@ def card_model(since, lev, tax) -> dict:
 
 def email_lines(since, lev, tax) -> list:
     """The plain lines of the Sunday email block (mockup section 5): fewer when a part
-    is unknown, and a warning in place of the gap when SPY is pending / unavailable."""
+    is unknown, a warning in place of the gap when SPY is pending / unavailable, and a
+    "couldn't be read this week" line when the leverage or tax part is offline (never a
+    silent drop)."""
     since = since if isinstance(since, dict) else _empty_since("offline")
     parts = _since_parts(since)
     asof = _asof(since, email=True)
@@ -861,6 +863,8 @@ def email_lines(since, lev, tax) -> list:
         elif st == "interest_gap":
             lines.append(f"Borrowed money, {label}: no net result yet (margin interest isn't "
                          "recorded for every month)")
+    elif st == "offline":
+        lines.append("Borrowed money: couldn't be read this week.")
 
     if _state(tax) == "ok" and _f(tax.get("tax_usd")) is not None:
         year = tax.get("tax_year")
@@ -870,4 +874,6 @@ def email_lines(since, lev, tax) -> list:
         else:
             lines.append(f"Tax already triggered by {year} sales: about "
                          f"{_usd0(_f(tax.get('tax_usd')))} (estimate; SPY would owe nothing yet)")
+    elif _state(tax) == "offline":
+        lines.append("Tax already triggered: couldn't be read this week.")
     return lines

@@ -54,6 +54,59 @@ def price_on_or_before(prices: dict[str, float], target: _date) -> float | None:
     return None
 
 
+def _flow_date(raw) -> _date | None:
+    try:
+        return _date.fromisoformat(str(raw)) if raw else None
+    except ValueError:
+        return None
+
+
+def _window_flows(flows: list[dict], last_day: _date) -> list[tuple[_date, str, float]]:
+    """The one place that decides which account_flows rows the shadow portfolio
+    invests, shared by build_shadow_portfolio and build_benchmark_curve so the KPI
+    and the chart can't diverge.
+
+    Returns [(flow_date, flow_type, signed_amount)] in input order. Window, matching
+    account.baseline_anchor + the (baseline, end] window of
+    account.money_weighted_return: when a baseline row exists, only the EARLIEST
+    baseline row is kept (the anchor; earliest flow_date as a string, first in the
+    list on a tie), plus deposit/withdrawal rows dated strictly after the anchor
+    date and on or before `last_day`. A flow ON the anchor date is already inside
+    the baseline amount; later baseline rows are ignored. An unreadable anchor
+    date leaves no lower bound to apply (only `last_day` is enforced). With NO
+    baseline row there is no anchor to window against, so every deposit/withdrawal
+    row is kept, as before (My Edge gates on a baseline before calling).
+    Non-positive / unparseable amounts, unreadable dates and unknown flow types
+    are skipped."""
+    baselines = [f for f in flows
+                 if str(f.get("flow_type") or "").strip().lower() == "baseline"]
+    anchor = (sorted(baselines, key=lambda f: str(f.get("flow_date") or ""))[0]
+              if baselines else None)
+    anchor_date = _flow_date(anchor.get("flow_date")) if anchor is not None else None
+
+    out: list[tuple[_date, str, float]] = []
+    for f in flows:
+        ftype = str(f.get("flow_type") or "").strip().lower()
+        if ftype not in ("baseline", "deposit", "withdrawal"):
+            continue
+        if anchor is not None and ftype == "baseline" and f is not anchor:
+            continue  # only the earliest baseline row is the anchor
+        try:
+            amount = float(f.get("amount") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if amount <= 0:
+            continue
+        fd = _flow_date(f.get("flow_date"))
+        if fd is None:
+            continue
+        if anchor is not None and ftype != "baseline":
+            if (anchor_date is not None and fd <= anchor_date) or fd > last_day:
+                continue
+        out.append((fd, ftype, amount if ftype != "withdrawal" else -amount))
+    return out
+
+
 def build_shadow_portfolio(
     flows: list[dict],
     prices: dict[str, float],
@@ -65,6 +118,15 @@ def build_shadow_portfolio(
 
     `flows` is the raw list from db.load_account_flows() — rows with
     flow_type in ('baseline', 'deposit', 'withdrawal').
+
+    Flow window, matching account.baseline_anchor + the (baseline, today]
+    window of account.money_weighted_return: when a baseline row exists, only
+    the EARLIEST baseline row is invested (the anchor), plus deposit/withdrawal
+    rows dated strictly after the anchor date and on or before `today`; later
+    baseline rows and any flow outside that window are ignored (a flow ON the
+    anchor date is already inside the baseline amount). When no baseline row
+    exists there is no anchor to window against, so every deposit/withdrawal row
+    is invested as before (My Edge gates on a baseline before calling this).
 
     Returns:
         shadow_ending_value  float | None  — current shadow portfolio value
@@ -79,26 +141,7 @@ def build_shadow_portfolio(
     total_units  = 0.0
     total_invested = 0.0
 
-    for f in flows:
-        ftype = str(f.get("flow_type") or "").strip().lower()
-        if ftype not in ("baseline", "deposit", "withdrawal"):
-            continue
-        try:
-            amount = float(f.get("amount") or 0.0)
-        except (TypeError, ValueError):
-            continue
-        if amount <= 0:
-            continue
-        signed = amount if ftype != "withdrawal" else -amount
-
-        fd_raw = f.get("flow_date")
-        try:
-            fd = _date.fromisoformat(str(fd_raw)) if fd_raw else None
-        except ValueError:
-            fd = None
-        if fd is None:
-            continue
-
+    for fd, ftype, signed in _window_flows(flows, today):
         fp = price_on_or_before(prices, fd)
         if fp is None or fp <= 0:
             continue
@@ -149,27 +192,12 @@ def build_benchmark_curve(
     if not base_price:
         return {}
 
-    # Pre-process flows into (date, signed_amount) pairs
-    valid_flows: list[tuple[_date, float]] = []
-    for f in flows:
-        ftype = str(f.get("flow_type") or "").strip().lower()
-        if ftype not in ("baseline", "deposit", "withdrawal"):
-            continue
-        try:
-            amount = float(f.get("amount") or 0.0)
-        except (TypeError, ValueError):
-            continue
-        if amount <= 0:
-            continue
-        fd_raw = f.get("flow_date")
-        try:
-            fd = _date.fromisoformat(str(fd_raw)) if fd_raw else None
-        except ValueError:
-            fd = None
-        if fd is None:
-            continue
-        signed = amount if ftype != "withdrawal" else -amount
-        valid_flows.append((fd, signed))
+    # (date, signed_amount) pairs, windowed by the same helper as the shadow KPI
+    # (anchor baseline, flows strictly after it; a flow still only enters the shadow
+    # from its own date onward, below).
+    valid_flows: list[tuple[_date, float]] = [
+        (fd, signed) for fd, _ftype, signed in _window_flows(flows, end)
+    ]
     valid_flows.sort(key=lambda x: x[0])
 
     result: dict[str, dict] = {}
@@ -224,8 +252,8 @@ def compute_shadow_mwr(
 ) -> dict | None:
     """
     Modified Dietz money-weighted return for the shadow portfolio,
-    using the same formula as account.money_weighted_return so the
-    two returns are directly comparable.
+    using the same formula (and the same (baseline_date, today] flow window)
+    as account.money_weighted_return so the two returns are directly comparable.
 
     Returns {period_return_pct, annualized_pct, days} or None.
     """
@@ -244,7 +272,9 @@ def compute_shadow_mwr(
             fd = _date.fromisoformat(str(fd_raw)) if fd_raw else None
         except ValueError:
             fd = None
-        if fd is None or fd < baseline_date or fd > today:
+        # (baseline_date, today]: a flow ON the baseline date is already inside
+        # baseline_value (same rule as account.money_weighted_return).
+        if fd is None or fd <= baseline_date or fd > today:
             continue
         try:
             amt = float(f.get("amount") or 0.0)

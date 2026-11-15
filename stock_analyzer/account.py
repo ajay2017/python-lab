@@ -284,7 +284,7 @@ def baseline_anchor(flows: list[dict]) -> dict | None:
 
 def money_weighted_return(baseline_value, baseline_date, ending_value, ending_date,
                           flows: list[dict], *, annualize_min_days: int = 30) -> dict | None:
-    """Modified Dietz money-weighted return over [baseline_date, ending_date].
+    """Modified Dietz money-weighted return over (baseline_date, ending_date].
 
     Why money-weighted (Modified Dietz), not daily TWR: a true time-weighted return
     needs the TOTAL account value at each sub-period boundary; we have daily EQUITY
@@ -295,7 +295,10 @@ def money_weighted_return(baseline_value, baseline_date, ending_value, ending_da
       R = (EMV − BMV − F) / (BMV + Σ Fᵢ·wᵢ),  wᵢ = (end − flowᵢ) / (end − start)
 
     `flows` are deposit/withdrawal rows ONLY (baseline is BMV, not a flow — exclude it;
-    this fn ignores any 'baseline' row defensively). Returns {days, net_flow, gain,
+    this fn ignores any 'baseline' row defensively). Only flows dated strictly
+    AFTER baseline_date and on or before ending_date count: a flow dated ON the
+    baseline date is already inside the baseline value, so counting it again would
+    double-count it. Returns {days, net_flow, gain,
     period_return_pct, annualized_pct (None until the period ≥ annualize_min_days —
     annualizing a few days is meaningless)} or None when not computable (missing
     inputs, bad dates, end before start, or a non-positive denominator)."""
@@ -313,10 +316,12 @@ def money_weighted_return(baseline_value, baseline_date, ending_value, ending_da
         if t not in ("deposit", "withdrawal"):
             continue  # baseline excluded; unknowns ignored, never guessed
         fd = _parse_date(f.get("flow_date"))
-        # Outside the tracking window → not part of THIS return. NB: a flow dated
-        # before the baseline still counts in NCC (v2) but not here — a definitional
-        # difference between net-contributions and period-return, not a bug.
-        if fd is None or fd < d0 or fd > d1:
+        # Outside the (d0, d1] tracking window → not part of THIS return. A flow ON
+        # d0 is already inside the baseline value (counting it would double-count
+        # it). NB: a flow dated on or before the baseline still counts in NCC (v2)
+        # but not here — a definitional difference between net-contributions and
+        # period-return, not a bug.
+        if fd is None or fd <= d0 or fd > d1:
             continue
         try:
             amt = float(f.get("amount") or 0.0)

@@ -819,8 +819,8 @@ def _two_point_account_return(
     separate change (Opus review, 2026-10-01). Flows are filtered to (d0,
     d1] — strictly after d0, because d0's own EOD snapshot already reflects
     a flow dated d0 itself; passing it to money_weighted_return too would
-    double-count it (that
-    function's own `fd < d0` check only excludes strictly-before dates)."""
+    double-count it. Since 2026-11-15 money_weighted_return itself uses the
+    same (d0, d1] window, so this pre-filter is redundant but harmless."""
     d0_rows = valid_df[valid_df["_d"] == d0]
     d1_rows = valid_df[valid_df["_d"] == d1]
     if d0_rows.empty or d1_rows.empty:
