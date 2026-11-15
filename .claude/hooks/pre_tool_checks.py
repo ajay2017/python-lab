@@ -1183,6 +1183,11 @@ _GATE_FILES = {
     # logged after the sync would be subtracted twice), so a wrong input here
     # mis-sizes every new buy in the app and in the emails.
     "stock_analyzer/effective_capital.py",
+    # Added 2026-11-15 (account scorecard C1, docs/plans/account-scorecard.md): the
+    # figure the owner reads before adding capital; its anchor / flow-window / end-row
+    # rules are data-integrity rules built on account.py, account_row_trust.py and
+    # period_inputs.py.
+    "stock_analyzer/scorecard.py",
     # Added 2026-09-15 (beta-repair Phase 2): the beta card's lever
     # arithmetic (trim/swap/add dollar targets, relief-per-dollar ranking,
     # margin/leverage side-effect) -- a recommendation-formula module per

@@ -156,3 +156,19 @@ Overrides §4 where they differ. Lead spot-checked the two load-bearing claims (
 - Account row: one that passes the mask but has a pre-16:00 cash read (searches back).
 - Leverage verdict: an interest-gap month (unknown); the verdict sign flipping after the spread.
 - Tax: an ST gain with an LT loss; Unknown-term rows; Dec 31 vs Jan 2 ET.
+
+## 9. C1 review log and notes carried to C2/C3
+
+- **C1 round 1 (Opus 5.5 reviewer): FIX-FIRST, 1 blocking.** `leverage_verdict` ignored position-days the engine dropped (`recon["unpriced"]`, `recon["journal_inconsistent"]`, `d1_short_of_period_end`), so it could print paid / cost on incomplete figures.
+  - Fix: a new "incomplete" state with no verdict, plus a pure `leverage_window()` so callers load engine inputs over the right span.
+  - Non-blocking items also applied: offline when `trades_df` is None; accurate left-out reasons; a net that rounds to $0 reads too close; the unknown-term tax count split; both tax rates read from the tax dict; a named 5-day SPY look-back; holiday and DST tests.
+- **For C2 (app.py):**
+  - Every money string carries raw `$`. Escape it through the existing `md=True` / `safe_html` path, or `$…$` pairs render as LaTeX.
+  - `_cached_spy` has a 30-minute TTL. Key or refresh the SPY read on the latest account-row date, so a pre-16:00 fetch can't serve an intraday price as that day's close.
+  - Build the leverage inputs with `period_inputs.load_engine_inputs(db, *leverage_window(...))`.
+- **For C3 (cron):** same `leverage_window` rule. The debrief's own engine inputs are week-scoped and must not be reused for the leverage line.
+- **For C4 (docs):** CLAUDE.md's `_GATE_FILES` count goes 92 → 93.
+- **C1 round 2 (Opus 5.5 reviewer, confirming): SHIP, 0 blocking.** Non-blocking follow-ups, to take with C2 (each needs its own review because `scorecard.py` is a gate file):
+  - The `start_uncovered` caption names the wrong cause when `pre_coverage_reason` is `no_valid_end_record` / `no_end_record_yet`. The verdict is still withheld; choose the clause from `pre_coverage_reason`.
+  - A masked or invalid Sep 30 (October's d0) leaves windows starting Oct 1 permanently `incomplete`. That fails safe and is disclosed. Possible refinement: start at the first month whose d0 is valid.
+  - Nested parentheses in the left-out info line when the `account_row_trust` reason has its own parentheses. Check it in the C2 screenshot.
