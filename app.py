@@ -116,6 +116,9 @@ from stock_analyzer import pending_import_verdict
 from stock_analyzer import journal_match_view
 from stock_analyzer import report_display as _rdisp   # not `_rd`: app.py reuses `_rd` as a local (regime rows)
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
+from stock_analyzer.constants import BROKER_FRAME_PAIR_MAX_MINUTES
+from stock_analyzer import broker_frame as _broker_frame
+from stock_analyzer import broker_frame_view as _broker_frame_view
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
 # writer cannot silently disarm the imported-trade repair.
@@ -40227,6 +40230,28 @@ elif page == "💰 Account":
                         lambda v: _m(f"${v:,.0f}"))
                     if _acct_unk is not None:
                         st.caption("ℹ️ " + _acct_unk.replace("$", "\\$"))
+            # U7 C2 (shadow): net capital from Robinhood's own positions beside
+            # the journal figure, ~5 trading days before C3 wires it into sizing.
+            # DISPLAY ONLY: one read per number (this page's _acct / _acc_pdf /
+            # holdings_df), no session_state write, every decision in
+            # broker_frame / broker_frame_view.
+            try:
+                _bf_frame = _broker_frame.broker_frame(
+                    db.load_broker_position_snapshot(), _acct,
+                    st.session_state.get("holdings_df"),
+                    dict(zip(_acc_pdf["Ticker"], _acc_pdf["Price"])),
+                    _now_et(), pair_max_minutes=BROKER_FRAME_PAIR_MAX_MINUTES)
+                _bf_view = _broker_frame_view.shadow_lines(
+                    _bf_frame, _total_acct,
+                    mask=st.session_state.get("_privacy", True),
+                    cash_note=_acct.get("note"))
+                st.caption(_bf_view["caption"])
+                if _bf_view["detail_rows"]:
+                    with st.expander(_bf_view["detail_title"]):
+                        st.dataframe(pd.DataFrame(_bf_view["detail_rows"]),
+                                     hide_index=True, width="stretch")
+            except Exception:  # noqa: BLE001 - a shadow readout must never break the page
+                st.caption("🧪 Net capital check unavailable right now")
             if _levered:
                 st.caption(
                     f"⚖️ **Margin debit \\${abs(_cash):,.0f}** — you hold \\${_equity:,.0f} of stock on "
@@ -45693,6 +45718,8 @@ On the 💰 Account page, enter your **Net cash / margin ($)**:
 - A **positive** number = uninvested cash you own.
 - A **negative** number = a **margin debit** (you've borrowed to hold more stock than your cash covers). The app handles this correctly — your Total, Growth, and Return all subtract the loan.
 - **Don't enter "margin available"** — that's borrowing *capacity*, not money you own.
+
+Under the cash figures, a **🧪 Net capital check (shadow)** line shows your net capital two ways: from your journal (the Total Account Value above) and from Robinhood's own positions saved in the same sync as the cash. When they differ, an expander names each ticker and how many shares each side holds. A sell Robinhood has filled but that isn't in your journal yet makes the journal figure read too high; the plan is to size new buys from the lower of the two. For now it is **shown only, never used for sizing**, so the gaps it finds can be checked first.
 
 Once set, the page shows **Total Account Value** (equity + net cash), **Cash %**, and **true concentration** — each holding as a % of your *whole account*, not just your invested stocks (so a name looks as big as it really is relative to all your money).
 
