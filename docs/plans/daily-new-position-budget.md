@@ -145,4 +145,4 @@ DB first-writer-wins / weekend drop / read-only no-op / None vs empty; `daily_bu
 ## Accepted limits (disclose in docs)
 A buy made from the app screen and not logged isn't counted (status line says it counts "what was emailed and what you've
 logged"). Prices drift after an email: allocated dollars reflect email-time price while the shown share count is locked.
-F-255's own per-name cap has the same net-capital lag (separate decision; not fixed here).
+F-255's own per-name cap has the same net-capital lag (separate decision; not fixed here). **Closed 2026-11-15 by U7 C3** (`docs/plans/net-capital-broker-frame-c3-spec.md`) whenever Robinhood's positions snapshot is paired with the cash record: F-255's net capital is the lower of the journal figure and the snapshot's, so a BUY logged after the sync lowers it by its cost; unpaired or uncompared, the lag remains and the status line says the sizes weren't cross-checked.

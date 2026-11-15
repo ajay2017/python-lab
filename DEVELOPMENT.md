@@ -200,7 +200,7 @@ scheduled lanes may create one). Then set each check to Schedule **Cron**, time 
 | `drishta-eod` | `30 21 * * 1-5` | 1 hour |
 | `drishta-broker` | `15 16,21 * * *` | 1 hour |
 | `drishta-thesis` | `0 23 * * 0` | 2 hours |
-| `drishta-maintenance` | `0 12 * * 6` (confirm in the Railway dashboard) | 2 hours |
+| `drishta-maintenance` | `0 12 * * 6` (weekly, Sat 12:00 UTC = 7:00 AM ET; pings 11-07 and 11-14 arrived ~12:03 UTC; healthchecks schedule saved by the owner 2026-11-15) | 2 hours |
 
 These must match the Railway services' Cron Schedules (`docs/architecture.md` lane
 table); change both together. Skip runs (weekends, holidays, the unused DST slot)
