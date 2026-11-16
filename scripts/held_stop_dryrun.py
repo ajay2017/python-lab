@@ -68,10 +68,34 @@ Modes:
                      with no explicit `--trail-start` each trip's trail_start is
                      its entry date (isolates the anchor's contribution) and c is
                      not computed (c == a when trail_start <= entry).
+  --floor            (C3c-2, docs/plans/held-stop-floor-c3c-spec.md section 10 item 2)
+                     the persisted-floor dry run, per holding, using the PRODUCTION
+                     policy (held_stop_wiring._policy: trail_start = HELD_TRAIL_START;
+                     an explicit --trail-start overrides). Replays the EOD writer over
+                     the last `--floor-sessions` sessions (default 20): each session the
+                     full-basis result on the long frame goes through
+                     held_stop_floor.apply_floor with the rows saved so far, then
+                     rows_to_write; the rows live in memory only (the table stands in).
+                     Then today, on the long frame vs the bundle-only fallback frame
+                     (6-month bundle, basis forced to partial like the driver), each
+                     unfloored and floored with the replayed rows. Reports binds on the
+                     full frame (full-day delta = saved - computed, replay and today)
+                     and on the fallback; NEWLY_BREACHED_ON_FALLBACK (floored fallback
+                     stop breached by the price, unfloored not; the app's
+                     is_stop_breached); the close-check drift of the REF session and
+                     the BIND session reported separately against
+                     HELD_STOP_FLOOR_CLOSE_TOL_PCT (read at call time) with the bind
+                     bar's age; the floor state on each frame; U8 = names whose long
+                     frame is permanently partial (never get a floor). `--bundle-start
+                     YYYY-MM-DD` truncates the fallback frame to start on that date
+                     (simulates a later rollover). Excludes --today / --replay. CSV =
+                     one "today" row per holding plus one "replay" row per replayed
+                     session. Read-only: no DB write, no LLM, no new outbound call.
   --csv PATH         row-level data.   --tickers A,B  --since YYYY-MM-DD
 
 Usage:
     python scripts/held_stop_dryrun.py --today --live
+    python scripts/held_stop_dryrun.py --floor --bundle-start 2026-06-24 --csv floor.csv
     python scripts/held_stop_dryrun.py --replay --csv replay.csv
     python scripts/held_stop_dryrun.py --today --trail-start 2026-10-15 --mults 3.0,3.5 --detail
 
@@ -128,7 +152,10 @@ import pandas as pd  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # sibling scripts (exit_ladder_replay)
 
+from stock_analyzer import constants as _C  # noqa: E402
 from stock_analyzer import held_stop as hs  # noqa: E402
+from stock_analyzer import held_stop_floor as hsf  # noqa: E402
+from stock_analyzer import held_stop_wiring as hsw  # noqa: E402
 from stock_analyzer import portfolio, risk  # noqa: E402
 from stock_analyzer.act_today_precedence import is_stop_breached  # noqa: E402
 from stock_analyzer.constants import (  # noqa: E402
@@ -920,6 +947,465 @@ def run_replay(args, trades) -> list[dict]:
     return out
 
 
+# -- floor mode (finding #26 C3c-2) -------------------------------------------
+# The persisted-floor dry run. Pure parts (frames in, dicts out) first, then the
+# I/O edge `run_floor`. Everything here is read-only: the "saved rows" are a dict
+# in memory standing in for the held_stop_floors table.
+
+FLOOR_SESSIONS_DEFAULT = 20   # replay depth: a report window, not a gate
+
+
+def truncate_frame(df, start):
+    """Bars whose ET session date >= `start` (the rolled 6-month bundle of a later
+    day). `start` None, or an empty frame: returned unchanged."""
+    if start is None or df is None or len(df) == 0:
+        return df
+    return df[hs._et_dates(df.index) >= pd.Timestamp(start)]
+
+
+def _iso_date(v):
+    """date / datetime / Timestamp / ISO string -> date; None when missing or bad."""
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(v, "date") and callable(v.date):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except ValueError:
+        return None
+
+
+def _usable(df) -> bool:
+    return (isinstance(df, pd.DataFrame) and len(df) > 0
+            and all(c in df.columns for c in ("High", "Low", "Close")))
+
+
+def replay_dates(frame, ep, as_of: date, n: int) -> list:
+    """The last `n` completed-session dates D of `frame` with D > max(episode start,
+    last BUY) and D < as_of: the sessions whose EOD run would have written a row
+    under TODAY's fingerprint (an earlier session, before the last add, would
+    carry a different average cost and be invalid today anyway)."""
+    marks = [d for d in (_iso_date((ep or {}).get("start")),
+                         _iso_date((ep or {}).get("last_buy"))) if d is not None]
+    if not marks or n < 1:
+        return []
+    after = max(marks)
+    bars = hs.completed_bars(frame, as_of)
+    ds = [i.date() for i in bars.index if i.date() > after]
+    return ds[-n:]
+
+
+def replay_writer(ticker, long_frame, ep, avg_cost, dates, pol):
+    """Replay the EOD writer over `dates`. Per session D: full-basis result on the
+    long frame as of D, wrapped like the driver (`held_stop_wiring._wrap`), through
+    `apply_floor` with the rows saved so far, then `rows_to_write` (fail closed:
+    only a result that went through apply_floor is written). Returns
+    ({episode_start date: row}, log). One log entry per session: as_of, basis,
+    floor_state, floor_reason, computed (the figure before the floor), stop (after),
+    delta (saved - computed when the floor bound, else 0.0), delta_pct (of the last
+    close), binding, wrote. Nothing is read from or written to a database."""
+    rows: dict = {}
+    log: list = []
+    for d in dates:
+        res = hs.compute_held_stop(long_frame, ep, avg_cost, d, **pol)
+        eff = hsf.apply_floor(hsw._wrap(ticker, res, "", avg_cost, ep=ep), rows, ep=ep,
+                              avg_cost=avg_cost, frame=long_frame, as_of=d, readable=True)
+        written = hsf.rows_to_write({ticker: eff}, d)
+        fl = eff["floor"]
+        computed = fl.get("computed")
+        bound = fl["state"] == hsf.APPLIED and eff.get("stop") is not None and computed is not None
+        delta = round(eff["stop"] - computed, 2) if bound else 0.0
+        lc = _f(eff.get("last_close"))
+        log.append({"as_of": d, "basis": eff.get("basis"), "floor_state": fl["state"],
+                    "floor_reason": fl.get("reason", ""), "computed": computed,
+                    "stop": eff.get("stop"), "delta": delta,
+                    "delta_pct": (delta / lc * 100) if lc else None,
+                    "binding": eff.get("binding"), "wrote": bool(written)})
+        for r in written:
+            rows[_iso_date(r["episode_start"])] = r
+    return rows, log
+
+
+def close_drift(row, frame, as_of: date, *, tol_pct: float, long_frame=None) -> dict:
+    """The close check of `held_stop_floor.verify_closes`, reported per session and
+    SEPARATELY for the REF session and the BIND session of the saved `row`, against
+    `frame` (the frame today's result came from). Per session (prefix ref_ / bind_):
+    session, saved_close, frame_close, drift_pct (signed, frame vs saved), status,
+    age_sessions. status: within / over (|drift| above `tol_pct`, the verify_closes
+    arithmetic) / outside_frame (before the frame's first bar or after its last:
+    verify_closes skips it) / missing (inside the span but absent: verify_closes
+    FAILS) / no_row / no_data / no_frame. age_sessions = completed sessions after
+    that bar in `long_frame` (0 = the last completed session); None when unknown."""
+    try:
+        bars = hs.completed_bars(frame, as_of)
+    except Exception:
+        bars = pd.DataFrame(columns=["Open", "High", "Low", "Close"])
+    lbars = hs.completed_bars(long_frame, as_of) if long_frame is not None else None
+    out: dict = {}
+    for name in ("ref", "bind"):
+        sess = _iso_date(row.get(f"{name}_session")) if row else None
+        saved = _f(row.get(f"{name}_close")) if row else None
+        d = {f"{name}_session": sess, f"{name}_saved_close": saved,
+             f"{name}_frame_close": None, f"{name}_drift_pct": None,
+             f"{name}_status": "no_row", f"{name}_age_sessions": None}
+        if row:
+            ts = pd.Timestamp(sess) if sess is not None else None
+            if lbars is not None and ts is not None and ts in lbars.index:
+                d[f"{name}_age_sessions"] = int((lbars.index > ts).sum())
+            if sess is None or saved is None or saved <= 0:
+                d[f"{name}_status"] = "no_data"
+            elif len(bars) == 0:
+                d[f"{name}_status"] = "no_frame"
+            elif ts < bars.index[0] or ts > bars.index[-1]:
+                d[f"{name}_status"] = "outside_frame"
+            elif ts not in bars.index or _f(bars["Close"].loc[ts]) is None:
+                d[f"{name}_status"] = "missing"
+            else:
+                got = _f(bars["Close"].loc[ts])
+                d[f"{name}_frame_close"] = got
+                d[f"{name}_drift_pct"] = (got / saved - 1.0) * 100.0
+                d[f"{name}_status"] = ("over" if abs(got - saved) * 100.0 > float(tol_pct) * saved
+                                       else "within")
+        out.update(d)
+    return out
+
+
+def _anchor_cover_start(long_frame, ep, as_of: date):
+    """The first bar the frame must contain to keep the entry anchor: the bar
+    `HELD_STOP_WARMUP_BARS` completed sessions before the episode start (C1's ATR
+    origin). A fallback frame whose first bar is LATER loses the anchor. None when
+    the long frame itself doesn't reach back that far (permanently partial)."""
+    start = _iso_date((ep or {}).get("start"))
+    if start is None:
+        return None
+    bars = hs.completed_bars(long_frame, as_of)
+    origin = int(bars.index.searchsorted(pd.Timestamp(start))) - int(HELD_STOP_WARMUP_BARS)
+    return bars.index[origin].date() if 0 <= origin < len(bars) else None
+
+
+def _stop_delta(un, fl):
+    a, b = (un or {}).get("stop"), (fl or {}).get("stop")
+    return round(b - a, 2) if a is not None and b is not None else None
+
+
+def floor_row(ticker, shares, avg_cost, ep, long_frame, bundle_frame, as_of: date, pol, *,
+              sessions=FLOOR_SESSIONS_DEFAULT, bundle_start=None, live_price=None) -> dict:
+    """Everything the floor dry run says about ONE holding (frames in, dict out; no
+    network). Keys are flat (CSV-ready) except `replay_log`. See the module
+    docstring's --floor entry for the definitions."""
+    tol = float(_C.HELD_STOP_FLOOR_CLOSE_TOL_PCT)         # read at call time
+    ep = ep or {}
+    raw = _raw_bars(long_frame, as_of)
+    latest_close = _f(raw["Close"].iloc[-1]) if len(raw) else None
+    price = live_price if live_price else latest_close
+    start = _iso_date(ep.get("start"))
+    out = {"ticker": ticker, "shares": shares, "avg_cost": avg_cost, "as_of": as_of,
+           "episode_status": ep.get("status"), "episode_start": start,
+           "last_buy": _iso_date(ep.get("last_buy")),
+           "price": price, "price_basis": "live" if live_price else "latest_bar",
+           "tol_pct": tol, "bundle_start": bundle_start, "flags": [], "no_floor": "",
+           "u8_permanently_partial": False, "replay_log": []}
+    if ep.get("status") != "ok" or start is None:
+        out["no_floor"] = f"no usable episode ({ep.get('status')}: {ep.get('reason')})"
+        out["flags"].append("NO_FLOOR_NO_EPISODE")
+        return out
+    if start >= as_of:
+        out["no_floor"] = "bought today (buy_day basis, no floor)"
+        return out
+
+    # replay the writer over the long frame
+    dates = replay_dates(long_frame, ep, as_of, int(sessions))
+    rows, log = replay_writer(ticker, long_frame, ep, avg_cost, dates, pol)
+    binds = [e for e in log if e["floor_state"] == hsf.APPLIED and e["basis"] == "full"
+             and e["delta"] > 0]
+    out.update({
+        "replay_sessions": len(log),
+        "replay_full_days": sum(1 for e in log if e["basis"] == "full"),
+        "replay_rows_written": sum(1 for e in log if e["wrote"]),
+        "full_day_binds": len(binds),
+        "full_day_max_delta": max((e["delta"] for e in binds), default=0.0),
+        "full_day_max_delta_pct": max((e["delta_pct"] or 0.0 for e in binds), default=0.0),
+        "full_day_binds_detail": "; ".join(f"{e['as_of']} +{e['delta']:.2f}" for e in binds),
+        "replay_log": log,
+    })
+    saved = rows.get(start)
+    out["saved_row_as_of"] = _iso_date(saved.get("as_of")) if saved else None
+    out["saved_row_stop"] = saved.get("stop") if saved else None
+    out["saved_row_binding"] = saved.get("binding") if saved else None
+    out["anchor_cover_start"] = _anchor_cover_start(long_frame, ep, as_of)
+
+    # today on the long frame: unfloored vs floored by the replayed rows
+    full_raw = hs.compute_held_stop(long_frame, ep, avg_cost, as_of, **pol)
+    full_un = hsw._wrap(ticker, full_raw, "", avg_cost, ep=ep)
+    full_fl = hsf.apply_floor(full_un, rows, ep=ep, avg_cost=avg_cost, frame=long_frame,
+                              as_of=as_of, readable=True)
+    out.update({
+        "full_basis": full_un["basis"], "full_reason": full_raw.get("reason", ""),
+        "full_stop": full_un["stop"], "full_binding": full_un["binding"],
+        "full_floor_state": full_fl["floor"]["state"],
+        "full_floor_reason": full_fl["floor"].get("reason", ""),
+        "full_floored_stop": full_fl["stop"], "full_delta": _stop_delta(full_un, full_fl),
+    })
+    out["u8_permanently_partial"] = bool(log) and not out["replay_full_days"] \
+        and full_un["basis"] == "partial"
+
+    # today on the bundle-only fallback frame (basis forced to partial like _one)
+    fb_frame = truncate_frame(bundle_frame, bundle_start)
+    bars_fb = hs.completed_bars(fb_frame, as_of) if _usable(fb_frame) else None
+    out["fallback_first_bar"] = (bars_fb.index[0].date()
+                                 if bars_fb is not None and len(bars_fb) else None)
+    if not _usable(fb_frame):
+        out["fb_basis"] = "no_fallback_frame"
+    else:
+        res = hs.compute_held_stop(fb_frame, ep, avg_cost, as_of, **pol)
+        if res["basis"] == "full":
+            res = {**res, "basis": "partial"}
+        fb_un = hsw._wrap(ticker, res, "", avg_cost, fell_back=True, ep=ep)
+        fb_fl = hsf.apply_floor(fb_un, rows, ep=ep, avg_cost=avg_cost, frame=fb_frame,
+                                as_of=as_of, readable=True)
+        out.update({
+            "fb_basis": fb_un["basis"], "fb_reason": res.get("reason", ""),
+            "fb_stop": fb_un["stop"], "fb_binding": fb_un["binding"],
+            "fb_floor_state": fb_fl["floor"]["state"],
+            "fb_floor_reason": fb_fl["floor"].get("reason", ""),
+            "fb_floored_stop": fb_fl["stop"], "fb_floored_binding": fb_fl["binding"],
+            "fb_delta": _stop_delta(fb_un, fb_fl),
+            "fb_drop_vs_full": (round(full_un["stop"] - fb_un["stop"], 2)
+                                if full_un["stop"] is not None and fb_un["stop"] is not None
+                                else None),
+            "fb_anchor_lost": bool((full_un.get("components") or {}).get("entry") is not None
+                                   and (fb_un.get("components") or {}).get("entry") is None),
+        })
+        if fb_fl["floor"]["state"] == hsf.INVALID:
+            out["flags"].append("FLOOR_INVALID_ON_FALLBACK")
+        if out["fb_anchor_lost"]:
+            out["flags"].append("ANCHOR_LOST_ON_FALLBACK")
+        if (out["fb_delta"] or 0) > 0:
+            out["flags"].append("FLOOR_BINDS_FALLBACK")
+        if price and fb_un["stop"] is not None:
+            out["fb_breached_unfloored"] = bool(is_stop_breached(price, fb_un["stop"]))
+        if price and fb_fl["stop"] is not None:
+            out["fb_breached_floored"] = bool(is_stop_breached(price, fb_fl["stop"]))
+        if out.get("fb_breached_floored") and out.get("fb_breached_unfloored") is False:
+            out["flags"].append("NEWLY_BREACHED_ON_FALLBACK")
+    if full_fl["floor"]["state"] == hsf.INVALID:
+        out["flags"].append("FLOOR_INVALID_ON_FULL")
+    if (out["full_delta"] or 0) > 0:
+        out["flags"].append("FLOOR_BINDS_FULL_TODAY")
+    if out["full_day_binds"]:
+        out["flags"].append("FLOOR_BOUND_ON_FULL_DAYS")
+    if out["u8_permanently_partial"]:
+        out["flags"].append("U8_PERMANENTLY_PARTIAL")
+
+    # close-check drift of the saved row against the FALLBACK frame (ref / bind apart)
+    drift = close_drift(saved, fb_frame if _usable(fb_frame) else None, as_of, tol_pct=tol,
+                        long_frame=long_frame)
+    out.update(drift)
+    for name in ("ref", "bind"):
+        if drift[f"{name}_status"] == "over":
+            out["flags"].append(f"DRIFT_OVER_TOL_{name.upper()}")
+    return out
+
+
+def summarize_floor(rows: list[dict]) -> dict:
+    """Counts over the floor rows: binds on full days (replay) and today on each
+    frame, NEWLY_BREACHED_ON_FALLBACK names, floor states per frame, the close-check
+    drift of the ref and the bind session (status counts, max |drift|, the bind
+    ages), U8 names and the names that can never get a floor."""
+    def drift_block(name):
+        sts = Counter(r.get(f"{name}_status") for r in rows
+                      if r.get(f"{name}_status") not in (None, "no_row"))
+        ds = [abs(r[f"{name}_drift_pct"]) for r in rows if r.get(f"{name}_drift_pct") is not None]
+        ages = [r[f"{name}_age_sessions"] for r in rows
+                if r.get(f"{name}_age_sessions") is not None]
+        return {"status": dict(sts), "over": sts.get("over", 0), "within": sts.get("within", 0),
+                "max_abs_drift_pct": max(ds) if ds else None, "ages": sorted(ages)}
+    floored = [r for r in rows if not r.get("no_floor")]
+    return {
+        "holdings": len(rows), "floor_possible": len(floored),
+        "full_day_binds_total": sum(r.get("full_day_binds", 0) for r in floored),
+        "full_day_binds_names": sorted(r["ticker"] for r in floored if r.get("full_day_binds")),
+        "full_day_max_delta": max((r.get("full_day_max_delta") or 0.0 for r in floored),
+                                  default=0.0),
+        "full_day_max_delta_pct": max((r.get("full_day_max_delta_pct") or 0.0 for r in floored),
+                                      default=0.0),
+        "full_binds_today": sorted(r["ticker"] for r in floored if (r.get("full_delta") or 0) > 0),
+        "fb_binds": sorted(r["ticker"] for r in floored if (r.get("fb_delta") or 0) > 0),
+        "fb_max_delta": max((r.get("fb_delta") or 0.0 for r in floored), default=0.0),
+        "newly_breached": sorted(r["ticker"] for r in floored
+                                 if "NEWLY_BREACHED_ON_FALLBACK" in r["flags"]),
+        "anchor_lost": sorted(r["ticker"] for r in floored if r.get("fb_anchor_lost")),
+        "full_states": dict(Counter(r.get("full_floor_state") for r in floored)),
+        "fb_states": dict(Counter(r.get("fb_floor_state") for r in floored
+                                  if r.get("fb_floor_state"))),
+        "ref": drift_block("ref"), "bind": drift_block("bind"),
+        "u8": sorted(r["ticker"] for r in rows if r.get("u8_permanently_partial")),
+        "no_floor": sorted((r["ticker"], r["no_floor"]) for r in rows if r.get("no_floor")),
+    }
+
+
+def flatten_floor(rows: list[dict]) -> list[dict]:
+    """CSV rows: one `today` row per holding (every scalar column, flags joined with
+    |) then one `replay` row per replayed session."""
+    out = []
+    for r in rows:
+        base = {k: v for k, v in r.items() if k != "replay_log"}
+        out.append({"record": "today", **base, "flags": "|".join(r["flags"])})
+    for r in rows:
+        for e in r.get("replay_log") or []:
+            out.append({"record": "replay", "ticker": r["ticker"], **e})
+    return out
+
+
+def print_floor_header(args, n_holdings: int, pol: dict) -> None:
+    print("=== HELD-STOP FLOOR DRY RUN (finding #26, C3c-2; read-only) ===")
+    print(f"as_of={args.as_of}  holdings={n_holdings}  replay sessions={args.floor_sessions}  "
+          f"bundle-start={args.bundle_start or 'none (the live 6-month bundle as fetched)'}")
+    print(f"policy = production (held_stop_wiring._policy): trail_start={pol['trail_start']}"
+          f"{' (explicit --trail-start)' if args.trail_start_explicit else ' (HELD_TRAIL_START)'}; "
+          f"close-check tolerance HELD_STOP_FLOOR_CLOSE_TOL_PCT="
+          f"{float(_C.HELD_STOP_FLOOR_CLOSE_TOL_PCT)}%")
+    print("price basis: "
+          + ("live price" if args.live else "latest bar Close incl. today (raw long frame)"))
+    print("replay: per session D (D > max(episode start, last BUY), D < as_of): the full-basis "
+          "result on the long frame as of D -> apply_floor(rows saved so far) -> rows_to_write; "
+          "rows live in memory only. Today's average cost / episode are used for every D "
+          "(the fingerprint a real row would carry), and the long frame is today's fetch "
+          "(a tick Yahoo later revises can't show up here).")
+    print("fallback = the 6-month bundle (dividend-ADJUSTED, so past closes drift) with basis "
+          "forced to partial, as the driver does; floor delta = effective stop - the stop "
+          "before the floor; breach = is_stop_breached(price, stop).")
+    print("U8 = names whose long frame is partial on every replayed session: they never get "
+          "a floor.")
+    print()
+
+
+def _yn(v) -> str:
+    return "-" if v is None else ("YES" if v else "no")
+
+
+def _drift_text(r: dict, name: str) -> str:
+    st = r.get(f"{name}_status")
+    if st in (None, "no_row"):
+        return f"{name}: no saved row"
+    base = (f"{name} {r.get(f'{name}_session')} saved {_fmt(r.get(f'{name}_saved_close'))} "
+            f"frame {_fmt(r.get(f'{name}_frame_close'))}")
+    if r.get(f"{name}_drift_pct") is not None:
+        base += f" drift {r[f'{name}_drift_pct']:+.3f}% vs tol {r['tol_pct']:g}% -> {st.upper()}"
+    else:
+        base += f" -> {st.upper()}"
+    age = r.get(f"{name}_age_sessions")
+    return base + (f", {age} session(s) old" if age is not None else "")
+
+
+def print_floor(rows: list[dict]) -> None:
+    for r in rows:
+        print(f"\n{r['ticker']}  {r['shares']:g} sh @ {_fmt(r['avg_cost'])}  episode "
+              f"{r['episode_status']} start={r['episode_start']} last_buy={r['last_buy']}  "
+              f"price({r['price_basis']})={_fmt(r['price'])}")
+        if r["no_floor"]:
+            print(f"  no floor possible: {r['no_floor']}")
+            continue
+        print(f"  replay: {r['replay_sessions']} sessions, {r['replay_full_days']} full, "
+              f"{r['replay_rows_written']} rows written; floor bound on full days: "
+              f"{r['full_day_binds']}x"
+              + (f" (max delta {r['full_day_max_delta']:.2f} = {r['full_day_max_delta_pct']:.3f}% "
+                 f"of price; {r['full_day_binds_detail']})" if r["full_day_binds"] else ""))
+        print(f"  saved row: as_of={r['saved_row_as_of']} stop={_fmt(r['saved_row_stop'])} "
+              f"binding={r['saved_row_binding']}")
+        print(f"  FULL     basis={r['full_basis']} stop={_fmt(r['full_stop'])} -> floored "
+              f"{_fmt(r['full_floored_stop'])} (delta {_fmt(r['full_delta'])}) floor="
+              f"{r['full_floor_state']}"
+              f"{' [' + r['full_floor_reason'] + ']' if r['full_floor_reason'] else ''}"
+              f"{'  (' + r['full_reason'] + ')' if r['full_basis'] != 'full' and r['full_reason'] else ''}")
+        if r.get("fb_basis") == "no_fallback_frame":
+            print("  FALLBACK no usable bundle frame (empty after --bundle-start?)")
+        else:
+            print(f"  FALLBACK first bar {r['fallback_first_bar']} (anchor needs a bar on/before "
+                  f"{r['anchor_cover_start']}{', LOST' if r['fb_anchor_lost'] else ''}) "
+                  f"basis={r['fb_basis']} stop={_fmt(r['fb_stop'])} -> floored "
+                  f"{_fmt(r['fb_floored_stop'])} (delta {_fmt(r['fb_delta'])}; fallback is "
+                  f"{_fmt(r['fb_drop_vs_full'])} below the full stop) floor={r['fb_floor_state']}"
+                  f"{' [' + r['fb_floor_reason'] + ']' if r['fb_floor_reason'] else ''}")
+            print(f"  breach at price: unfloored fallback {_yn(r.get('fb_breached_unfloored'))}, "
+                  f"floored fallback {_yn(r.get('fb_breached_floored'))}")
+            print(f"  close-check: {_drift_text(r, 'ref')}")
+            print(f"               {_drift_text(r, 'bind')}")
+        if r["u8_permanently_partial"]:
+            print(f"  U8: long frame is PERMANENTLY partial -> never gets a floor "
+                  f"({r['full_reason']})")
+        if r["flags"]:
+            print(f"  FLAGS: {' '.join(r['flags'])}")
+
+
+def print_floor_summary(s: dict, tol: float) -> None:
+    print(f"\n=== FLOOR SUMMARY ({s['holdings']} holdings, {s['floor_possible']} can have a floor) ===")
+    print(f"  full-day binds (replay): {s['full_day_binds_total']} bind(s) on "
+          f"{s['full_day_binds_names']}; max delta {s['full_day_max_delta']:.2f} "
+          f"({s['full_day_max_delta_pct']:.3f}% of price)  <- expected: cents only")
+    print(f"  binds TODAY: full frame {s['full_binds_today']}; fallback frame {s['fb_binds']} "
+          f"(max delta {s['fb_max_delta']:.2f})")
+    print(f"  NEWLY_BREACHED_ON_FALLBACK: {len(s['newly_breached'])} {s['newly_breached']}")
+    print(f"  entry anchor lost on the fallback frame: {s['anchor_lost']}")
+    print(f"  floor state, full frame: {s['full_states']}; fallback frame: {s['fb_states']}")
+    print(f"  CLOSE-CHECK DRIFT vs HELD_STOP_FLOOR_CLOSE_TOL_PCT = {tol:g}%  "
+          "(fallback frame, today):")
+    for name, label in (("ref", "REF session "), ("bind", "BIND session")):
+        d = s[name]
+        print(f"    {label}: {d['over']} OVER tolerance, {d['within']} within; "
+              f"statuses {d['status']}; max |drift| {_fmt(d['max_abs_drift_pct'], 3)}%"
+              + (f"; bar ages (sessions) {d['ages']}" if name == "bind" else ""))
+    print(f"  U8, permanently partial (never get a floor): {s['u8'] or 'none'}")
+    if s["no_floor"]:
+        print("  no floor possible: " + "; ".join(f"{t} ({why})" for t, why in s["no_floor"]))
+
+
+def run_floor(args, holdings, trades):
+    """(rows, skipped[(ticker, reason)]). The only network use is what today mode
+    already makes: the long Yahoo history, the 6-month bundle, and (--live) live
+    prices."""
+    from stock_analyzer import data
+    pol = hsw._policy()
+    if args.trail_start_explicit:
+        pol = {**pol, "trail_start": args.trail_start}
+    rows, skipped = [], []
+    live = {}
+    if args.live and len(holdings):
+        try:
+            live = data.fetch_live_prices([str(t).upper() for t in holdings["Ticker"]]) or {}
+        except Exception as e:
+            print(f"live prices failed ({e}); falling back to the latest bar")
+    for _, h in holdings.iterrows():
+        t = str(h["Ticker"]).upper()
+        if args.tickers and t not in args.tickers:
+            continue
+        shares, avg = float(h["Shares"]), float(h["Avg Cost ($)"])
+        ep = hs.episode_from_journal(t, trades, shares, shares_tol=SHARES_TOL)
+        try:
+            start = _iso_date(ep.get("start"))
+            long_df = f6 = None
+            if ep.get("status") == "ok" and start is not None and start < args.as_of:
+                long_df = _long_for(t, ep.get("start"), pol["trail_start"], args.as_of)
+                if long_df is None or not len(long_df):
+                    skipped.append((t, "no long history returned"))
+                    continue
+                f6 = data.fetch_ticker_bundle(t, "6mo").get("history")
+            lp = _f((live.get(t) or {}).get("price"))
+            rows.append(floor_row(t, shares, avg, ep, long_df, f6, args.as_of, pol,
+                                  sessions=args.floor_sessions,
+                                  bundle_start=args.bundle_start, live_price=lp))
+        except Exception as e:
+            skipped.append((t, f"{type(e).__name__}: {e}"))
+    return rows, skipped
+
+
 def _parse_date(s: str) -> date:
     return date.fromisoformat(s)
 
@@ -939,6 +1425,13 @@ def main(argv=None) -> int:
     ap.add_argument("--variant", default="c", help="variant in the compact today table")
     ap.add_argument("--detail", action="store_true", help="print per-cell blocks too")
     ap.add_argument("--ladder-period", default="2y", dest="ladder_period")
+    ap.add_argument("--floor", action="store_true",
+                    help="persisted-floor dry run (C3c-2); excludes --today / --replay")
+    ap.add_argument("--floor-sessions", type=int, default=FLOOR_SESSIONS_DEFAULT,
+                    dest="floor_sessions", help="floor mode: sessions of EOD writes to replay")
+    ap.add_argument("--bundle-start", default="", dest="bundle_start",
+                    help="floor mode: truncate the fallback (6-month bundle) frame to start "
+                         "on this ET date, to simulate a later rollover")
     args = ap.parse_args(argv)
 
     from stock_analyzer.market_time import today_et
@@ -952,8 +1445,19 @@ def main(argv=None) -> int:
     args.replay_variants = tuple(v for v in args.replay_variants.split(",") if v in VARIANTS) or ("a",)
     if args.variant not in VARIANTS:
         args.variant = "c"
-    do_today = args.today or not args.replay
-    if do_today and args.as_of != today_et():
+    args.bundle_start = _parse_date(args.bundle_start) if args.bundle_start else None
+    if args.floor and (args.today or args.replay):
+        print("--floor is its own mode: don't combine it with --today / --replay.")
+        return 2
+    if args.floor and args.floor_sessions < 1:
+        print("--floor-sessions must be at least 1.")
+        return 2
+    if args.floor and args.bundle_start is not None and args.bundle_start >= args.as_of:
+        print(f"--bundle-start {args.bundle_start} must be before the as-of date {args.as_of}: "
+              "the fallback frame would hold no completed bar.")
+        return 2
+    do_today = (args.today or not args.replay) and not args.floor
+    if (do_today or args.floor) and args.as_of != today_et():
         print("--as-of other than today is refused in today mode: holdings, average cost and "
               "manual stops are as of now, so a past as-of would mix two dates.")
         return 2
@@ -967,16 +1471,31 @@ def main(argv=None) -> int:
     if trades is None:
         print("Trade journal could not be read; nothing computed.")
         return 1
-    holdings = db.load_holdings_or_none() if do_today else None
-    if do_today and holdings is None:
+    holdings = db.load_holdings_or_none() if (do_today or args.floor) else None
+    if (do_today or args.floor) and holdings is None:
         print("Holdings could not be read; nothing computed.")
         return 1
+    csv_rows: list[dict] = []
+    if args.floor:
+        # manual stops are not part of the floor (it floors the AUTO stop): not loaded
+        pol = hsw._policy()
+        if args.trail_start_explicit:
+            pol = {**pol, "trail_start": args.trail_start}
+        print_floor_header(args, len(holdings), pol)
+        rows, skipped = run_floor(args, holdings, trades)
+        print(f"holdings computed: {len(rows)}; skipped: {len(skipped)}"
+              + "".join(f"\n  skipped {t}: {why}" for t, why in skipped))
+        print_floor(rows)
+        print_floor_summary(summarize_floor(rows), float(_C.HELD_STOP_FLOOR_CLOSE_TOL_PCT))
+        csv_rows += flatten_floor(rows)
+        if args.csv:
+            _write_csv(args.csv, csv_rows)
+        return 0
     manual = db.load_manual_stops_or_none() if do_today else {}
     print_header(args, len(holdings) if holdings is not None else 0,
                  None if manual is None else len(manual), do_today)
     if manual is None:
         manual = {}
-    csv_rows: list[dict] = []
     if do_today:
         rows, skipped = run_today(args, holdings, trades, manual)
         print(f"holdings computed: {len(rows)}; skipped: {len(skipped)}"
