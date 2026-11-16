@@ -1027,6 +1027,11 @@ _GATE_FILES = {
     # held stop (history fetch, journal episode, fallback chain, manual-stop and
     # breach helpers) that the app, cron and headless engine all judge against.
     "stock_analyzer/held_stop_wiring.py",
+    # Added 2026-11-16 (finding #26 C3c-1): the persisted held-stop floor (saved
+    # full-history stop, its trade-and-policy fingerprint, the price-history
+    # check and the EOD writer's rows) that keeps a fallback-frame stop from
+    # falling below the last full-basis one; added while still unwired.
+    "stock_analyzer/held_stop_floor.py",
     # Added 2026-10-30 (finding #13): whether a same-day macro release has passed,
     # i.e. whether the Brief macro card / Pre-Event Playbook still show a pre-release
     # hold / reduce instruction; imported by the gate file act_today_view.

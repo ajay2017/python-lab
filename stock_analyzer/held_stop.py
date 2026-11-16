@@ -271,7 +271,7 @@ def _tier(gain_pct: float, ratchet_levels) -> tuple[float, str] | None:
 
 def _result(stop, basis, binding, reason, since=None, last_session=None,
             hw_close=None, hw_session=None, components=None, ratchet_label=None,
-            atr_last=None):
+            atr_last=None, last_close=None, bind_session=None, bind_close=None):
     return {
         "stop": stop, "basis": basis, "binding": binding, "reason": reason,
         "since": since, "last_session": last_session,
@@ -281,6 +281,12 @@ def _result(stop, basis, binding, reason, since=None, last_session=None,
         # ATR (dollars) through the last completed bar the stop used; None when
         # no stop could be built. Additive (C3b): the what-if explainer holds it constant.
         "atr_last": atr_last,
+        # Additive (C3c-1): the last completed bar's Close, and the session / Close
+        # of the bar that set the binding component. `held_stop_floor` saves them
+        # with the stop and re-checks them against a later frame.
+        "last_close": last_close,
+        "bind_session": bind_session,
+        "bind_close": bind_close,
     }
 
 
@@ -309,7 +315,7 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
     """See the module docstring. Returns a dict: stop, basis (full / partial /
     prior_session / unavailable), binding, reason, since, last_session,
     hw_close, hw_session, components {entry, trailing, ratchet}, ratchet_label,
-    atr_last."""
+    atr_last, last_close, bind_session, bind_close."""
     if int(warmup_bars) < 1:
         raise ValueError(f"warmup_bars must be >= 1 (got {warmup_bars})")
     bars = completed_bars(df, as_of)
@@ -327,7 +333,8 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
         stop = float(close_all.iloc[-1]) - max(initial_mult, trail_mult) * float(atr_all.iloc[-1])
         return _result(round(stop, 2), "prior_session", "prior_session",
                        f"episode {status}: {(episode or {}).get('reason', '')}".rstrip(": "),
-                       last_session=last_date, atr_last=float(atr_all.iloc[-1]))
+                       last_session=last_date, atr_last=float(atr_all.iloc[-1]),
+                       last_close=float(close_all.iloc[-1]))
 
     E = pd.Timestamp(episode["start"])
     since = E.date()
@@ -349,6 +356,7 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
 
     # entry anchor
     entry = None
+    entry_bar = None   # (session, Close) of the bar whose ATR seeds the anchor
     fb, ratio = episode.get("first_buy_price"), episode.get("split_ratio") or 1.0
     if fb is None or fb <= 0:
         notes.append("entry anchor dropped: "
@@ -374,6 +382,7 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
                          "range and the prior close (possible unrecorded split)")
         else:
             entry = fill_adj - initial_mult * float(atr.iloc[pe - 1])
+            entry_bar = (bars.index[pe - 1].date(), float(close.iloc[pe - 1]))
 
     # trailing over completed sessions since max(E, trail_start); when the origin
     # isn't covered, only sessions with warmup_bars bars before them count.
@@ -381,9 +390,12 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
     since_mask = bars.index >= t0
     elig = since_mask if covered else (since_mask & (pos >= wb))
     trailing = None
+    trail_bar = None   # (session, Close) of the bar that sets the trailing max
     cand = (close - trail_mult * atr)[elig]
     if len(cand):
         trailing = float(cand.max())
+        _ts = cand.idxmax()
+        trail_bar = (_ts.date(), float(close.loc[_ts]))
 
     # ratchet high-water: restarts at the last BUY (an add) of the episode
     lb = episode.get("last_buy")
@@ -408,7 +420,8 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
                        "; ".join(notes + partial_notes + ["no component computable"]),
                        since=since, last_session=last_date, hw_close=hw_close,
                        hw_session=hw_session, components=comps,
-                       atr_last=float(atr_all.iloc[-1]))
+                       atr_last=float(atr_all.iloc[-1]),
+                       last_close=float(close_all.iloc[-1]))
     best = max(avail.values())
     binding = next(k for k in ("ratchet", "trailing", "entry")
                    if avail.get(k) == best)
@@ -427,10 +440,13 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
     elif last_date < prev_td:
         basis, reason = "partial", "; ".join(notes + [f"history ends {last_date}"])
 
+    bind = {"ratchet": (hw_session, hw_close), "trailing": trail_bar,
+            "entry": entry_bar}[binding] or (None, None)
     return _result(round(best, 2), basis, binding, reason, since=since,
                    last_session=last_date, hw_close=hw_close, hw_session=hw_session,
                    components=comps, ratchet_label=label,
-                   atr_last=float(atr.iloc[-1]))
+                   atr_last=float(atr.iloc[-1]), last_close=float(close_all.iloc[-1]),
+                   bind_session=bind[0], bind_close=bind[1])
 
 
 # ── manual override ──────────────────────────────────────────────────────────

@@ -153,7 +153,17 @@ def _ep_reason_text(ep: dict) -> str:
     return str((ep or {}).get("reason") or "").strip() or "the start of this position is unknown"
 
 
-def _wrap(ticker: str, res: dict, note: str, avg_cost: float, *, fell_back: bool = False) -> dict:
+def _episode_view(ep) -> dict | None:
+    """The slice of the journal episode `held_stop_floor` fingerprints (C3c-1);
+    None when there is no usable episode."""
+    if not isinstance(ep, dict) or ep.get("status") != "ok" or ep.get("start") is None:
+        return None
+    return {"start": ep.get("start"), "first_buy_price": ep.get("first_buy_price"),
+            "split_ratio": ep.get("split_ratio") or 1.0, "last_buy": ep.get("last_buy")}
+
+
+def _wrap(ticker: str, res: dict, note: str, avg_cost: float, *, fell_back: bool = False,
+          ep: dict | None = None) -> dict:
     basis = res["basis"]
     return {
         "ticker": ticker,
@@ -168,6 +178,11 @@ def _wrap(ticker: str, res: dict, note: str, avg_cost: float, *, fell_back: bool
         "hw_session": res.get("hw_session"),
         "ratchet_label": res.get("ratchet_label"),
         "atr_last": res.get("atr_last"),
+        # additive (C3c-1): what the saved-floor writer / reader need
+        "episode": _episode_view(ep),
+        "last_close": res.get("last_close"),
+        "bind_session": res.get("bind_session"),
+        "bind_close": res.get("bind_close"),
         "avg_cost": avg_cost,
         "note": note,
         "degraded": basis in _DEGRADED_BASES,
@@ -432,13 +447,13 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
             return _unavailable(t, "No price history is available for this position.", avg_cost)
         res = run(df)
         return _wrap(t, res, _note_for(res, ep, bundle=False, n_sessions=None, fetch_problem=None),
-                     avg_cost)
+                     avg_cost, ep=ep)
 
     long_df, problem = _long_frame(t, ep, as_of, pol, fetch_history)
     if long_df is not None and problem is None:
         res = run(long_df)
         return _wrap(t, res, _note_for(res, ep, bundle=False, n_sessions=None, fetch_problem=None),
-                     avg_cost)
+                     avg_cost, ep=ep)
 
     # fallback: the app's bundle frame, always "partial"
     problem = problem or "Longer price history couldn't be loaded"
@@ -455,7 +470,7 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
     note = _note_for(res, ep, bundle=True, n_sessions=n, fetch_problem=problem)
     if res["basis"] in ("prior_session", "unavailable"):
         note = _note_for(res, ep, bundle=False, n_sessions=None, fetch_problem=None)
-    return _wrap(t, res, note, avg_cost, fell_back=True)
+    return _wrap(t, res, note, avg_cost, fell_back=True, ep=ep)
 
 
 def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_history,

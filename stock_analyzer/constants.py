@@ -532,6 +532,15 @@ HELD_STOP_FILL_TOL_PCT    = 2.0
 # Journal-vs-broker share-count tolerance (shares) for trusting the journal's
 # episode; a larger gap means the journal can't date the position.
 HELD_STOP_SHARES_TOL      = 1e-4
+# Persisted held-stop floor (finding #26 C3c, owner U1 2026-11-15,
+# docs/plans/held-stop-floor-c3c-spec.md): a saved full-history stop is reused only
+# while today's price history still agrees with the closes it was saved from, within
+# this %. 2.0 sits above the dividend drift of the adjusted 6-month bundle for the
+# saved reference close (one to a few sessions old; a trailing-peak or ratchet bind
+# bar can be months old, and the C3c-2 dry run measures that drift) and far below any
+# split (a 3:2 split moves a close 33%, a 2:1 split 50%). Data-quality tolerance, not
+# a stop width, and not part of the saved policy signature.
+HELD_STOP_FLOOR_CLOSE_TOL_PCT = 2.0
 # Sessions after go-live that Home shows the one-time "stops recalculated" notice.
 HELD_STOP_NOTICE_SESSIONS = 5
 # New stop level when tightening = current price − this × ATR.
