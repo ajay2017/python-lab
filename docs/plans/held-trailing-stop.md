@@ -61,7 +61,7 @@ All policy values are explicit parameters in C1; no constant has changed.
 ## C3 design (planner, Opus 5.5, 2026-10-30: PROCEED WITH CHANGES)
 
 ### Owner decisions on C3 (2026-10-30, all as recommended)
-- **D1** Persisted floor deferred to its own chunk **C3c, by 2026-12-07** or on the first day a data-caused degraded-basis banner appears (XOM, the oldest holding, outgrows the 6-month frame around mid-December).
+- **D1** Persisted floor deferred to its own chunk **C3c, by 2026-12-07** or on the first day a data-caused degraded-basis banner appears (XOM, the oldest holding, outgrows the 6-month frame around mid-December). **Re-checked 2026-11-15 (owner SQL, journal episodes):** XOM is no longer held; the oldest episodes are AAPL and ABBV (start 2026-09-17), which need history back to 2026-06-08 (start − `HELD_STOP_WARMUP_BARS` × 1.05 − 10 business days, as `history_period_needed`) and so outgrow a 6-month frame after about 2026-12-08. The 12-07 date stands; if both are sold first, the next is WAL (2026-10-20, about 2027-01-09).
 - **D2** `HELD_TRAIL_START` = the last trading session BEFORE the deploy date (for the 11-07/08 deploy: 2026-11-06). Re-run `scripts/held_stop_dryrun.py --today --live --trail-start 2026-11-06` on deploy day.
 - **D3** Deploy outside market hours after the EOD lane, weekend 2026-11-07/08, so the owner sees the sell-all cards before Monday's protective email.
 - **D4** One-time "stops recalculated" notice: Home `st.info` for `HELD_STOP_NOTICE_SESSIONS = 5` sessions from go-live, plus one line in the first protective email.
