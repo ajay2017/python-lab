@@ -4050,6 +4050,153 @@ def load_budget_allocation_times_or_none(day) -> dict | None:
         return None
 
 
+# ── Persisted held-stop floors (#26 C3c, docs/plans/held-stop-floor-c3c-spec.md) ──
+# One row per (ticker, episode_start): the last FULL-basis auto stop, written by
+# the EOD lane only (the app never writes), read by the app and the cron so a
+# fallback-frame day can't lower a stop. Full DDL + verify query:
+# docs/sql/held-stop-floors.sql (the OWNER applies it). RLS: FOR ALL TO
+# service_role. Row keys are exactly `held_stop_floor.rows_to_write`'s output.
+_HELD_STOP_FLOORS_PAGE_SIZE = 1000
+_HELD_STOP_FLOORS_DATE_COLS = ("episode_start", "as_of", "stop_set_on", "last_buy",
+                               "ref_session", "bind_session")
+_HELD_STOP_FLOORS_NUM_COLS = ("stop", "first_buy_price", "split_ratio", "avg_cost",
+                              "ref_close", "bind_close")
+_HELD_STOP_FLOORS_DDL_HINT = "apply docs/sql/held-stop-floors.sql"
+
+
+def _held_stop_floors_missing_table(exc) -> bool:
+    """True when `exc` says the table isn't there (DDL not applied yet)."""
+    try:
+        from stock_analyzer.system_health import _is_missing_table
+        return bool(_is_missing_table(exc))
+    except Exception:
+        return False   # can't tell -> a real error, never a silent skip
+
+
+def load_held_stop_floors_or_none(tickers) -> "dict | None":
+    """Saved held-stop floors for `tickers`, shaped
+    {TICKER: {episode_start (date): row}} -- what `held_stop_floor.apply_floor`
+    consumes (`row` keeps every table column; the date columns episode_start /
+    as_of / stop_set_on / last_buy / ref_session / bind_session are
+    `datetime.date` or None, the numeric columns stop / first_buy_price /
+    split_ratio / avg_cost / ref_close / bind_close are float or None).
+
+    Offline-sentinel contract: None on ANY failure (no DB, missing table,
+    network / auth error, `tickers=None` (nothing was asked: couldn't check), or
+    a row with no usable ticker / episode_start / as_of, which also warns and is
+    recorded as a Supabase error); {} when `tickers` is empty (no DB call) or
+    when the read SUCCEEDED and nothing is saved for them. Never collapse the
+    two: None means "couldn't check" (the floor stays inert and the premarket
+    lane may go red), {} means "checked, no floor". Tickers are upper-cased and
+    de-duplicated. Two rows for one (ticker, episode_start) can't exist under
+    the primary key; defensively the one with the latest as_of wins. Never
+    raises."""
+    if tickers is None:
+        return None
+    names = sorted({str(t).strip().upper() for t in tickers
+                    if t is not None and str(t).strip()})
+    if not names:
+        return {}
+    if not has_db():
+        return None
+    try:
+        rows = _read_all_pages(
+            lambda: (
+                _client().table("held_stop_floors").select("*")
+                .in_("ticker", names).order("ticker").order("episode_start")
+            ),
+            _HELD_STOP_FLOORS_PAGE_SIZE,
+            dedupe_key=None,
+        )
+        from datetime import date as _date
+        out: dict = {}
+        for r in rows:
+            tk = str(r.get("ticker") or "").strip().upper() if isinstance(r, dict) else ""
+            row = dict(r) if isinstance(r, dict) else {}
+            row["ticker"] = tk
+            for c in _HELD_STOP_FLOORS_DATE_COLS:
+                v = row.get(c)
+                if v is None:
+                    continue
+                try:
+                    row[c] = _date.fromisoformat(str(v)[:10])
+                except ValueError:
+                    row[c] = None
+            for c in _HELD_STOP_FLOORS_NUM_COLS:
+                v = row.get(c)
+                try:
+                    f = float(v) if v is not None else None
+                except (TypeError, ValueError):
+                    f = None
+                row[c] = f if f is not None and math.isfinite(f) else None
+            if not tk or row.get("episode_start") is None or row.get("as_of") is None:
+                import warnings
+                warnings.warn(f"load_held_stop_floors_or_none: malformed row {r!r} -- "
+                              "treating the saved floors as unreadable")
+                _record_db_error(f"held_stop_floors_read: malformed row {str(r)[:80]}")
+                return None
+            by_start = out.setdefault(tk, {})
+            prev = by_start.get(row["episode_start"])
+            if prev is None or row["as_of"] >= prev["as_of"]:
+                by_start[row["episode_start"]] = row
+        return out
+    except Exception as exc:
+        if not _held_stop_floors_missing_table(exc):
+            _record_db_error(f"held_stop_floors_read: {str(exc)[:100]}")
+        return None
+
+
+def save_held_stop_floors(rows) -> "tuple[bool, str]":
+    """Upsert `held_stop_floor.rows_to_write` rows into `held_stop_floors`.
+    Returns (ok, detail); `detail` is a short human-readable line for the EOD
+    log / failure list. The EOD lane is the only caller (the app never writes).
+
+    - is_readonly() -> (False, "read-only ...") with no client call (nothing was
+      written); no credentials -> (False, ...); empty / None `rows` -> (True,
+      "no rows to write") with no call.
+    - Each row gets a fresh tz-aware `written_at` (a merge-duplicates upsert only
+      updates the columns it sends, so without it every re-write would keep the
+      first insert's timestamp), goes through `_sanitize_for_write`, and its date
+      values go out as ISO strings. ONE batched upsert, on_conflict="ticker,episode_start", so a
+      same-evening re-run rewrites the same row.
+    - A missing table returns (False, detail) with detail containing
+      "apply docs/sql/held-stop-floors.sql" (the caller surfaces it red) and is
+      NOT recorded as a Supabase API error; any other failure is recorded and
+      returned as (False, "held_stop_floors upsert failed: ..."). Never raises.
+    """
+    if is_readonly():
+        return False, "read-only session: held_stop_floors not written"
+    if not rows:
+        return True, "no rows to write"
+    if not has_db():
+        return False, "no database credentials: held_stop_floors not written"
+    try:
+        from datetime import date as _date, datetime as _dt, timezone as _tz
+        written_at = _dt.now(_tz.utc).isoformat()
+        payload = []
+        for r in rows:
+            item = dict(r)
+            item["written_at"] = written_at
+            for c in _HELD_STOP_FLOORS_DATE_COLS:
+                v = item.get(c)
+                if isinstance(v, _dt):
+                    item[c] = v.date().isoformat()
+                elif isinstance(v, _date):
+                    item[c] = v.isoformat()
+            payload.append(item)
+        payload = _sanitize_for_write(payload, "save_held_stop_floors")
+        _client().table("held_stop_floors").upsert(
+            payload, on_conflict="ticker,episode_start",
+        ).execute()
+        return True, f"wrote {len(payload)} row(s)"
+    except Exception as exc:
+        if _held_stop_floors_missing_table(exc):
+            return False, (f"held_stop_floors table is missing -- "
+                           f"{_HELD_STOP_FLOORS_DDL_HINT} ({str(exc)[:100]})")
+        _record_db_error(f"held_stop_floors_upsert: {str(exc)[:100]}")
+        return False, f"held_stop_floors upsert failed: {str(exc)[:200]}"
+
+
 def load_gate_holds_on_day_or_none(day, gate_ids) -> dict | None:
     """{TICKER: gate_id} for the `gate_suppressions` rows recorded on ET date
     `day` for any of `gate_ids`, by an app or cron source -- the email's
