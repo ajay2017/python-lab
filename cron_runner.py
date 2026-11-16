@@ -806,6 +806,17 @@ def _eod_held_stop_floors(payload, now_et) -> list[str]:
             return ["held_stop_floor: floors could not be read; not written "
                     "(if the table is new: apply docs/sql/held-stop-floors.sql)"]
         rows = _held_stop_floor.rows_to_write(held_stops, as_of)
+        # C3cFloorBug: a floor check that RAISED keeps today's stop but is never written,
+        # so that name's saved floor would go stale silently. A code defect: red.
+        bug = []
+        for _t, _h in sorted(held_stops.items(), key=lambda kv: str(kv[0])):
+            _fl = _h.get("floor") if isinstance(_h, dict) else None
+            if (isinstance(_fl, dict)
+                    and str(_fl.get("reason") or "").startswith(_held_stop_wiring.FLOOR_CHECK_FAILED)):
+                _log(f"held_stop_floor: {_t} floor check failed ({_fl.get('reason')}); "
+                     "today's stop kept, nothing saved for it.")
+                bug.append(str(_t))
+        bug_fail = ([f"held_stop_floor: floor check failed for {', '.join(bug)}"] if bug else [])
         # One line per name whose saved floor bound on a FULL-history day, with the
         # amount (saved - computed); no size filter, so a big one is never hidden.
         for _t, _h in sorted(held_stops.items(), key=lambda kv: str(kv[0])):
@@ -822,13 +833,13 @@ def _eod_held_stop_floors(payload, now_et) -> list[str]:
                          "(amount unreadable)")
         if not rows:
             _log("held_stop_floor: nothing to write (no full-basis stop with a complete episode).")
-            return []
+            return bug_fail
         _ok, _detail = db.save_held_stop_floors(rows)
         if _ok:
             _log(f"held_stop_floor: wrote {len(rows)} row(s) ({', '.join(r['ticker'] for r in rows)}).")
-            return []
+            return bug_fail
         _log(f"held_stop_floor: NOT written; {_detail}")
-        return ["held_stop_floor: " + str(_detail)]
+        return ["held_stop_floor: " + str(_detail)] + bug_fail
     except Exception as e:  # noqa: BLE001
         _log(f"held_stop_floor FAILED; {str(e)[:120]}; continuing.")
         return [f"held_stop_floor: {str(e)[:120]}"]

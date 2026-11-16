@@ -642,3 +642,37 @@ def test_a_floor_bug_keeps_todays_stop_and_writes_nothing(s, monkeypatch):
     assert out["floor"]["state"] == hf.UNREADABLE and "ValueError" in out["floor"]["reason"]
     assert out["stop_set_on"] is None
     assert hf.rows_to_write({T: out}, s.days[110]) == []
+
+
+def test_eod_turns_red_for_a_floor_check_that_raised_and_still_writes_the_rest(s, logs, writes):
+    """C3cFloorBug: a name whose floor check raised (reason prefix
+    held_stop_wiring.FLOOR_CHECK_FAILED) adds a red lane failure naming it; the
+    other names are still written and 'wrote N' is still logged."""
+    now = _ET.localize(datetime.combine(s.days[118], dt.time(16, 30)))
+    good = _full(s, 118, {})
+    broken = dict(good)
+    broken["floor"] = {"state": hf.UNREADABLE, "value": None, "set_on": None,
+                       "reason": f"{hw.FLOOR_CHECK_FAILED}: ValueError", "note": "",
+                       "row_as_of": None, "computed": good["stop"]}
+    broken["stop_set_on"] = None
+    payload = {"held_stops": {T: good, "ZZZ": broken}, "held_stop_floors_readable": True}
+    out = cr._eod_held_stop_floors(payload, now)
+    assert out == ["held_stop_floor: floor check failed for ZZZ"]
+    assert len(writes) == 1 and [r["ticker"] for r in writes[0]] == [T]
+    assert any(m.startswith("held_stop_floor: wrote 1 row(s)") for m in logs)
+    assert any("ZZZ floor check failed" in m for m in logs)
+    # only the broken name: nothing to write, still red
+    writes.clear()
+    assert cr._eod_held_stop_floors({"held_stops": {"ZZZ": broken},
+                                     "held_stop_floors_readable": True}, now) == out
+    assert writes == []
+    # a save failure keeps both lines
+    with patch.object(cr.db, "save_held_stop_floors", lambda rows: (False, "boom")):
+        assert cr._eod_held_stop_floors(payload, now) == ["held_stop_floor: boom"] + out
+
+
+def test_floor_check_failed_prefix_is_the_one_the_wiring_writes(s, monkeypatch):
+    def _boom(*a, **k):
+        raise ValueError("x")
+    monkeypatch.setattr(hf, "apply_floor", _boom)
+    assert _full(s, 110, {})["floor"]["reason"].startswith(hw.FLOOR_CHECK_FAILED)

@@ -50,6 +50,10 @@ from stock_analyzer import held_stop as hs
 from stock_analyzer import held_stop_floor as hsf
 from stock_analyzer.act_today_precedence import is_stop_breached
 
+# The `floor.reason` prefix `_one` writes when the floor check itself raised (a code
+# defect, never a data state). The EOD lane turns it red (cron_runner, C3cFloorBug).
+FLOOR_CHECK_FAILED = "floor check failed"
+
 # basis values that mean "do not claim the stop only moves up / full history"
 _DEGRADED_BASES = frozenset({"partial", "prior_session", "unavailable"})
 
@@ -456,7 +460,7 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
         except Exception as e:      # a floor bug must never remove today's stop
             kept = dict(out)
             kept["floor"] = {"state": hsf.UNREADABLE, "value": None, "set_on": None,
-                             "reason": f"floor check failed: {type(e).__name__}",
+                             "reason": f"{FLOOR_CHECK_FAILED}: {type(e).__name__}",
                              "note": "", "row_as_of": None, "computed": out.get("stop")}
             kept["stop_set_on"] = None
             return kept
