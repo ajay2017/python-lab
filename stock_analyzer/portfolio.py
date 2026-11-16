@@ -573,6 +573,20 @@ def build_portfolio_df(
             _auto = None
         stop_label = (str(_hs.get("label") or "Stop Unavailable")
                       if _auto is not None else "Stop Unavailable")
+        # Saved full-history floor (#26 C3c): "Stop Saved" / "Stop Saved On" are set
+        # ONLY when the floor bound (state "applied"), so the explainer shows its
+        # "saved" row only then. `_auto` is already the floored value; a manual stop
+        # is composed after it below, exactly as before.
+        _fl = _hs.get("floor")
+        _fl = _fl if isinstance(_fl, dict) else {}
+        _saved_stop, _saved_on = None, None
+        if _auto is not None and _fl.get("state") == "applied":
+            try:
+                _saved_stop = float(_fl.get("value"))
+            except (TypeError, ValueError):
+                _saved_stop = None
+            _so = _fl.get("set_on")
+            _saved_on = _so.isoformat() if hasattr(_so, "isoformat") else (None if _so is None else str(_so))
 
         # Manual-stop override: user actioned a Brief "raise stop" recommendation
         # and recorded the new level. Persisted in Supabase manual_stops table
@@ -590,6 +604,7 @@ def build_portfolio_df(
         # manual_stop_wins plus the rule that a valid manual stop still applies
         # when the automatic stop is unavailable.
         from stock_analyzer.held_stop import compose_with_manual as _compose
+        from stock_analyzer.held_stop_wiring import full_note as _full_stop_note
         _ms_price = None
         if _ms:
             try:
@@ -667,7 +682,9 @@ def build_portfolio_df(
             "Auto Stop": _auto,
             "Stop Basis": _hs.get("basis") if _auto is not None else "unavailable",
             "Stop Since": _hs.get("since") if _auto is not None else None,
-            "Stop Note": (_hs.get("note") or "") if _hs else "No stop could be built for this holding.",
+            "Stop Note": _full_stop_note(_hs) if _hs else "No stop could be built for this holding.",
+            "Stop Saved": _saved_stop,
+            "Stop Saved On": _saved_on,
             "Stop Entry": _hc.get("entry"),
             "Stop Trailing": _hc.get("trailing"),
             "Stop Ratchet": _hc.get("ratchet"),

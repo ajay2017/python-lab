@@ -33,6 +33,31 @@ def _trail_from(since) -> str:
         return go.isoformat()
 
 
+def _saved_part(h) -> tuple[float | None, object]:
+    """(saved floor value, the date it was saved) when the saved full-history floor
+    BOUND (U5: shown only then), else (None, None). Reads a `build_held_stops`
+    result's `floor` dict (state "applied") or the `from_row` keys "saved" /
+    "saved_on" (the portfolio's "Stop Saved" / "Stop Saved On" columns, set only
+    when it bound)."""
+    h = h if isinstance(h, dict) else {}
+    fl = h.get("floor")
+    if isinstance(fl, dict):
+        if fl.get("state") == "applied" and _f(fl.get("value")) is not None:
+            return _f(fl.get("value")), fl.get("set_on")
+        return None, None
+    return _f(h.get("saved")), h.get("saved_on")
+
+
+def _saved_label(h: dict) -> str:
+    """The saved row's own component label: `label_for(basis, binding, ratchet
+    label)`. A result already carries it (`label`); only a hand-built dict lacks it."""
+    lab = h.get("label")
+    if lab:
+        return str(lab)
+    from stock_analyzer.held_stop_wiring import label_for
+    return label_for(h.get("basis"), h.get("binding"), h.get("ratchet_label"))
+
+
 def from_row(row) -> dict:
     """The held-stop dict (as `build_held_stops` returns it) rebuilt from a
     `build_portfolio_df` row's "Auto Stop" / "Stop Basis" / "Stop ..." columns."""
@@ -54,6 +79,9 @@ def from_row(row) -> dict:
         "atr_last": _f(g("Stop ATR")),
         "hw_close": _f(g("Stop HW Close")),
         "ratchet_label": label if label in known else None,
+        # the saved full-history floor, only when it bound ("Stop Saved" columns)
+        "saved": _f(g("Stop Saved")),
+        "saved_on": g("Stop Saved On"),
         "components": {"entry": _f(g("Stop Entry")), "trailing": _f(g("Stop Trailing")),
                        "ratchet": _f(g("Stop Ratchet"))},
     }
@@ -104,6 +132,19 @@ def component_rows(h: dict) -> list[dict]:
                      "text": "A floor above your average cost, set by the best completed close "
                              f"since your last buy or {_C.HELD_TRAIL_START}, whichever is later; "
                              "it stays after the price falls back."})
+    saved, saved_on = _saved_part(h)
+    if saved is not None:
+        # U5: a "saved" row only when the floor binds. Its label is the saved row's
+        # own component label (never a new "Saved Stop" label); the suffix only tells
+        # it apart from the same-named computed part above.
+        on = f" on {saved_on}" if saved_on else ""
+        # U3: the floor can bind on a full-basis day too (by cents), so only a
+        # degraded day may blame the shorter history.
+        why = ("today's shorter price history gave a lower figure"
+               if h.get("basis") != "full" else "today's figure came out lower")
+        rows.append({"kind": "saved", "label": f"{_saved_label(h)} (saved)", "value": round(saved, 2),
+                     "text": f"The stop saved from your full price history{on}. It is held here "
+                             f"because {why}."})
     rows.sort(key=lambda x: -x["value"])
     return rows
 
@@ -116,6 +157,11 @@ def driver_label(w: dict) -> str:
     if not vals:
         return "Stop"
     best = max(vals.values())
+    saved = _f(w.get("saved"))
+    if saved is not None and saved > round(best, 2):
+        # the saved full-history floor is above every part the next session would
+        # build: it binds, under its own label (`label_for`), not a new one
+        return str(w.get("saved_label") or "Stop")
     if vals.get("ratchet") == best:
         return str(w.get("ratchet_label") or "Profit Lock")
     if vals.get("trailing") == best:
@@ -150,9 +196,13 @@ def what_if(h: dict, price: float, avg_cost: float) -> dict | None:
     entry = _f(comps.get("entry"))
     best = max(v for v in (entry, trailing, ratchet) if v is not None)
     stop = max(cur, round(best, 2))
+    saved, _ = _saved_part(h)
     return {"stop": stop, "current": cur, "raised": stop > cur,
             "components": {"entry": entry, "trailing": trailing, "ratchet": ratchet},
-            "ratchet_label": label, "price": px}
+            "ratchet_label": label, "price": px,
+            # the saved full-history floor (None unless it bound today) and its label,
+            # so `driver_label` can name it when it is above every rebuilt part
+            "saved": saved, "saved_label": _saved_label(h) if saved is not None else None}
 
 
 # ── one-time "stops recalculated" notice (owner decision D4, 2026-10-30) ─────

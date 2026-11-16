@@ -1740,7 +1740,8 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
         # ── A) Number-line of the parts of the stop ──────────────────────────
         _mk = [dict(label="Avg cost", role="your average cost", px=avg_cost,
                     color="#9ca3af", active=False, dim=False)]
-        _colors = {"entry": "#f59e0b", "trailing": "#3b82f6", "ratchet": "#a78bfa"}
+        _colors = {"entry": "#f59e0b", "trailing": "#3b82f6", "ratchet": "#a78bfa",
+                   "saved": "#06b6d4"}
         for _row in _rows:
             _hit = (not _manual) and abs(_row["value"] - _active) < 0.005
             _mk.append(dict(label=_row["label"], role=_row["text"], px=_row["value"],
@@ -1803,6 +1804,9 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
         ]
         for _row in _rows:
             _lines.append(f"- **{_row['label']} \\${_row['value']:.2f}** — {_row['text']}")
+        if any(_r["kind"] == "saved" for _r in _rows):
+            _lines.append("The saved stop is listed as well because it is higher than today's "
+                          "figure; your automatic stop is held at it.")
         _lines.append(
             "A part is missing when it doesn't apply yet (the trailing part starts at the stop's "
             f"go-live date, the profit lock needs a gain; the rungs are {_rl_desc}) or its data "
@@ -2757,6 +2761,27 @@ def _cached_session_range(ticker: str, et_date: str):
     return fetch_session_range(ticker, date.fromisoformat(et_date))
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_held_stop_floors(tickers: tuple, et_date: str):
+    # The saved full-history floors (#26 C3c), one read per ET day (`et_date` is the
+    # cache key, so the app picks up the row the EOD lane writes on the next day;
+    # before EOD it holds the D-1 row). RAISES on a failed read (None) so
+    # st.cache_data never stores "couldn't check"; `{}` (read, none saved) is cached.
+    _fl = db.load_held_stop_floors_or_none(tickers)
+    if _fl is None:
+        raise RuntimeError("saved held-stop floors could not be read")
+    return _fl
+
+
+def _held_stop_floors_for(tickers):
+    """{TICKER: {episode_start: row}} for `build_held_stops(floors=)`, or None when
+    the read failed (three-state: None = couldn't check, {} = none saved)."""
+    try:
+        return _cached_held_stop_floors(tuple(sorted(tickers)), _today_et().isoformat())
+    except Exception:
+        return None
+
+
 @st.cache_resource
 def _unadj_negative_cache() -> dict:
     return {}
@@ -2786,11 +2811,16 @@ def _held_stops_for(holdings, held_data) -> dict:
     _rows = [h for h in (holdings or []) if isinstance(h, dict)]
     if not _rows:
         return {}
+    # Saved floors: read ONCE here, before the thread fan-out (a real ticker list).
+    _floors = _held_stop_floors_for(
+        {str(h.get("Ticker", h.get("ticker", "")) or "").strip().upper() for h in _rows}
+        - {""})
 
     def _one(_h):
         return _held_stop_wiring.build_held_stops(
             [_h], held_data, _trades, _as_of,
             fetch_history=_unadjusted_history_or_raise,
+            floors=_floors,
             fetch_range=lambda _t, _d: _cached_session_range(str(_t).upper(), _d.isoformat()))
 
     out: dict = {}
@@ -45669,6 +45699,8 @@ Your protective stop is the **highest** of up to three automatic parts, and it i
 **On the day you buy.** There is no completed session of your own yet, so the stop is your fill price minus {_TIP_ATR_MULT:g} × ATR (ATR from the last completed session), labelled *Entry Stop*. The fill is fixed, so today's price can't move it. From the next session it is rebuilt from completed days: the trailing and profit-lock parts can raise it, or it can come out lower if a later session has to use a fallback basis. No warning is shown for this. If the fill price isn't recorded, the stop falls back to *Prior-close ATR* with a ⚠️ note. If the recorded fill is outside today's price range and the prior close, or today's range isn't available yet and the fill isn't near the prior close, the stop is the lowest of the *Prior-close ATR* level, the fill-based level and, when today's range is available, the lower of today's low and the prior close, less a small tolerance, minus the same ATR distance, with a ⚠️ note. If the only price history available is out of date, the stop is still your fill price minus the ATR distance, but with a ⚠️ note saying where that history ends.
 
 **When history is incomplete.** If the app could not load the longer price history for a name, or the trade journal could not date the position, a ⚠️ banner on 🏠 Home and a note on 📈 Analysis name the holding and say what is missing. Treat those stops as rough guides and don't assume they only move up.
+
+**A saved stop for days the long history can't load.** Each evening after the close, the app saves the stop of every position whose stop was built from the full price history that day. On a day when the longer history can't be loaded and the app has to use its shorter 6-month history, today's figure is compared with that saved stop and the higher of the two is used. The saved stop counts only while you haven't bought more or changed a buy since it was saved (an add, a split entry or an edited buy price ends it; selling part of the position doesn't), and the closing prices it was built from still match today's price history (a stock split or a corrected price would make them differ). When it matters, the ⚠️ note on 🏠 Home and 📈 Analysis says either that the stop is held at the saved amount (with the date it was saved and today's lower figure from the shorter history), or that the saved stop wasn't used and why: your trades changed, the price history no longer matches, or the stop rules changed. If the saved stop can't be read at all, the note says this stop may be lower than on earlier days. On a normal day with complete history there is no note. Your manual stop still wins whenever it is at least as tight as the stop in force. The app reads the saved stops once a day, so a stop saved this evening can show up the next day.
 
 **See it and simulate it.** On **📈 Analysis → a position you hold → 📋 Trade Plan**, open **"🛡️ How your stop is set — and what happens next"** for a read-only walkthrough:
 - a **number line** placing your average cost, each part of the stop, your stop in force and the price, with the stop in force marked;

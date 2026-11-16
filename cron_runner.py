@@ -92,6 +92,7 @@ from stock_analyzer.headless_alert_engine import (
     compute_watchlist_entries, _build_context, run_daily_budget,
 )
 from stock_analyzer import hold_reasons
+from stock_analyzer import held_stop_floor as _held_stop_floor
 from stock_analyzer import held_stop_view as _held_stop_view
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import llm
@@ -592,6 +593,17 @@ def _run_premarket(now_et, force: bool) -> int:
         failures.append(f"held_stops_failed -- {payload['held_stops_failed']}; every holding was "
                         "checked against a prior-close stop, not the held stop "
                         "(protective alerts that were computed were still sent)")
+    # Saved full-history floors (#26 C3c, U4 refined 2026-11-16): red only when the
+    # floors could not be read AND at least one name is on a partial (fallback) basis,
+    # the one case a floor could have lifted. Alerts are still sent (as above).
+    _floor_readable = payload.get("held_stop_floors_readable")
+    _floor_fail = _held_stop_floor.lane_failure(payload.get("held_stops"), _floor_readable is True)
+    if _floor_fail:
+        failures.append(f"held_stop_floor: {_floor_fail}; stops may be lower than the saved "
+                        "full-history stops (protective alerts that were computed were still sent)")
+    elif _floor_readable is False:
+        _log("held_stop_floor: saved floors could not be read; no holding is on a partial "
+             "stop basis, so nothing was lowered by it.")
     # Per-name degradation is logged above ("engine note: held stop on a limited
     # basis ...") and rides in the email footer below.
     # held-stop notes escape "$" for Streamlit markdown; the email footer is plain text
@@ -770,6 +782,58 @@ def _run_premarket(now_et, force: bool) -> int:
     return 1 if failures else 0
 
 
+def _eod_held_stop_floors(payload, now_et) -> list[str]:
+    """EOD writer for the saved held-stop floors (#26 C3c). Returns the failure
+    lines for `_run_eod` (empty = fine); NEVER raises and never blocks the lane's
+    other steps. It saves the EFFECTIVE AUTO result `payload["held_stops"]` as of the
+    ET date `now_et.date()` (stop(D), built from sessions before D, not a stop from a
+    just-closed bar that may still be revised), NEVER `port_df["Stop"]`, so a manual
+    stop can't leak into the floor. A non-trading day writes nothing. Unreadable
+    saved floors: no write (it would overwrite rows it never saw) and a failure."""
+    try:
+        as_of = now_et.date()
+        if not is_trading_day(as_of):
+            _log("held_stop_floor: not an ET trading day; nothing to write.")
+            return []
+        held_stops = payload.get("held_stops")
+        if not isinstance(held_stops, dict):
+            _log("held_stop_floor: no held stops in the payload (no book or no prices); "
+                 "nothing to write.")
+            return []
+        if payload.get("held_stop_floors_readable") is not True:
+            _log("held_stop_floor: NOT written; the saved floors could not be read "
+                 "(if the table is new: apply docs/sql/held-stop-floors.sql).")
+            return ["held_stop_floor: floors could not be read; not written "
+                    "(if the table is new: apply docs/sql/held-stop-floors.sql)"]
+        rows = _held_stop_floor.rows_to_write(held_stops, as_of)
+        # One line per name whose saved floor bound on a FULL-history day, with the
+        # amount (saved - computed); no size filter, so a big one is never hidden.
+        for _t, _h in sorted(held_stops.items(), key=lambda kv: str(kv[0])):
+            _fl = _h.get("floor") if isinstance(_h, dict) else None
+            if (isinstance(_fl, dict) and _fl.get("state") == _held_stop_floor.APPLIED
+                    and _h.get("basis") == "full"):
+                try:
+                    _diff = float(_fl["value"]) - float(_fl["computed"])
+                    _log(f"held_stop_floor: {_t} saved floor bound on a full-history day: "
+                         f"saved {float(_fl['value']):.2f} vs computed {float(_fl['computed']):.2f} "
+                         f"(+{_diff:.2f})")
+                except (KeyError, TypeError, ValueError):
+                    _log(f"held_stop_floor: {_t} saved floor bound on a full-history day "
+                         "(amount unreadable)")
+        if not rows:
+            _log("held_stop_floor: nothing to write (no full-basis stop with a complete episode).")
+            return []
+        _ok, _detail = db.save_held_stop_floors(rows)
+        if _ok:
+            _log(f"held_stop_floor: wrote {len(rows)} row(s) ({', '.join(r['ticker'] for r in rows)}).")
+            return []
+        _log(f"held_stop_floor: NOT written; {_detail}")
+        return ["held_stop_floor: " + str(_detail)]
+    except Exception as e:  # noqa: BLE001
+        _log(f"held_stop_floor FAILED; {str(e)[:120]}; continuing.")
+        return [f"held_stop_floor: {str(e)[:120]}"]
+
+
 def _run_eod(now_et, force: bool) -> int:
     # Reset at the top, mirroring `_run_maintenance`'s own established
     # pattern -- otherwise a stale detail string from a PRIOR failed run
@@ -903,6 +967,9 @@ def _run_eod(now_et, force: bool) -> int:
     except Exception as e:  # noqa: BLE001
         _log(f"account_snapshot_repair FAILED — {str(e)[:120]} — continuing.")
         failures.append(f"account_snapshot_repair: {str(e)[:120]}")
+
+    # 1a2. Saved held-stop floors (#26 C3c): the effective AUTO stops, full basis only.
+    failures.extend(_eod_held_stop_floors(payload, now_et))
 
     if _book_outage:
         _log(f"account_daily_snapshot / portfolio_risk_snapshot / rec_events SKIPPED — "

@@ -167,6 +167,10 @@ _INVENTORY: tuple[_Store, ...] = (
     # Earnings rating-change flag shadow (finding #22, 2026-10-30): EOD cron, conditional
     # (rows only on days a held name is in the earnings window); DDL applied by hand.
     _Store("earnings_revision_shadow",   "Earnings rating-change flag shadow (measure-only)", "eod", "daily", False),
+    # Saved held-stop floors (#26 C3c, 2026-11-16): EOD cron, conditional (rows only for
+    # held names with a full-history stop that night; a nightly re-write of a continuing
+    # episode upserts the same key); DDL applied by hand. Existence-only.
+    _Store("held_stop_floors",           "Saved held-stop floors",                    "eod",    "daily", False),
     # rec_events (Recommendation-Outcomes-Measurement Phase 1b, 2026-09-17):
     # written by the EOD cron alongside portfolio_risk_snapshots, but
     # CONDITIONAL like gate_suppressions above — a day with no qualifying

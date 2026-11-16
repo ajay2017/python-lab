@@ -195,9 +195,19 @@ def _build_context(today: date) -> dict:
     # uses last close (stop rule = "CLOSED below stop"); the EOD run is post-close
     # so last close IS today's final close — correct for the snapshot too.
     holdings = holdings_df.to_dict("records")
+    # Saved full-history floors (#26 C3c), read ONCE for every holding: a REAL ticker
+    # list (None would mean "nothing was asked"). None back = couldn't read: the floor
+    # stays off, degraded notes say so, and the premarket lane may go red; {} = read,
+    # none saved. Never collapsed.
+    try:
+        held_stop_floors = db.load_held_stop_floors_or_none(held_tickers)
+    except Exception:
+        held_stop_floors = None
+    held_stop_floors_readable = held_stop_floors is not None
     held_stops = _held_stop_wiring.build_held_stops(
         holdings, held_data, trades_strict, today,
         fetch_history=_held_stop_wiring.fetch_or_raise,
+        floors=held_stop_floors,
         fetch_range=fetch_session_range)
     held_stop_notes = [f"{t} ({label}): {note}"
                        for t, label, note in _held_stop_wiring.degraded_notes(held_stops)]
@@ -278,7 +288,13 @@ def _build_context(today: date) -> dict:
             # prior-close / unavailable stop (None = fine). The premarket lane
             # turns the latter into a failure and the former into an email footer.
             "held_stop_notes": held_stop_notes,
-            "held_stops_failed": held_stops_failed}
+            "held_stops_failed": held_stops_failed,
+            # Additive (#26 C3c): the EFFECTIVE (already floored) AUTO result per
+            # ticker (never port_df["Stop"], which a manual stop can override): the
+            # EOD floor writer reads it. `held_stop_floors_readable` is False when the
+            # saved floors couldn't be read (distinct from "none saved").
+            "held_stops": held_stops,
+            "held_stop_floors_readable": held_stop_floors_readable}
 
 
 def compute_protective_alerts(today: date | None = None) -> dict:
@@ -484,6 +500,9 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         "manual_stops_unreadable": bool(ctx.get("manual_stops_unreadable")),
         "held_stop_notes": list(ctx.get("held_stop_notes", [])),
         "held_stops_failed": ctx.get("held_stops_failed"),
+        # Additive (#26 C3c): the premarket lane's saved-floor heartbeat inputs
+        "held_stops": ctx.get("held_stops"),
+        "held_stop_floors_readable": ctx.get("held_stop_floors_readable"),
         # Additive — full WATCH/TRIM/EXIT + RISK_OFF signal lists (composite_score
         # attached above) for exit_signals capture. Never used to build `alerts`
         # above; the EXIT-only/risk_off email scope is unchanged.
@@ -1788,4 +1807,7 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
             # detect a ticker missing from `held_data` entirely (circularity
             # guard — see that function's docstring).
             "held_tickers": ctx.get("held_tickers"),
-            "manual_stops_unreadable": bool(ctx.get("manual_stops_unreadable"))}
+            "manual_stops_unreadable": bool(ctx.get("manual_stops_unreadable")),
+            # Additive (#26 C3c): what the EOD floor writer saves (see _build_context)
+            "held_stops": ctx.get("held_stops"),
+            "held_stop_floors_readable": ctx.get("held_stop_floors_readable")}

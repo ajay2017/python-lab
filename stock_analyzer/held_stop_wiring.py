@@ -5,8 +5,14 @@ is the DRIVER the app, the cron and the headless engine all call, so every
 surface judges a breach against the same number:
 
   build_held_stops(holdings, held_data, trades_df, as_of, *, fetch_history,
-                   fetch_range=None)
+                   floors, fetch_range=None)
       -> {TICKER: result dict}      (never raises)
+
+`floors` (REQUIRED, no default; #26 C3c) is `db.load_held_stop_floors_or_none`'s
+result: {TICKER: {episode_start: row}}, `{}` = read with nothing saved, `None` =
+couldn't be read. `held_stop_floor.apply_floor` is applied ONCE per ticker, to the
+result of the frame that produced it, so every surface reads the same effective
+stop (it never changes the basis; a buy-day / unavailable result is not floored).
 
 `fetch_range(ticker, as_of) -> {"low", "high"} | None` is consulted only for a
 position bought today and only when no history frame has a row for today: Yahoo
@@ -41,6 +47,7 @@ import pandas as pd
 from stock_analyzer import constants as _C
 from stock_analyzer import data as _data
 from stock_analyzer import held_stop as hs
+from stock_analyzer import held_stop_floor as hsf
 from stock_analyzer.act_today_precedence import is_stop_breached
 
 # basis values that mean "do not claim the stop only moves up / full history"
@@ -169,7 +176,12 @@ def _wrap(ticker: str, res: dict, note: str, avg_cost: float, *, fell_back: bool
         "ticker": ticker,
         "stop": res["stop"],
         "basis": basis,
-        "label": label_for(basis, res.get("binding"), res.get("ratchet_label")),
+        # a floored `res` (held_stop_floor.apply_floor) carries its own label /
+        # floor / stop_set_on: pass them through (the EOD writer fails closed on a
+        # result with no `floor` dict, so a dropped key would silently write nothing)
+        "label": res.get("label") or label_for(basis, res.get("binding"), res.get("ratchet_label")),
+        "floor": res.get("floor"),
+        "stop_set_on": res.get("stop_set_on"),
         "binding": res.get("binding"),
         "since": res.get("since"),
         "last_session": res.get("last_session"),
@@ -423,7 +435,7 @@ def _long_frame(ticker: str, ep: dict, as_of: date, pol: dict, fetch_history):
 
 
 def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
-         fetch_range=None) -> dict:
+         floors, fetch_range=None) -> dict:
     t = _ticker(h)
     shares, avg_cost = _exact_shares(h), _avg_cost(h)
     ep = hs.episode_from_journal(t, trades_df, shares, shares_tol=float(_C.HELD_STOP_SHARES_TOL))
@@ -432,6 +444,22 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
 
     def run(df, **extra):
         return hs.compute_held_stop(df, ep, avg_cost, as_of, **kw)
+
+    def floored(out: dict, frame) -> dict:
+        """The saved floor, applied once to `out` with the frame that produced it.
+        `floors is None` (or not a dict) = the saved floors couldn't be read."""
+        readable = isinstance(floors, dict)
+        rows = floors.get(t, {}) if readable else None
+        try:
+            return hsf.apply_floor(out, rows, ep=ep, avg_cost=avg_cost, frame=frame,
+                                   as_of=as_of, readable=readable)
+        except Exception as e:      # a floor bug must never remove today's stop
+            kept = dict(out)
+            kept["floor"] = {"state": hsf.UNREADABLE, "value": None, "set_on": None,
+                             "reason": f"floor check failed: {type(e).__name__}",
+                             "note": "", "row_as_of": None, "computed": out.get("stop")}
+            kept["stop_set_on"] = None
+            return kept
 
     if ep.get("status") == "ok" and ep.get("start") is not None and ep["start"] >= as_of:
         return _buy_day(t, ep, bundle, avg_cost, as_of, pol, fetch_history, fetch_range)
@@ -446,14 +474,14 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
         if not _usable_frame(df):
             return _unavailable(t, "No price history is available for this position.", avg_cost)
         res = run(df)
-        return _wrap(t, res, _note_for(res, ep, bundle=False, n_sessions=None, fetch_problem=None),
-                     avg_cost, ep=ep)
+        return floored(_wrap(t, res, _note_for(res, ep, bundle=False, n_sessions=None,
+                                               fetch_problem=None), avg_cost, ep=ep), df)
 
     long_df, problem = _long_frame(t, ep, as_of, pol, fetch_history)
     if long_df is not None and problem is None:
         res = run(long_df)
-        return _wrap(t, res, _note_for(res, ep, bundle=False, n_sessions=None, fetch_problem=None),
-                     avg_cost, ep=ep)
+        return floored(_wrap(t, res, _note_for(res, ep, bundle=False, n_sessions=None,
+                                               fetch_problem=None), avg_cost, ep=ep), long_df)
 
     # fallback: the app's bundle frame, always "partial"
     problem = problem or "Longer price history couldn't be loaded"
@@ -470,11 +498,11 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
     note = _note_for(res, ep, bundle=True, n_sessions=n, fetch_problem=problem)
     if res["basis"] in ("prior_session", "unavailable"):
         note = _note_for(res, ep, bundle=False, n_sessions=None, fetch_problem=None)
-    return _wrap(t, res, note, avg_cost, fell_back=True, ep=ep)
+    return floored(_wrap(t, res, note, avg_cost, fell_back=True, ep=ep), frame)
 
 
 def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_history,
-                     fetch_range=None) -> dict:
+                     floors, fetch_range=None) -> dict:
     """{TICKER: held-stop result} for every valid holding. NEVER raises: a ticker
     whose build throws becomes a degraded "Stop Unavailable" result with a note.
 
@@ -484,7 +512,10 @@ def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_histo
     unreadable). as_of: ET `date` (always passed in). fetch_history(ticker,
     period) -> unadjusted OHLCV frame; may raise or return None. fetch_range(
     ticker, as_of) -> {"low", "high"} | None is optional and used only for a
-    bought-today position when no frame has a today row (see `_buy_day`)."""
+    bought-today position when no frame has a today row (see `_buy_day`).
+    floors: REQUIRED (no default, so a caller can't forget it): the saved held-stop
+    floors, {TICKER: {episode_start: row}}; `{}` = read, none saved; `None` = couldn't
+    be read (the floor stays off and a degraded note says so)."""
     out: dict[str, dict] = {}
     try:
         pol = _policy()
@@ -497,7 +528,7 @@ def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_histo
             t = _ticker(h)
             if not t or _exact_shares(h) <= 0 or _avg_cost(h) <= 0:
                 continue
-            out[t] = _one(h, held_data, trades_df, as_of, fetch_history, pol, fetch_range)
+            out[t] = _one(h, held_data, trades_df, as_of, fetch_history, pol, floors, fetch_range)
         except Exception as exc:
             try:
                 t = _ticker(h)
@@ -523,12 +554,25 @@ def plain_text_note(note) -> str:
     return str(note or "").replace(chr(92) + "$", "$")
 
 
+def full_note(h) -> str:
+    """A held-stop result's note plus its saved-floor sentence (`floor.note`, set
+    only on a degraded basis; empty otherwise), joined by a space. Unchanged
+    when there is no floor note."""
+    if not isinstance(h, dict):
+        return ""
+    note = str(h.get("note") or "")
+    fl = h.get("floor")
+    fnote = str(fl.get("note") or "") if isinstance(fl, dict) else ""
+    return f"{note} {fnote}".strip() if fnote else note
+
+
 def degraded_notes(held_stops) -> list[tuple[str, str, str]]:
     """[(ticker, label, note)] for every degraded result, sorted by ticker: the
-    rows of the degraded-basis banner."""
+    rows of the degraded-basis banner. The note includes the saved-floor sentence
+    (`full_note`) when there is one."""
     if not isinstance(held_stops, dict):
         return []
-    return [(t, str(h.get("label") or ""), str(h.get("note") or ""))
+    return [(t, str(h.get("label") or ""), full_note(h))
             for t, h in sorted(held_stops.items()) if degraded(h)]
 
 

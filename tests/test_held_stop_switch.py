@@ -334,7 +334,7 @@ def test_googl_extended_hours_fill_breached_sell_all_5_shares(early_trail):
     as_of = df.index[k + 3].date()
     holdings = [{"Ticker": "GOOGL", "Shares": 5.0, "Shares Exact": 5.0, "Avg Cost ($)": 310.60}]
     trades = _journal([("GOOGL", "BUY", 5.0, 310.60, E.isoformat())])
-    stops = hw.build_held_stops(holdings, {}, trades, as_of, fetch_history=lambda t, p: df)
+    stops = hw.build_held_stops(holdings, {}, trades, as_of, fetch_history=lambda t, p: df, floors={})
     g = stops["GOOGL"]
     assert g["basis"] == "full" and g["components"]["entry"] is not None   # fill accepted
     assert g["stop"] > 283.82
@@ -366,7 +366,7 @@ def test_fslr_episode_oct12_add_oct16_ratchet_restarts_at_the_add(early_trail):
     avg = (4 * px1 + 2 * px2) / 6
     holdings = [{"Ticker": "FSLR", "Shares": 6.0, "Shares Exact": 6.0, "Avg Cost ($)": avg}]
     out = hw.build_held_stops(holdings, {}, trades, date(2026, 10, 30),
-                              fetch_history=lambda t, p: df)["FSLR"]
+                              fetch_history=lambda t, p: df, floors={})["FSLR"]
     assert out["basis"] == "full" and out["since"] == e1
     ep = hs.episode_from_journal("FSLR", trades, 6.0, shares_tol=C.HELD_STOP_SHARES_TOL)
     assert ep["start"] == e1 and ep["last_buy"] == e2 and ep["first_buy_price"] == pytest.approx(px1)
