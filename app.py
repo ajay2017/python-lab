@@ -40287,6 +40287,9 @@ elif page == "💰 Account":
     # the honest exposure picture.
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("💰 Account")
+    # 🙈 Hide values: read once. `_m` masks text amounts; this flag gates the inputs
+    # that cannot mask their own number (cash form, baseline form, paydown slider).
+    _acct_priv = st.session_state.get("_privacy", True)
     st.caption(
         "Your account-level view — cash, total value, and true (account-level) "
         "concentration. The rest of the app reasons about invested equity; setting your "
@@ -40375,7 +40378,7 @@ elif page == "💰 Account":
                         _acct_delta_word = "more cash (less margin debit)" if _acct_cash_delta_since > 0 \
                             else "less cash (more margin debit)"
                         _acct_delta_clause = (
-                            f" — roughly **${abs(_acct_cash_delta_since):,.0f} {_acct_delta_word}** than "
+                            f" — roughly **{_m(f'\\${abs(_acct_cash_delta_since):,.0f}')} {_acct_delta_word}** than "
                             "shown above, from those trades"
                         )
                     st.caption(
@@ -40412,8 +40415,9 @@ elif page == "💰 Account":
                 st.caption("🧪 Net capital check unavailable right now")
             if _levered:
                 st.caption(
-                    f"⚖️ **Margin debit \\${abs(_cash):,.0f}** — you hold \\${_equity:,.0f} of stock on "
-                    f"\\${_total_acct:,.0f} of your own money. Total value & growth correctly net out the "
+                    f"⚖️ **Margin debit {_m(f'\\${abs(_cash):,.0f}')}** — you hold "
+                    f"{_m(f'\\${_equity:,.0f}')} of stock on "
+                    f"{_m(f'\\${_total_acct:,.0f}')} of your own money. Total value & growth correctly net out the "
                     "loan; account-level concentration below runs HIGHER than equity weight because "
                     "leverage amplifies exposure relative to your own capital."
                 )
@@ -40620,57 +40624,64 @@ elif page == "💰 Account":
         # Cash entry — always available; data-sanity validated; read-only-viewer aware.
         if not db.is_readonly():
             st.divider()
-            with st.form("_account_cash_form", clear_on_submit=False):
-                # No min_value: negative = a margin debit. This lets Total / Growth /
-                # Return / account-concentration all net out the loan correctly (they
-                # derive from total = equity + cash). Tip in the help reconciles it.
-                _new_cash = st.number_input(
-                    "Net cash / margin ($)",
-                    value=float(_cash or 0.0), step=100.0, format="%.2f",
-                    help=(
-                        "Uninvested cash you own. NEGATIVE = a margin debit (borrowed to hold more "
-                        "stock than your cash covers). Tip: enter Robinhood's Total portfolio value "
-                        "− your stock holdings value — that nets out any margin loan and keeps the "
-                        "app reconciled. "
-                        + (f"Your invested equity is ${_equity:,.0f}." if _have_pf
-                           else "Open Home to load your equity as a reference.")
-                    ),
-                )
-                # D4 (U7 C3): a synced note pre-fills blank, so a hand-saved balance
-                # doesn't keep the "Synced via SnapTrade" note that pairs it with
-                # the positions snapshot.
-                _new_note = st.text_input(
-                    "Note (optional)",
-                    value=_broker_frame_view.cash_note_default(
-                        _acct.get("note") if _acct else None),
-                )
-                _cash_submit = st.form_submit_button("Save cash balance")
-            if _cash_submit:
-                _cash_implausible = False
-                if _have_pf and _new_cash > max(_equity * 10.0, 1_000_000.0):
-                    st.warning(
-                        f"⚠️ \\${_new_cash:,.0f} is far larger than your \\${_equity:,.0f} invested "
-                        "equity — double-check this before relying on account figures."
+            if _acct_priv:
+                st.caption("🙈 Values are hidden — click 👁 Show values in the sidebar to edit your cash balance.")
+            else:
+                with st.form("_account_cash_form", clear_on_submit=False):
+                    # No min_value: negative = a margin debit. This lets Total / Growth /
+                    # Return / account-concentration all net out the loan correctly (they
+                    # derive from total = equity + cash). Tip in the help reconciles it.
+                    _new_cash = st.number_input(
+                        "Net cash / margin ($)",
+                        value=float(_cash or 0.0), step=100.0, format="%.2f",
+                        help=(
+                            "Uninvested cash you own. NEGATIVE = a margin debit (borrowed to hold more "
+                            "stock than your cash covers). Tip: enter Robinhood's Total portfolio value "
+                            "− your stock holdings value — that nets out any margin loan and keeps the "
+                            "app reconciled. "
+                            + (f"Your invested equity is ${_equity:,.0f}." if _have_pf
+                               else "Open Home to load your equity as a reference.")
+                        ),
                     )
-                    _cash_implausible = True
-                if _have_pf and _new_cash < 0 and abs(_new_cash) > _equity:
-                    st.warning(
-                        f"⚠️ A margin debit of \\${abs(_new_cash):,.0f} exceeds your \\${_equity:,.0f} "
-                        "equity — that implies negative net worth. Double-check the sign/amount."
+                    # D4 (U7 C3): a synced note pre-fills blank, so a hand-saved balance
+                    # doesn't keep the "Synced via SnapTrade" note that pairs it with
+                    # the positions snapshot.
+                    _new_note = st.text_input(
+                        "Note (optional)",
+                        value=_broker_frame_view.cash_note_default(
+                            _acct.get("note") if _acct else None),
                     )
-                    _cash_implausible = True
-                if _cash_implausible:
-                    st.session_state["_acct_implausible_pending"] = (
-                        _new_cash, _broker_frame_view.cash_note_to_save(_new_note))
-                else:
-                    if db.save_account_cash(
-                            _new_cash, _broker_frame_view.cash_note_to_save(_new_note)):
-                        st.success("Saved.")
-                        st.rerun()
+                    _cash_submit = st.form_submit_button("Save cash balance")
+                if _cash_submit:
+                    _cash_implausible = False
+                    if _have_pf and _new_cash > max(_equity * 10.0, 1_000_000.0):
+                        st.warning(
+                            f"⚠️ \\${_new_cash:,.0f} is far larger than your \\${_equity:,.0f} invested "
+                            "equity — double-check this before relying on account figures."
+                        )
+                        _cash_implausible = True
+                    if _have_pf and _new_cash < 0 and abs(_new_cash) > _equity:
+                        st.warning(
+                            f"⚠️ A margin debit of \\${abs(_new_cash):,.0f} exceeds your \\${_equity:,.0f} "
+                            "equity — that implies negative net worth. Double-check the sign/amount."
+                        )
+                        _cash_implausible = True
+                    if _cash_implausible:
+                        st.session_state["_acct_implausible_pending"] = (
+                            _new_cash, _broker_frame_view.cash_note_to_save(_new_note))
                     else:
-                        st.error("Couldn't save — database offline or read-only.")
+                        if db.save_account_cash(
+                                _new_cash, _broker_frame_view.cash_note_to_save(_new_note)):
+                            st.success("Saved.")
+                            st.rerun()
+                        else:
+                            st.error("Couldn't save — database offline or read-only.")
 
-            _pend_cash_data = st.session_state.get("_acct_implausible_pending")
+            # Hidden with the form under 🙈 Hide values: a "Save anyway" for an
+            # amount the user can't see must not be offered (the pending value
+            # stays in session_state and reappears with 👁 Show values).
+            _pend_cash_data = (None if _acct_priv
+                               else st.session_state.get("_acct_implausible_pending"))
             if _pend_cash_data is not None:
                 _conf_col, _cancel_col = st.columns(2)
                 if _conf_col.button("Save anyway", type="primary", key="_acct_cash_confirm"):
@@ -40710,22 +40721,25 @@ elif page == "💰 Account":
                 "net deposits (deposits − withdrawals) if you know them — then it reads as all-time gain."
             )
             if not db.is_readonly():
-                with st.form("_account_baseline_form", clear_on_submit=False):
-                    _bdate = st.date_input("Baseline as of", value=date.today(), key="_acct_bdate")
-                    _bamt = st.number_input(
-                        "Contributed capital ($)", min_value=0.0,
-                        value=float(_total_value or 0.0), step=100.0, format="%.2f",
-                        help="Default = current total account value. Or enter lifetime net deposits for all-time gain.",
-                    )
-                    _bsub = st.form_submit_button("Set baseline")
-                if _bsub:
-                    if _bamt <= 0:
-                        st.warning("Enter your contributed capital (greater than 0).")
-                    elif db.add_account_flow(_bdate.isoformat(), "baseline", _bamt, "Baseline"):
-                        st.success("Baseline set.")
-                        st.rerun()
-                    else:
-                        st.error("Couldn't save — database offline or read-only.")
+                if _acct_priv:
+                    st.caption("🙈 Values are hidden — click 👁 Show values in the sidebar to set your baseline.")
+                else:
+                    with st.form("_account_baseline_form", clear_on_submit=False):
+                        _bdate = st.date_input("Baseline as of", value=date.today(), key="_acct_bdate")
+                        _bamt = st.number_input(
+                            "Contributed capital ($)", min_value=0.0,
+                            value=float(_total_value or 0.0), step=100.0, format="%.2f",
+                            help="Default = current total account value. Or enter lifetime net deposits for all-time gain.",
+                        )
+                        _bsub = st.form_submit_button("Set baseline")
+                    if _bsub:
+                        if _bamt <= 0:
+                            st.warning("Enter your contributed capital (greater than 0).")
+                        elif db.add_account_flow(_bdate.isoformat(), "baseline", _bamt, "Baseline"):
+                            st.success("Baseline set.")
+                            st.rerun()
+                        else:
+                            st.error("Couldn't save — database offline or read-only.")
         else:
             # v3: money-weighted (Modified Dietz) return — corrects for deposit/withdrawal
             # timing, the distortion v2's naive gain/NCC ignores. Equals simple growth%
@@ -40777,7 +40791,7 @@ elif page == "💰 Account":
                     _fc1.write(str(_fl.get("flow_date") or "—"))
                     _fc2.write(str(_fl.get("flow_type", "")).title())
                     _sign = "−" if _fl.get("flow_type") == "withdrawal" else "+"
-                    _fc3.write(f"{_sign}${_fl.get('amount', 0):,.2f}")
+                    _fc3.write(_m(f"{_sign}\\${_fl.get('amount', 0):,.2f}"))
                     _fc4.write(_fl.get("note") or "")
                     if not db.is_readonly():
                         _fid = _fl.get("id")
@@ -41696,6 +41710,10 @@ elif page == "💰 Account":
                 st.markdown("#### If You Paid Down Debt")
                 if _cvm_current_debit <= 0:
                     st.caption("No current margin debit — nothing to model here.")
+                elif _acct_priv:
+                    # The slider shows the debit (default = half, max = all), so it
+                    # can't be masked; the shock input / metrics / captions go with it.
+                    st.caption("🙈 Values are hidden — click 👁 Show values in the sidebar to model a paydown.")
                 else:
                     _cvm_dl1, _cvm_dl2 = st.columns(2)
                     _cvm_paydown = _cvm_dl1.slider(
@@ -45887,6 +45905,7 @@ On the 💰 Account page, enter your **Net cash / margin ($)**:
 - A **positive** number = uninvested cash you own.
 - A **negative** number = a **margin debit** (you've borrowed to hold more stock than your cash covers). The app handles this correctly — your Total, Growth, and Return all subtract the loan.
 - **Don't enter "margin available"** — that's borrowing *capacity*, not money you own.
+- With **🙈 Hide values** on, the cash box is hidden (an input can't mask its number) — click **👁 Show values** in the sidebar to edit it. The same goes for the baseline form and Capital vs Margin's *If You Paid Down Debt* slider.
 
 Under the cash figures, a **🧪 Net capital check** line shows your net capital two ways: from your journal (the Total Account Value above) and from Robinhood's own positions saved in the same sync as the cash. When they differ, an expander names each ticker and how many shares each side holds; a name with no price, or one with a stock split logged since the sync, is listed but left out of the figure. A sell Robinhood has filled but that isn't in your journal yet makes the journal figure read too high, so **new-position sizing uses the lower of the two**: when Robinhood's figure is lower the line says its sizes are capped at Robinhood's figure, and when it is higher sizing keeps the journal figure (it can only ever make a size smaller). The same lower figure feeds the 25%-of-net-capital cap and the daily new-position budget on Grow Today, 📋 Watchlist, 📈 Analysis and the emails. When Robinhood's positions can't be compared (no snapshot yet, the cash wasn't saved by the same sync, nothing priced), the line says why and sizing uses the journal figure. If you save the cash balance by hand, the Note box starts blank when the saved note is the sync's, and a hand-saved balance never keeps the sync's note, so it isn't mistaken for a synced one.
 
