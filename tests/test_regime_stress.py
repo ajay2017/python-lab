@@ -276,3 +276,34 @@ class TestFactorTiltAlwaysDisclosedInEvidence:
         to read absence as balance."""
         assert "NOT MEASURED" in rs._SCENARIO_SYSTEM
         assert "never treat its absence" in rs._SCENARIO_SYSTEM
+
+
+# ─── CpiYoyGap C2: the regime's CPI month reaches the prompt ─────────────────
+
+def test_build_inputs_passes_cpi_month_and_basis_through_only_when_present():
+    from datetime import date
+    with_month = rs.build_regime_scenario_inputs(
+        None, None, {"label": "X", "cpi_yoy": 3.7,
+                     "cpi_yoy_month": date(2026, 9, 1), "cpi_yoy_basis": "fallback"},
+        None, None)["regime"]
+    assert with_month["cpi_yoy_month"] == date(2026, 9, 1)
+    assert with_month["cpi_yoy_basis"] == "fallback"
+    without = rs.build_regime_scenario_inputs(None, None, {"label": "X", "cpi_yoy": 3.7}, None, None)["regime"]
+    assert "cpi_yoy_month" not in without and "cpi_yoy_basis" not in without
+
+
+def test_format_evidence_names_the_cpi_month_only_on_a_fallback():
+    from datetime import date
+    base = {"label": "Inflation Fight", "fed_trend": "holding", "cpi_yoy": 3.74,
+            "confidence": 50, "signals": []}
+    fb = rs._format_evidence({"regime": dict(base, cpi_yoy_month=date(2026, 9, 1),
+                                             cpi_yoy_basis="fallback")})
+    assert "CPI YoY: 3.74 (Sep 2026, newest month with a 12-month figure), confidence" in fb
+    latest = rs._format_evidence({"regime": dict(base, cpi_yoy_month=date(2026, 10, 1),
+                                                 cpi_yoy_basis="latest")})
+    unavailable = rs._format_evidence({"regime": dict(base, cpi_yoy=None, cpi_yoy_month=None,
+                                                      cpi_yoy_basis="unavailable")})
+    legacy = rs._format_evidence({"regime": base})        # no month keys at all
+    for text in (latest, legacy):
+        assert "CPI YoY: 3.74, confidence" in text and "newest month" not in text
+    assert "newest month" not in unavailable and "CPI YoY: None, confidence" in unavailable

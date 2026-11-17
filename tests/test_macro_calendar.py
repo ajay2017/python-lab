@@ -7,8 +7,8 @@ Signals banner and several downstream advisors, so every boundary in the
 delta, HY credit spread, SPY 20d return, VIX level) is tested at-boundary vs
 just-past using the real `constants.py` values, plus the "rate_cut hard gate"
 that reassigns the winner when CPI is not actually controlled, and the
-winning-score-too-weak fallback to "neutral". `_fred_obs`/`_fred_series_last_
-updated` locally import `requests` inside their functions — the real
+winning-score-too-weak fallback to "neutral". `_fred_obs`/`_fred_obs_dated`/
+`_fred_series_last_updated` locally import `requests` inside their functions — the real
 installed module is monkeypatched directly (its local import resolves to the
 same cached module object), mirroring test_stress_test.py's yfinance pattern
 (also used here for the SPY/VIX market-data signals).
@@ -284,10 +284,22 @@ def _et(y, m, d, hh=9, mm=30):
     return pytz.timezone("America/New_York").localize(datetime(y, m, d, hh, mm))
 
 
+def _monthly(vals, newest=date(2026, 6, 1), step=1):
+    """Dated rows (date, value), NEWEST FIRST, one per `step` months, no gaps."""
+    from stock_analyzer import fred_periods as fp
+    return [(fp.sub_months(newest, i * step), v) for i, v in enumerate(vals)]
+
+
+# GDP is quarterly (step_months 3): 2026-Q2 = 4.0, 2026-Q1 = 3.0
+_GDP_2Q = _monthly([4.0, 3.0], newest=date(2026, 4, 1), step=3)
+_GDP_1Q = _monthly([4.0], newest=date(2026, 4, 1), step=3)
+_GDP_1Q_35 = _monthly([3.5], newest=date(2026, 4, 1), step=3)
+
+
 def test_fetch_fred_unrecognized_event_skipped_entirely(monkeypatch):
     def _boom(*a, **k):
-        raise AssertionError("_fred_obs should not be called for an unmapped event")
-    monkeypatch.setattr(mc, "_fred_obs", _boom)
+        raise AssertionError("_fred_obs_dated should not be called for an unmapped event")
+    monkeypatch.setattr(mc, "_fred_obs_dated", _boom)
     ev = _mk_event("Some Unmapped Event Name", date(2026, 7, 1))
     before = dict(ev)
     mc._fetch_fred("key", [ev], date(2026, 7, 15))
@@ -298,8 +310,8 @@ def test_fetch_fred_same_series_fetched_once_for_multiple_events(monkeypatch):
     calls = []
     def fake_fred_obs(series_id, limit, api_key):
         calls.append(series_id)
-        return [114.0 - i for i in range(14)]
-    monkeypatch.setattr(mc, "_fred_obs", fake_fred_obs)
+        return _monthly([114.0 - i for i in range(14)])
+    monkeypatch.setattr(mc, "_fred_obs_dated", fake_fred_obs)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
 
     ev1 = _mk_event("CPI Inflation", date(2026, 6, 1))
@@ -309,7 +321,7 @@ def test_fetch_fred_same_series_fetched_once_for_multiple_events(monkeypatch):
 
 
 def test_fetch_fred_future_event_actual_none_previous_from_current_obs(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [3.5])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_1Q_35)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev = _mk_event("GDP Advance Estimate", date(2026, 10, 30))  # future vs. today below
     mc._fetch_fred("key", [ev], date(2026, 7, 15))
@@ -321,7 +333,7 @@ def test_fetch_fred_future_event_actual_none_previous_from_current_obs(monkeypat
 
 
 def test_fetch_fred_past_event_actual_from_current_previous_from_shifted(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev = _mk_event("GDP Advance Estimate", date(2026, 5, 1))  # past vs. today below
     mc._fetch_fred("key", [ev], date(2026, 7, 15))
@@ -331,7 +343,7 @@ def test_fetch_fred_past_event_actual_from_current_previous_from_shifted(monkeyp
 
 
 def test_fetch_fred_prepopulated_actual_and_previous_not_overwritten(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev = _mk_event("GDP Advance Estimate", date(2026, 5, 1),
                     actual="Preset Actual", previous="Preset Previous")
@@ -341,7 +353,7 @@ def test_fetch_fred_prepopulated_actual_and_previous_not_overwritten(monkeypatch
 
 
 def test_fetch_fred_source_stamped_only_when_originally_static(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev_static = _mk_event("GDP Advance Estimate", date(2026, 5, 1), source="static")
     ev_other = _mk_event("GDP Advance Estimate", date(2026, 5, 1), source="custom")
@@ -351,7 +363,7 @@ def test_fetch_fred_source_stamped_only_when_originally_static(monkeypatch):
 
 
 def test_fetch_fred_drift_days_computed_only_for_past_event_with_known_last_updated(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 4, 29))
     ev = _mk_event("GDP Advance Estimate", date(2026, 5, 1))
     mc._fetch_fred("key", [ev], date(2026, 7, 15))
@@ -361,7 +373,7 @@ def test_fetch_fred_drift_days_computed_only_for_past_event_with_known_last_upda
 
 
 def test_fetch_fred_released_false_and_drift_none_for_future_event_even_with_known_last_updated(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_1Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 7, 1))
     ev = _mk_event("GDP Advance Estimate", date(2026, 10, 30))
     mc._fetch_fred("key", [ev], date(2026, 7, 15))
@@ -371,7 +383,7 @@ def test_fetch_fred_released_false_and_drift_none_for_future_event_even_with_kno
 
 
 def test_fetch_fred_mutates_events_list_in_place(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev = _mk_event("GDP Advance Estimate", date(2026, 5, 1))
     events = [ev]
@@ -444,7 +456,7 @@ def test_same_day_released_dst_offsets_both_convert_correctly():
 
 def test_fetch_fred_same_day_stamped_before_release_time_reads_as_future_event(monkeypatch):
     # Updated earlier the same ET day (07:43 ET) than the 08:30 release: still the prior print.
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 12, 10, 7, 43))
     ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE)
     mc._fetch_fred("key", [ev], _TODAY_RELEASE)
@@ -457,7 +469,7 @@ def test_fetch_fred_same_day_stamped_before_release_time_reads_as_future_event(m
 
 def test_fetch_fred_same_day_old_last_updated_reads_as_future_event(monkeypatch):
     # FRED's newest obs (4.0) is still LAST month's print; last_updated is a month old.
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 11, 12))
     ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE)
     mc._fetch_fred("key", [ev], _TODAY_RELEASE)
@@ -469,7 +481,7 @@ def test_fetch_fred_same_day_old_last_updated_reads_as_future_event(monkeypatch)
 
 
 def test_fetch_fred_same_day_unknown_last_updated_reads_as_not_released(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
     ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE)
     mc._fetch_fred("key", [ev], _TODAY_RELEASE)
@@ -481,7 +493,7 @@ def test_fetch_fred_same_day_unknown_last_updated_reads_as_not_released(monkeypa
 
 
 def test_fetch_fred_same_day_missing_time_et_fails_safe_to_not_released(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 12, 10, 9, 0))
     ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE, time_et="")
     mc._fetch_fred("key", [ev], _TODAY_RELEASE)
@@ -489,7 +501,7 @@ def test_fetch_fred_same_day_missing_time_et_fails_safe_to_not_released(monkeypa
 
 
 def test_fetch_fred_same_day_after_release_reads_as_past_event(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 12, 10, 8, 31))
     ev = _mk_event("GDP Advance Estimate", _TODAY_RELEASE)
     mc._fetch_fred("key", [ev], _TODAY_RELEASE)
@@ -501,7 +513,7 @@ def test_fetch_fred_same_day_after_release_reads_as_past_event(monkeypatch):
 
 
 def test_fetch_fred_same_day_no_key_leaves_event_unenriched(monkeypatch):
-    # No FRED key: _fred_obs returns [] (real function, no request made).
+    # No FRED key: _fred_obs_dated returns None (real function, no request made).
     def _no_request(*a, **k):
         raise AssertionError("no network call expected without a key")
     monkeypatch.setattr(requests, "get", _no_request)
@@ -512,7 +524,7 @@ def test_fetch_fred_same_day_no_key_leaves_event_unenriched(monkeypatch):
 
 
 def test_fetch_fred_past_and_future_unchanged_by_same_day_rule(monkeypatch):
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [4.0, 3.0])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 11, 12))
     past = _mk_event("GDP Advance Estimate", date(2026, 12, 9))
     future = _mk_event("GDP Advance Estimate", date(2026, 12, 11))
@@ -525,8 +537,8 @@ def test_fetch_fred_past_and_future_unchanged_by_same_day_rule(monkeypatch):
 
 def test_macro_block_map_same_day_unreleased_blocks_before_0830_lifts_at_0830(monkeypatch):
     from stock_analyzer import entry_eligibility as ee
-    # CPI series needs >= 13 obs for the YoY transform; the values don't matter here.
-    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [114.0 - i for i in range(14)])
+    # CPI series needs a 12-month-earlier row for the YoY; the values don't matter here.
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _monthly([114.0 - i for i in range(14)]))
     monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 11, 12))
     ev = _mk_event("CPI Inflation", _TODAY_RELEASE, category="Inflation")
     mc._fetch_fred("key", [ev], _TODAY_RELEASE)
@@ -583,8 +595,11 @@ def test_build_macro_calendar_row_shape_and_defaults(monkeypatch):
         "date", "time_et", "event", "category", "impact", "days_label",
         "description", "context", "affected_tickers", "previous", "estimate",
         "actual", "source", "released", "released_at", "drift_days",
+        "actual_period", "previous_period", "actual_note", "previous_note",
     }
     assert set(row.keys()) == expected_keys
+    assert row["actual_period"] is None and row["previous_period"] is None
+    assert row["actual_note"] is None and row["previous_note"] is None
     assert row["released"] is False
     assert row["released_at"] is None
     assert row["drift_days"] is None
@@ -599,8 +614,35 @@ def _fred_obs_dispatch(fred_map):
     return _f
 
 
+_DAILY_SERIES = ("DGS2", "DGS10")
+
+
+def _to_dated(series_id, vals):
+    """Positional test lists -> dated rows (newest first) with the SAME meaning the
+    old positional code gave them: monthly series step back one month per slot
+    from Oct 2026 (so obs[12] is Oct 2025), daily series one calendar day per
+    slot. Already-dated rows (tuples) and None pass through."""
+    from stock_analyzer import fred_periods as fp
+    if vals is None or (vals and isinstance(vals[0], tuple)):
+        return vals
+    if series_id in _DAILY_SERIES:
+        return [(date(2026, 11, 13) - pd.Timedelta(days=i).to_pytimedelta(), v)
+                for i, v in enumerate(vals)]
+    return [(fp.sub_months(date(2026, 10, 1), i), v) for i, v in enumerate(vals)]
+
+
+def _fred_obs_dated_dispatch(fred_map):
+    def _f(series_id, limit, api_key):
+        # Honour `limit` like FRED does (newest-first rows), so a too-small
+        # regime row count fails a real gate test instead of passing silently.
+        rows = _to_dated(series_id, fred_map.get(series_id, []))
+        return rows if rows is None else rows[:limit]
+    return _f
+
+
 def _regime_setup(monkeypatch, fred_map, yf_download=None):
     monkeypatch.setattr(mc, "_fred_obs", _fred_obs_dispatch(fred_map))
+    monkeypatch.setattr(mc, "_fred_obs_dated", _fred_obs_dated_dispatch(fred_map))
     if yf_download is None:
         def _raise(*a, **k):
             raise RuntimeError("no network in tests")
@@ -942,3 +984,470 @@ def test_verified_rows_carry_their_period_label():
     assert labels[("2026-12-15", "PPI Producer Prices")] == "Nov 2026 PPI"
     assert labels[("2026-11-17", "Retail Sales")] == "Oct 2026 Retail Sales"
     assert labels[("2026-12-16", "Retail Sales")] == "Nov 2026 Retail Sales"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CpiYoyGap C2 — date-keyed FRED changes wired into macro_calendar
+# (docs/plans/cpi-yoy-gap-spec.md; pure core in tests/test_fred_periods.py)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# FRED CPIAUCNS as the lead transcribed it from fredgraph.csv on 2026-11-16
+# (None = the "." row: BLS never published an October 2025 CPI).
+_REAL_CPI_2024_09_TO_2026_10 = [
+    ("2024-09-01", 315.301), ("2024-10-01", 315.664), ("2024-11-01", 315.493),
+    ("2024-12-01", 315.605), ("2025-01-01", 317.671), ("2025-02-01", 319.082),
+    ("2025-03-01", 319.799), ("2025-04-01", 320.795), ("2025-05-01", 321.465),
+    ("2025-06-01", 322.561), ("2025-07-01", 323.048), ("2025-08-01", 323.976),
+    ("2025-09-01", 324.800), ("2025-10-01", None),    ("2025-11-01", 324.122),
+    ("2025-12-01", 324.054), ("2026-01-01", 325.252), ("2026-02-01", 326.785),
+    ("2026-03-01", 330.213), ("2026-04-01", 333.020), ("2026-05-01", 335.123),
+    ("2026-06-01", 333.952), ("2026-07-01", 333.918), ("2026-08-01", 334.980),
+    ("2026-09-01", 336.940), ("2026-10-01", 337.511),
+]
+
+
+def _real_cpi(extra=()):
+    rows = [(date.fromisoformat(d), v) for d, v in _REAL_CPI_2024_09_TO_2026_10]
+    rows += [(date.fromisoformat(d), v) for d, v in extra]
+    return sorted(rows, key=lambda t: t[0], reverse=True)
+
+
+# ─── _fred_obs_dated: offline (None) is not empty ([]) ─────────────────────────
+
+def test_fred_obs_dated_no_key_is_none_and_no_request(monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError("requests.get should not be called without an api_key")
+    monkeypatch.setattr(requests, "get", _boom)
+    assert mc._fred_obs_dated("CPIAUCNS", 26, None) is None
+    assert mc._fred_obs_dated("CPIAUCNS", 26, "") is None
+
+
+def test_fred_obs_dated_http_error_and_exception_are_none(monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _FakeResp(status_code=500, text="boom"))
+    assert mc._fred_obs_dated("CPIAUCNS", 26, "key") is None
+
+    def _raise(*a, **k):
+        raise ConnectionError("down")
+    monkeypatch.setattr(requests, "get", _raise)
+    assert mc._fred_obs_dated("CPIAUCNS", 26, "key") is None
+
+
+def test_fred_obs_dated_no_rows_is_empty_list_not_none(monkeypatch):
+    monkeypatch.setattr(requests, "get",
+                        lambda *a, **k: _FakeResp(json_data={"observations": []}))
+    got = mc._fred_obs_dated("CPIAUCNS", 26, "key")
+    assert got == [] and got is not None
+
+
+def test_fred_obs_dated_keeps_dot_rows_newest_first_and_asks_for_exactly_limit(monkeypatch):
+    captured = {}
+
+    def fake_get(url, params=None, timeout=None):
+        captured.update(params)
+        # unsorted on purpose: the parser must return newest first
+        return _FakeResp(json_data={"observations": [
+            {"date": "2025-09-01", "value": "324.800"},
+            {"date": "2025-10-01", "value": "."},
+            {"date": "2025-11-01", "value": "324.122"},
+        ]})
+    monkeypatch.setattr(requests, "get", fake_get)
+    got = mc._fred_obs_dated("CPIAUCNS", 26, "  k  ")
+    assert got == [(date(2025, 11, 1), 324.122), (date(2025, 10, 1), None),
+                   (date(2025, 9, 1), 324.800)]
+    assert captured["limit"] == 26          # rows, "." rows included: no +4 slack
+    assert captured["api_key"] == "k"
+
+
+def test_fred_map_row_counts_cover_current_and_previous_by_date():
+    for name, cfg in mc._FRED_MAP.items():
+        want = 26 if cfg["transform"] == "yoy_pct" else 6
+        assert cfg["limit"] >= want, name
+    assert mc._FRED_MAP["GDP Advance Estimate"]["step_months"] == 3
+    assert all("step_months" not in c for n, c in mc._FRED_MAP.items()
+               if n != "GDP Advance Estimate")
+
+
+# ─── _fetch_fred on the real 2025-10 CPI gap ───────────────────────────────────
+
+def _cpi_event(ev_date):
+    return _mk_event("CPI Inflation", ev_date)
+
+
+def test_fetch_fred_oct_2026_cpi_actual_not_computable_but_released(monkeypatch):
+    """The 11-10 CPI: Oct 2026 has no 12-month figure (Oct 2025 is a "." row). The
+    old positional code printed a 13-month +3.91%; now actual is None, the period
+    and the reason travel in their own fields, previous is Sep 2026's true +3.74%."""
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _real_cpi())
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 11, 10, 8, 31))
+    ev = _cpi_event(date(2026, 11, 10))
+    mc._fetch_fred("key", [ev], date(2026, 11, 12))
+    assert ev["actual"] is None
+    assert ev["actual_period"] == "Oct 2026"
+    assert ev["actual_note"] == "no 12-month figure: FRED has no Oct 2025 value"
+    assert ev["previous"] == "CPI YoY: +3.74%"
+    assert ev["previous_period"] == "Sep 2026"
+    assert ev["previous_note"] is None
+    assert ev["released"] is True            # FRED posted Oct 2026: still a released event
+    assert ev["drift_days"] == 0
+
+
+def test_fetch_fred_next_cpi_previous_is_the_not_computable_oct_reading(monkeypatch):
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _real_cpi())
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 11, 10, 8, 31))
+    ev = _cpi_event(date(2026, 12, 10))
+    mc._fetch_fred("key", [ev], date(2026, 11, 12))
+    assert ev["actual"] is None and ev["released"] is False
+    assert ev["previous"] is None
+    assert ev["previous_period"] == "Oct 2026"
+    assert ev["previous_note"] == "no 12-month figure: FRED has no Oct 2025 value"
+
+
+def test_fetch_fred_after_the_dec_10_print_actual_is_true_12_month_previous_still_gapped(monkeypatch):
+    rows = _real_cpi(extra=[("2026-11-01", 338.000)])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: rows)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 12, 10, 8, 31))
+    ev = _cpi_event(date(2026, 12, 10))
+    mc._fetch_fred("key", [ev], date(2026, 12, 10))
+    want = (338.000 - 324.122) / 324.122 * 100            # Nov 2026 vs Nov 2025
+    assert ev["actual"] == f"CPI YoY: {want:+.2f}%"
+    assert ev["actual_period"] == "Nov 2026" and ev["actual_note"] is None
+    assert ev["previous"] is None                          # Oct 2026: base Oct 2025 is the gap
+    assert ev["previous_period"] == "Oct 2026"
+    assert "FRED has no Oct 2025 value" in ev["previous_note"]
+    assert ev["released"] is True
+
+
+def test_fetch_fred_dot_row_for_current_month_does_not_borrow_an_older_base(monkeypatch):
+    """Positional code skipped "." rows and silently compared against the next older
+    value. A trailing "." (Nov listed without a number) leaves Oct as the newest
+    VALUED reading, never a re-based Nov."""
+    rows = _real_cpi(extra=[("2026-11-01", None)])
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: rows)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
+    ev = _cpi_event(date(2026, 11, 10))
+    mc._fetch_fred("key", [ev], date(2026, 11, 12))
+    assert ev["actual_period"] == "Oct 2026" and ev["actual"] is None
+
+
+def test_fetch_fred_series_with_no_valued_row_leaves_event_untouched(monkeypatch):
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: [(date(2026, 4, 1), None)])
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
+    ev = _mk_event("GDP Advance Estimate", date(2026, 5, 1))
+    before = dict(ev)
+    mc._fetch_fred("key", [ev], date(2026, 7, 15))
+    assert ev == before
+
+
+def test_fetch_fred_gdp_previous_is_the_prior_quarter_with_quarter_labels(monkeypatch):
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
+    ev = _mk_event("GDP Advance Estimate", date(2026, 7, 29))
+    mc._fetch_fred("key", [ev], date(2026, 8, 5))
+    assert ev["actual"] == "GDP QoQ Ann.: 4.00%" and ev["actual_period"] == "Q2 2026"
+    assert ev["previous"] == "GDP QoQ Ann.: 3.00%" and ev["previous_period"] == "Q1 2026"
+
+
+def test_fetch_fred_gdp_missing_prior_quarter_is_not_the_quarter_before_that(monkeypatch):
+    rows = _monthly([4.0, 2.0], newest=date(2026, 4, 1), step=6)   # Q2 2026, Q4 2025 (Q1 absent)
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: rows)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
+    ev = _mk_event("GDP Advance Estimate", date(2026, 7, 29))
+    mc._fetch_fred("key", [ev], date(2026, 8, 5))
+    assert ev["actual"] == "GDP QoQ Ann.: 4.00%"
+    assert ev["previous"] is None and ev["previous_period"] == "Q1 2026"
+    assert ev["previous_note"] == "no figure: FRED has no Q1 2026 value"
+
+
+def test_fetch_fred_preset_actual_keeps_its_period_and_note_untouched(monkeypatch):
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _GDP_2Q)
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
+    ev = _mk_event("GDP Advance Estimate", date(2026, 5, 1), actual="Preset Actual")
+    mc._fetch_fred("key", [ev], date(2026, 7, 15))
+    assert ev["actual"] == "Preset Actual"
+    assert ev.get("actual_period") is None and ev.get("actual_note") is None
+    assert ev["released"] is True
+
+
+# ─── Parser guard: macro_playbook._parse_number reads the FIRST number ─────────
+
+def _no_gap_series(cfg):
+    """A gap-free dated series for the config's step with known positive values."""
+    step = cfg.get("step_months", 1)
+    return _monthly([200.0 - 3.0 * i + 0.125 * i * i for i in range(cfg["limit"])],
+                    newest=date(2026, 4, 1) if step == 3 else date(2026, 6, 1), step=step)
+
+
+def test_every_fetch_fred_string_parses_to_its_own_value_and_matches_positional_math(monkeypatch):
+    from stock_analyzer.macro_playbook import _parse_number
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
+    for name, cfg in mc._FRED_MAP.items():
+        obs = _no_gap_series(cfg)
+        monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, _o=obs, **k: _o)
+        ev = _mk_event(name, date(2026, 7, 1))
+        mc._fetch_fred("key", [ev], date(2026, 8, 1))
+        vals = [v for _, v in obs]
+        # no-gap equivalence with the legacy positional transform
+        want_cur = mc._apply_transform(vals, cfg["transform"], cfg["unit"])
+        want_prev = mc._apply_transform(vals[1:], cfg["transform"], cfg["unit"])
+        assert ev["actual"] == f"{cfg['label']}: {want_cur}", name
+        assert ev["previous"] == f"{cfg['label']}: {want_prev}", name
+        # the parser sees the value, never a month / year / note digit
+        assert _parse_number(ev["actual"]) == pytest.approx(
+            float(want_cur.replace(",", "").rstrip("%K")), abs=1e-9), name
+        assert _parse_number(ev["previous"]) == pytest.approx(
+            float(want_prev.replace(",", "").rstrip("%K")), abs=1e-9), name
+        assert ev["actual_note"] is None and ev["previous_note"] is None
+        assert ev["actual_period"] and ev["previous_period"]
+        # a future event's previous carries the same exact shape
+        fut = _mk_event(name, date(2026, 9, 1))
+        mc._fetch_fred("key", [fut], date(2026, 8, 1))
+        assert fut["previous"] == ev["actual"], name
+
+
+def test_negative_and_zero_values_keep_the_value_first_in_the_string(monkeypatch):
+    from stock_analyzer.macro_playbook import _parse_number
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: None)
+    rows = _monthly([-1.6, 0.0], newest=date(2026, 4, 1), step=3)     # GDP QoQ -1.6, 0.0
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: rows)
+    ev = _mk_event("GDP Advance Estimate", date(2026, 7, 29))
+    mc._fetch_fred("key", [ev], date(2026, 8, 5))
+    assert ev["actual"] == "GDP QoQ Ann.: -1.60%" and _parse_number(ev["actual"]) == -1.6
+    assert ev["previous"] == "GDP QoQ Ann.: 0.00%" and _parse_number(ev["previous"]) == 0.0
+
+
+def test_not_computable_actual_classifies_to_none_while_the_event_reads_released(monkeypatch):
+    from stock_analyzer.macro_playbook import _SCENARIO_THRESHOLDS, _parse_number, classify_scenario
+    assert "CPI Inflation" in _SCENARIO_THRESHOLDS      # else the None below proves nothing
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: _real_cpi())
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 11, 10, 8, 31))
+    ev = _cpi_event(date(2026, 11, 10))
+    mc._fetch_fred("key", [ev], date(2026, 11, 12))
+    assert classify_scenario("CPI Inflation", ev["actual"]) is None
+    assert ev["released"] is True
+    # the previous string still parses to its own value, not to a year in a label
+    assert _parse_number(ev["previous"]) == pytest.approx(3.74)
+
+
+# ─── Risk 2: the macro hold and the Brief's release signature keep their behaviour ──
+
+def test_not_computable_same_day_release_lifts_the_hold_as_before_and_not_earlier(monkeypatch):
+    from stock_analyzer import entry_eligibility as ee
+    from stock_analyzer.macro_release import release_signature
+    rows = _real_cpi()
+    monkeypatch.setattr(mc, "_fred_obs_dated", lambda *a, **k: rows)
+    sectors = mc.affected_sectors("Inflation") - {"__ALL__"}
+    assert sectors
+    sec = sorted(sectors)[0]
+    d = date(2026, 11, 10)
+
+    # FRED posted the (not-computable) Oct 2026 CPI at 08:31 ET: released True lifts
+    # the hold on the event day, exactly as the old 13-month "actual" did.
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 11, 10, 8, 31))
+    ev = _cpi_event(d)
+    mc._fetch_fred("key", [ev], d)
+    assert ev["actual"] is None and ev["released"] is True
+    ev["date"] = d.isoformat()
+    assert ee.macro_hold(sec, ee.macro_block_map([ev], d, datetime(2026, 11, 10, 8, 29))) is None
+
+    # the day BEFORE the release the same event is future: released False, hold on
+    ev2 = _cpi_event(d)
+    mc._fetch_fred("key", [ev2], date(2026, 11, 9))
+    assert ev2["released"] is False
+    ev2["date"] = d.isoformat()
+    assert ee.macro_hold(sec, ee.macro_block_map([ev2], date(2026, 11, 9),
+                                                 datetime(2026, 11, 9, 20, 0)))
+
+    # same day, FRED not updated yet (stamp is last month's): hold stays until 08:30
+    monkeypatch.setattr(mc, "_fred_series_last_updated_et", lambda *a, **k: _et(2026, 10, 14, 9, 0))
+    ev3 = _cpi_event(d)
+    mc._fetch_fred("key", [ev3], d)
+    assert ev3["released"] is False
+    ev3["date"] = d.isoformat()
+    assert ee.macro_hold(sec, ee.macro_block_map([ev3], d, datetime(2026, 11, 10, 8, 29)))
+    assert ee.macro_hold(sec, ee.macro_block_map([ev3], d, datetime(2026, 11, 10, 8, 30))) is None
+
+    # the Brief's memo signature never reads actual / released / the new fields
+    ev_hi = {"event": "CPI Inflation", "date": d, "time_et": "08:30", "impact": mc.HIGH}
+    base = release_signature([ev_hi], d, datetime(2026, 11, 10, 9, 0))
+    enriched = dict(ev_hi, actual=None, released=True, actual_period="Oct 2026",
+                    actual_note="no 12-month figure: FRED has no Oct 2025 value")
+    assert release_signature([enriched], d, datetime(2026, 11, 10, 9, 0)) == base
+
+
+# ─── detect_macro_regime: CPI by date, bounded fallback, unknown blocks rate_cut ──
+
+def _cpi_rows(latest=None, fallback=None, unavailable=False, newest=date(2026, 10, 1), n=26):
+    """Dated CPI rows (100.0 a year back, additive so the yoy is bit-exact):
+      latest      the newest month has a true 12-month change of `latest`
+      fallback    the newest month's BASE is a gap; the month before has `fallback`
+      unavailable the newest month AND the one before both lack a base
+    """
+    from stock_analyzer import fred_periods as fp
+    months = [fp.sub_months(newest, i) for i in range(n)]
+    val = {m: 100.0 for m in months}
+    if latest is not None:
+        val[newest] = 100.0 + latest
+    if fallback is not None:
+        val[fp.sub_months(newest, 12)] = None
+        val[fp.sub_months(newest, 1)] = 100.0 + fallback
+    if unavailable:
+        val[fp.sub_months(newest, 12)] = None
+        val[fp.sub_months(newest, 13)] = None
+    return [(m, val[m]) for m in months]
+
+
+def _risk_on(monkeypatch, cpi):
+    """Calm VIX (rate_cut +1), SPY +5.5% (+2), calm HY 250bps (+2) = 5 before CPI."""
+    fred_map = {"BAMLH0A0HYM2": [2.5]}
+    if cpi != "absent":
+        fred_map["CPIAUCNS"] = cpi
+    _regime_setup(monkeypatch, fred_map, yf_download=lambda *a, **k: _mk_market_df(
+        [100.0, 105.5], [14.0, 14.0]))
+    return mc.detect_macro_regime("key")
+
+
+def test_regime_cpi_latest_controlled_lets_rate_cut_win(monkeypatch):
+    r = _risk_on(monkeypatch, _cpi_rows(latest=2.0))
+    assert r["regime"] == "rate_cut"
+    assert r["cpi_yoy"] == pytest.approx(2.0)
+    assert r["cpi_yoy_basis"] == "latest" and r["cpi_yoy_month"] == date(2026, 10, 1)
+    assert ("CPI YoY", "2.0%", "✅", "rate_cut") in r["signals"]
+
+
+def test_regime_cpi_exactly_at_controlled_max_is_allowed(monkeypatch):
+    r = _risk_on(monkeypatch, _cpi_rows(latest=REGIME_CPI_CONTROLLED_MAX))
+    assert r["cpi_yoy"] == pytest.approx(REGIME_CPI_CONTROLLED_MAX)
+    assert r["regime"] == "rate_cut"          # gate is strictly >
+
+
+def test_regime_cpi_just_over_controlled_max_blocks_rate_cut(monkeypatch):
+    r = _risk_on(monkeypatch, _cpi_rows(latest=REGIME_CPI_CONTROLLED_MAX + 0.01))
+    assert r["regime"] != "rate_cut"
+    assert r["regime"] == "neutral"           # best other regime scores 0 <= MIN
+
+
+def test_regime_fallback_month_above_ceiling_blocks_rate_cut(monkeypatch):
+    r = _risk_on(monkeypatch, _cpi_rows(fallback=3.0))
+    assert r["cpi_yoy_basis"] == "fallback" and r["cpi_yoy_month"] == date(2026, 9, 1)
+    assert r["cpi_yoy"] == pytest.approx(3.0)
+    assert r["regime"] != "rate_cut"
+
+
+def test_regime_fallback_month_controlled_allows_rate_cut_and_names_the_months(monkeypatch):
+    r = _risk_on(monkeypatch, _cpi_rows(fallback=2.0))
+    assert r["regime"] == "rate_cut"
+    assert r["cpi_yoy_basis"] == "fallback"
+    pill = [s for s in r["signals"] if s[0] == "CPI YoY"]
+    assert pill == [("CPI YoY", "2.0% (Sep 2026; Oct 2026 has no 12-month figure)",
+                     "✅", "rate_cut")]
+
+
+def test_regime_cpi_unavailable_blocks_rate_cut_with_a_visible_pill(monkeypatch):
+    r = _risk_on(monkeypatch, _cpi_rows(unavailable=True))
+    assert r["regime"] != "rate_cut"
+    assert r["cpi_yoy"] is None and r["cpi_yoy_month"] is None
+    assert r["cpi_yoy_basis"] == "unavailable"
+    assert ("CPI YoY", "unavailable (Rate-Cut Optimism can't be selected)", "⚠️", None) in r["signals"]
+
+
+@pytest.mark.parametrize("cpi", [None, [], "absent"])
+def test_regime_cpi_series_down_or_empty_blocks_rate_cut(monkeypatch, cpi):
+    r = _risk_on(monkeypatch, cpi)
+    assert r["regime"] != "rate_cut"
+    assert r["cpi_yoy"] is None and r["cpi_yoy_basis"] == "unavailable"
+
+
+def test_regime_no_fred_key_blocks_rate_cut_even_when_market_signals_are_risk_on(monkeypatch):
+    """No key: every FRED fetch is offline (None). Market-only signals give
+    rate_cut 3 (SPY +2, VIX +1); the old None-skips-the-gate code returned
+    rate_cut here."""
+    def _no_net(*a, **k):
+        raise AssertionError("no FRED request without a key")
+    monkeypatch.setattr(requests, "get", _no_net)
+    monkeypatch.setattr(yfinance, "download",
+                        lambda *a, **k: _mk_market_df([100.0, 105.5], [14.0, 14.0]))
+    r = mc.detect_macro_regime(None)
+    assert r["scores"]["rate_cut"] == 3
+    assert r["regime"] != "rate_cut"
+    assert r["cpi_yoy"] is None and r["cpi_yoy_basis"] == "unavailable"
+
+
+@pytest.mark.parametrize("cpi,label", [
+    (_cpi_rows(latest=-1.0), "latest -1.0"), (_cpi_rows(latest=2.0), "latest 2.0"),
+    (_cpi_rows(latest=REGIME_CPI_CONTROLLED_MAX), "latest at max"),
+    (_cpi_rows(latest=REGIME_CPI_CONTROLLED_MAX + 0.01), "latest over"),
+    (_cpi_rows(latest=4.5), "latest hot"),
+    (_cpi_rows(fallback=2.0), "fallback controlled"), (_cpi_rows(fallback=3.0), "fallback over"),
+    (_cpi_rows(unavailable=True), "unavailable"), (None, "series None"), ([], "series empty"),
+])
+def test_regime_rate_cut_implies_a_numeric_cpi_at_or_under_the_ceiling(monkeypatch, cpi, label):
+    r = _risk_on(monkeypatch, cpi)
+    if r["regime"] == "rate_cut":
+        assert r["cpi_yoy"] is not None and r["cpi_yoy"] <= REGIME_CPI_CONTROLLED_MAX, label
+
+
+def test_regime_real_2025_10_gap_falls_back_to_sep_2026_true_12_month(monkeypatch):
+    _regime_setup(monkeypatch, {"CPIAUCNS": _real_cpi()})
+    r = mc.detect_macro_regime("key")
+    assert r["cpi_yoy_basis"] == "fallback" and r["cpi_yoy_month"] == date(2026, 9, 1)
+    assert r["cpi_yoy"] == pytest.approx((336.940 - 324.800) / 324.800 * 100)   # 3.74, not 3.91
+    assert ("CPI YoY", "3.7% (Sep 2026; Oct 2026 has no 12-month figure)",
+            "⚠️", "inflation_fight") in r["signals"]
+
+
+def test_regime_cpi_fetch_asks_for_rows_derived_from_the_fallback_bound(monkeypatch):
+    from stock_analyzer.constants import REGIME_CPI_FALLBACK_MAX_MONTHS
+    seen = {}
+
+    def fake(series_id, limit, api_key):
+        seen[series_id] = limit
+        return None
+
+    def _raise(*a, **k):
+        raise RuntimeError("no network in tests")
+    monkeypatch.setattr(mc, "_fred_obs", lambda *a, **k: [])
+    monkeypatch.setattr(mc, "_fred_obs_dated", fake)
+    monkeypatch.setattr(yfinance, "download", _raise)
+    mc.detect_macro_regime("key")
+    assert seen["CPIAUCNS"] == 13 + REGIME_CPI_FALLBACK_MAX_MONTHS
+
+
+# ─── the other date-keyed regime signals ──────────────────────────────────────
+
+def test_regime_fedfunds_trend_is_by_date_not_position(monkeypatch):
+    """Two months back by DATE: a gap in the middle month changes nothing, a gap
+    in the base month drops the signal (the old code borrowed an older value)."""
+    from stock_analyzer import fred_periods as fp
+    newest = date(2026, 10, 1)
+    ok = [(newest, 3.50), (fp.sub_months(newest, 1), None), (fp.sub_months(newest, 2), 3.75)]
+    _regime_setup(monkeypatch, {"FEDFUNDS": ok})
+    r = mc.detect_macro_regime("key")
+    assert r["fed_trend"] == "cutting"
+
+    gap_base = [(newest, 3.50), (fp.sub_months(newest, 1), 3.60),
+                (fp.sub_months(newest, 2), None), (fp.sub_months(newest, 3), 3.75)]
+    _regime_setup(monkeypatch, {"FEDFUNDS": gap_base})
+    assert mc.detect_macro_regime("key") == mc._NEUTRAL_REGIME     # nothing else was read
+
+
+def test_regime_unemployment_base_in_the_gap_drops_the_signal_with_a_pill(monkeypatch):
+    from stock_analyzer import fred_periods as fp
+    newest = date(2026, 1, 1)                       # base = Oct 2025: UNRATE has no value
+    rows = [(newest, 4.9), (fp.sub_months(newest, 1), 4.5), (fp.sub_months(newest, 2), 4.5),
+            (fp.sub_months(newest, 3), None), (fp.sub_months(newest, 4), 4.3)]
+    # the positional code would have used obs[3] = 4.3 (Sep 2025): +0.6pp, "recession fear"
+    assert 4.9 - 4.3 > REGIME_UNEMP_DELTA_UP_PP
+    _regime_setup(monkeypatch, {"UNRATE": rows, "BAMLH0A0HYM2": [2.5]})
+    r = mc.detect_macro_regime("key")
+    assert ("Unemployment Δ3m", "not computable: FRED has no Oct 2025 value", "⚠️", None) in r["signals"]
+    assert r["scores"]["recession_fear"] == -2      # only the calm-HY term; unemployment added nothing
+
+
+def test_regime_2s10s_uses_the_newest_date_both_series_have(monkeypatch):
+    d = date(2026, 11, 13)
+    dgs2 = [(d, None), (date(2026, 11, 12), 4.0), (date(2026, 11, 11), 3.0)]
+    dgs10 = [(d, 4.5), (date(2026, 11, 12), 4.0 + 0.9), (date(2026, 11, 11), 3.5)]
+    _regime_setup(monkeypatch, {"DGS2": dgs2, "DGS10": dgs10})
+    r = mc.detect_macro_regime("key")
+    # 11-12 is the newest date both have: spread 0.90 (steep), NOT 4.5 - 4.0
+    assert any(s[0] == "2s10s Spread" and s[1].startswith("+0.90%") for s in r["signals"])

@@ -271,6 +271,8 @@ from stock_analyzer import stop_breach_text as _stop_breach_text
 from stock_analyzer import score_text as _score_text
 from stock_analyzer import risk_banner as _risk_banner
 from stock_analyzer import macro_release as _macro_release
+from stock_analyzer import econ_calendar_view as _ecv
+from stock_analyzer import fred_periods as _fred_periods
 from stock_analyzer import trade_caption as _trade_caption
 from stock_analyzer import revision_flag as _revision_flag
 from stock_analyzer import entry_eligibility as _entry_elig
@@ -44608,8 +44610,7 @@ elif page == "📅 Economic Calendar":
 
     # Warn if FRED key is set but none of the events got enriched (API may have failed)
     if _ec_fred_key and _ec_events:
-        _fred_enriched = sum(1 for _e in _ec_events
-                             if _e.get("actual") is not None or _e.get("previous") is not None)
+        _fred_enriched = _ecv.fred_enriched_count(_ec_events)
         if _fred_enriched == 0:
             st.warning(
                 "⚠️ FRED key is set but no actual/previous values were received. "
@@ -44621,20 +44622,24 @@ elif page == "📅 Economic Calendar":
         st.stop()
 
     # ── KPI strip (forward-looking counts only) ───────────────────────────────
+    # The counts / "Next major event" use NOT-done events only (a CPI released
+    # at 08:30 today is Completed, never "next"); "This week" is the current
+    # Mon-Fri week. All decided in econ_calendar_view.kpis (CalLabels).
+    _ec_now = _now_et()
+    _ec_kpi = _ecv.kpis(_ec_events, _ec_now)
+    # Pre-Event Playbook input: date >= today on purpose -- a released-today
+    # event stays here so the playbook can show its own "was released" notice.
     _ec_fwd  = [e for e in _ec_events if e["date"] >= _today_et()]
-    _ec_high = [e for e in _ec_fwd if e["impact"] == MC_HIGH]
-    _ec_week = [e for e in _ec_fwd if (e["date"] - _today_et()).days <= 7]
-    _ec_next = _ec_high[0] if _ec_high else (_ec_fwd[0] if _ec_fwd else None)
     _ek1, _ek2, _ek3, _ek4 = st.columns(4)
-    _ek1.metric(f"Events next {ECONOMIC_CALENDAR_WINDOW_DAYS}d",  len(_ec_fwd))
-    _ek2.metric("🔴 High impact",    len(_ec_high))
-    _ek3.metric("This week",         len(_ec_week),
-                delta="⚠️ Be prepared" if _ec_week else None,
-                delta_color="inverse" if _ec_week else "off")
-    _ec_next_name = _ec_next["event"] if _ec_next else None
+    _ek1.metric(f"Events next {ECONOMIC_CALENDAR_WINDOW_DAYS}d",  _ec_kpi["upcoming_count"])
+    _ek2.metric("🔴 High impact",    _ec_kpi["high_count"])
+    _ek3.metric("This week",         _ec_kpi["week_count"],
+                delta="⚠️ Be prepared" if _ec_kpi["week_count"] else None,
+                delta_color="inverse" if _ec_kpi["week_count"] else "off")
+    _ec_next_name = _ec_kpi["next_name"]
     _ek4.metric("Next major event",
                 (_ec_next_name[:20] + ("…" if len(_ec_next_name) > 20 else "")) if _ec_next_name else "—",
-                _ec_next["days_label"] if _ec_next else "")
+                _ec_kpi["next_days_label"])
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
     _cal_tab, _play_tab, _post_tab = st.tabs(
@@ -44711,8 +44716,10 @@ elif page == "📅 Economic Calendar":
                     f"font-size:0.72em;font-weight:700'>"
                     f"⚠ Drift {_drift}d — FRED released {_rel_disp}</span>"
                 )
-            # ⏳ Awaiting: past event but no actual yet — FRED hasn't received it
-            if _ev["date"] <= _today_et() and not _ev.get("released") and not _ev.get("actual"):
+            # ⏳ Awaiting: past event (or a same-day one whose release time has
+            # passed) but no actual yet — FRED hasn't received it. A same-day
+            # event before its release time is not awaiting anything yet.
+            if _ecv.is_done(_ev, _ec_now) and not _ev.get("released") and not _ev.get("actual"):
                 _badges.append(
                     f"<span style='background:#1f2937;border:1px solid #6b7280;"
                     f"color:#d1d5db;padding:2px 8px;border-radius:10px;"
@@ -44730,11 +44737,8 @@ elif page == "📅 Economic Calendar":
             return " ".join(_badges)
 
         # Split filtered events into upcoming and past
-        _ec_upcoming = [e for e in _ec_filtered if e["date"] >= _today_et()]
-        _ec_past_rev = sorted(
-            [e for e in _ec_filtered if e["date"] < _today_et()],
-            key=lambda x: x["date"], reverse=True,   # most recent at top
-        )
+        # (a released same-day event is Completed; most recent completed at top)
+        _ec_upcoming, _ec_past_rev = _ecv.split_events(_ec_filtered, _ec_now)
 
         from itertools import groupby as _groupby
 
@@ -44749,14 +44753,7 @@ elif page == "📅 Economic Calendar":
                 _ec_day_list = list(_ec_day_evs)
                 _delta_days  = (_ec_date - _today_et()).days
                 _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ")
-                if _delta_days == 0:
-                    _urgency_tag = " — **TODAY**"
-                elif _delta_days == 1:
-                    _urgency_tag = " — **TOMORROW**"
-                elif _delta_days <= 7:
-                    _urgency_tag = " — *this week*"
-                else:
-                    _urgency_tag = ""
+                _urgency_tag = _ecv.tag_markdown(_ecv.upcoming_day_tag(_ec_date, _today_et()))
 
                 st.markdown(f"##### {_date_label}{_urgency_tag}")
 
@@ -44772,12 +44769,7 @@ elif page == "📅 Economic Calendar":
                     if not _tix_str:
                         _tix_str = "*No direct holdings*"
 
-                    _data_parts = []
-                    if _ev.get("previous") is not None:
-                        _data_parts.append(f"Prev: **{_ev['previous']}**")
-                    if _ev.get("estimate") is not None:
-                        _data_parts.append(f"Est: **{_ev['estimate']}**")
-                    _data_row = "  ·  ".join(_data_parts) if _data_parts else ""
+                    _data_row = _ecv.card_value_row(_ev, done=_ecv.is_done(_ev, _ec_now))
 
                     with st.expander(
                         f"{_imp_icon} {_icon} **{_ev['event']}**  ·  "
@@ -44819,9 +44811,9 @@ elif page == "📅 Economic Calendar":
 
             for _ec_date, _ec_day_evs in _groupby(_ec_past_rev, key=lambda x: x["date"]):
                 _ec_day_list = list(_ec_day_evs)
-                _delta_days  = (_ec_date - _today_et()).days   # negative
                 _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ")
-                _ago_tag = " — *yesterday*" if _delta_days == -1 else f" — *{abs(_delta_days)}d ago*"
+                # "today" for a released same-day event, never "0d ago"
+                _ago_tag = _ecv.tag_markdown(_ecv.completed_day_tag(_ec_date, _today_et()))
 
                 st.markdown(f"##### {_date_label}{_ago_tag}")
 
@@ -44837,12 +44829,7 @@ elif page == "📅 Economic Calendar":
                     if not _tix_str:
                         _tix_str = "*No direct holdings*"
 
-                    _data_parts = []
-                    if _ev.get("previous") is not None:
-                        _data_parts.append(f"Prev: **{_ev['previous']}**")
-                    if _ev.get("actual") is not None:
-                        _data_parts.append(f"Actual: **{_ev['actual']}**")
-                    _data_row = "  ·  ".join(_data_parts) if _data_parts else ""
+                    _data_row = _ecv.card_value_row(_ev, done=_ecv.is_done(_ev, _ec_now))
 
                     with st.expander(
                         f"{_imp_icon} {_icon} **{_ev['event']}**  ·  "
@@ -45082,11 +45069,13 @@ elif page == "📅 Economic Calendar":
         else:
             from stock_analyzer.macro_playbook import _SCENARIOS as _PB_SCEN_DEF
 
-            # Events where date ≤ today, HIGH-impact, and have a scenario definition
+            # Events that are done (a past date, or today's once FRED confirms it
+            # or its release time has passed), HIGH-impact, and have a scenario
+            # definition. Same is_done as the 📅 Calendar tab.
             _past_events = sorted(
                 [
                     e for e in _ec_events
-                    if e["date"] <= _today_et()
+                    if _ecv.is_done(e, _ec_now)
                     and e["impact"] == MC_HIGH
                     and e["event"] in _PB_SCEN_DEF
                 ],
@@ -45127,7 +45116,21 @@ elif page == "📅 Economic Calendar":
                     f"  ·  {'FRED+Market' if _regime.get('source') == 'fred+market' else 'ESTIMATED'}"
                 )
                 _regime_fed_tag  = ("  ·  Fed " + _regime.get("fed_trend", "unknown").title()) if _regime.get("fed_trend", "unknown") != "unknown" else ""
-                _regime_cpi_tag  = ("  ·  CPI " + f"{_regime['cpi_yoy']:.1f}%") if _regime.get("cpi_yoy") is not None else ""
+                # CPI tag by basis: "latest" = the newest month's true 12-month change,
+                # "fallback" = the prior month's, labelled with its month, "unavailable"
+                # = none within the bound. A cached regime from before the deploy has no
+                # basis / month keys: read it as "latest" with no month label.
+                _regime_cpi_basis = _regime.get("cpi_yoy_basis") or "latest"
+                _regime_cpi_month = _regime.get("cpi_yoy_month")
+                if _regime_cpi_basis == "unavailable":
+                    _regime_cpi_tag = "  ·  CPI unavailable"
+                elif _regime.get("cpi_yoy") is None:
+                    _regime_cpi_tag = ""
+                elif _regime_cpi_basis == "fallback" and _regime_cpi_month is not None:
+                    _regime_cpi_tag = (f"  ·  CPI {_regime['cpi_yoy']:.1f}% "
+                                       f"({_fred_periods.format_period(_regime_cpi_month)})")
+                else:
+                    _regime_cpi_tag = "  ·  CPI " + f"{_regime['cpi_yoy']:.1f}%"
 
                 # Build signal pills HTML
                 _PILL_STYLES = {
@@ -45183,8 +45186,12 @@ elif page == "📅 Economic Calendar":
                     _pe_date    = _pe["date"]
                     _pe_actual  = _pe.get("actual")
                     _pe_est     = _pe.get("estimate")
-                    _pe_prev    = _pe.get("previous")
-                    _is_today   = (_pe_date == _today_et())
+                    # Previous / Actual lines carry the reading month AFTER the value (or
+                    # the not-computable note); the same text as the 📅 Calendar cards.
+                    _pe_val_lines = _ecv.card_value_lines(_pe, done=True)
+                    _pe_prev_line = next((_l for _l in _pe_val_lines if _l.startswith("Prev: ")), None)
+                    _pe_act_line  = next((_l for _l in _pe_val_lines if _l.startswith("Actual: ")), None)
+                    _is_today   = (_ecv.completed_day_tag(_pe_date, _today_et()) == "today")
                     _conds      = get_scenario_conditions(_pe_name)
 
                     _date_lbl = (
@@ -45242,8 +45249,8 @@ elif page == "📅 Economic Calendar":
                     # ── Previous · Est · Actual data row ─────────────────
                     with _dc1:
                         _pe_parts = []
-                        if _pe_prev is not None:
-                            _pe_parts.append(f"Previous: **{_pe_prev}**")
+                        if _pe_prev_line:
+                            _pe_parts.append("Previous: " + _pe_prev_line[len("Prev: "):])
                         if _est_val is not None:
                             _est_disp = (
                                 f"~{_est_val:,.0f}K"    if _eu_lbl == "K"
@@ -45266,7 +45273,11 @@ elif page == "📅 Economic Calendar":
                                 _beat_badge = " ⬜ vs baseline (no consensus)"
                             else:
                                 _beat_badge = ""
-                            _pe_parts.append(f"Actual: **{_pe_actual}**{_beat_badge}")
+                            _pe_parts.append((_pe_act_line or f"Actual: **{_pe_actual}**") + _beat_badge)
+                        elif _pe_act_line:
+                            # FRED has the month but no figure can be computed (no scenario
+                            # is auto-detected; the manual selector below stays).
+                            _pe_parts.append(_pe_act_line)
                         if _pe_parts:
                             st.markdown("  ·  ".join(_pe_parts))
 
@@ -45321,7 +45332,14 @@ elif page == "📅 Economic Calendar":
                         )
                     else:
                         if _pe_actual is None:
-                            if _is_today:
+                            if _pe.get("actual_note"):
+                                st.info(
+                                    "FRED has this release but no figure can be computed from it "
+                                    "(see Actual above), so no scenario is auto-detected.  \n"
+                                    "Select the scenario manually based on the reported result.",
+                                    icon="ℹ️",
+                                )
+                            elif _is_today:
                                 st.warning(
                                     f"Actual data not yet populated for today's **{_pe_name}**.  \n"
                                     "Click **🔄 Refresh calendar** above to pull the latest FRED data, "
@@ -45991,7 +46009,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🪞 Trade Review** — behavioural retrospective on every recorded trade, over a selectable look-back window (2wk/30d/60d/90d/all-time). Categorizes each trade *App-Followed* (aligned with the app's recommendation), *Deviated* (external info/discretionary), or *Discretionary* (neither recorded) — inferred from the Journal columns, no manual tagging — and flags panic-window trades (made on a day the S&P 500 closed ≤ -1.5%) plus a vs-SPY benchmark per trade. **💡 What the Data Says** turns the raw numbers into a verdict, concrete findings, and one next move. **📈 Performance Trends** charts cumulative P&L and rolling win rate over the window. **⚖ Risk Discipline** checks position-size discipline against your single-name ceiling and sector mix. **🎯 Course-Correction Recommendations** and a **📜 Per-Trade Scorecard** round it out for drilling into individual trades.
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🧭 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
-- **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY**, shown as 🎯 Add (a high-conviction name with a tailwind; it carries no share count — for an add and its size, check 📈 Analysis, which shows Grow Today's call; within 3 days of the release it isn't shown as an add: it reads WATCH if a WATCH rule applies, otherwise HOLD), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
+- **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). Those counts, and "next major event", skip anything already released. An event released today moves to ✅ Completed once FRED has it or its release time (for example 8:30 AM ET) has passed, and then shows its Actual. "This week" means the current Monday to Friday week (on a weekend, the coming week) and "next week" the one after. Each FRED value shows its month after the number, for example "CPI YoY: +3.74% (Sep 2026)". When a 12-month change can't be computed because FRED has no value for the same month a year earlier (October 2025 for CPI), the card says so instead of showing a number, and the macro regime banner uses the month before, labelled with its month (it looks back one month only); if that month has none either it reads "CPI unavailable" and Rate-Cut Optimism can't be selected. **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY**, shown as 🎯 Add (a high-conviction name with a tailwind; it carries no share count — for an add and its size, check 📈 Analysis, which shows Grow Today's call; within 3 days of the release it isn't shown as an add: it reads WATCH if a WATCH rule applies, otherwise HOLD), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, and a “what the app is telling you today” list copied from Today's Brief (the AI narrative is instructed not to add trades; it is paused while the Brief is offline). Pick your own AI provider (Claude/OpenAI/Gemini/Groq). Claude uses the ⚙️ App Settings `fast` model by default (you can pick another under ⚙️ Provider settings). For thesis health see 🧠 AI Insights; for the weekly / monthly reviews see 📄 Reports.
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer with two independent sections. **Forward Volatility Forecaster** (Phase 1) tests whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. **Earnings-Move Magnitude** (Phase 2) tests whether the app's own already-live pre-earnings sizing heuristic beats a naive "assume it moves like its own past prints" baseline, per held ticker around its scheduled print — unsigned magnitude only, never a directional call, and no "upcoming, not yet matured" preview (an outcome is only ever shown after it's known). Both sections feed **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. Each section's skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated.
 - **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Six checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh), and **⑥ Write outcomes** (did today's interactive ledger writes — 6 write paths: the buy recommendations log, the Grow Today gate suppression ledger, the Watchlist Ready-to-Enter log, and the 3 Watchlist/Rebalancer/Analysis gate-ledger capture sites added 2026-09-13 — actually save, or did a swallowed failure look identical to a healthy "nothing to record"?). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Check ⑥, unlike ④/⑤, DOES feed the Home banner — it is a same-session pass/fail signal, not a standing condition or a cold-load cache. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.** Below the checks, **🤖 AI models** lists which model each AI role runs on and where that choice comes from (code default, ⚙️ App Settings, or an environment variable), whether the app's API key can use it, and this app process's calls, errors and fallbacks per role (cron runs happen in their own processes and aren't counted). Under it, a **Portfolio Investigator — AI provider** section lets you choose which AI model the 🔎 Investigator tab (🧠 AI Insights) uses — separate from 🤖 AI Snapshot's own provider choice, not shared or inherited. Only a model that's already passed a required accuracy check is offered.

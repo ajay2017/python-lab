@@ -69,6 +69,12 @@ def build_regime_scenario_inputs(blast_radius_results, clusters, regime_data, cr
             "confidence": regime_data.get("confidence", 0),
             "signals":    list(regime_data.get("signals") or []),
         }
+        # CpiYoyGap: say which month the CPI figure describes. Passed through
+        # only when the regime dict carries them (keeps the evidence shape of a
+        # regime without a month unchanged).
+        for _k in ("cpi_yoy_month", "cpi_yoy_basis"):
+            if _k in regime_data:
+                regime_evidence[_k] = regime_data[_k]
 
         cross_asset_evidence = {
             "label": cross_asset_data.get("label"),
@@ -131,10 +137,19 @@ def _format_evidence(evidence: dict) -> str:
 
         regime = evidence.get("regime") or {}
         if regime:
+            # A fallback CPI is a different month than the newest one: name it.
+            _cpi_month_note = ""
+            if regime.get("cpi_yoy_basis") == "fallback" and regime.get("cpi_yoy_month"):
+                from stock_analyzer import fred_periods as _fp
+                _m = regime.get("cpi_yoy_month")
+                _cpi_month_note = (
+                    f" ({_fp.format_period(_m) if hasattr(_m, 'year') else _m}, "
+                    f"newest month with a 12-month figure)"
+                )
             lines.append(
                 f"Macro regime: {regime.get('label')} "
                 f"(fed trend: {regime.get('fed_trend')}, "
-                f"CPI YoY: {regime.get('cpi_yoy')}, "
+                f"CPI YoY: {regime.get('cpi_yoy')}{_cpi_month_note}, "
                 f"confidence: {regime.get('confidence', 0)}/100)"
             )
             signals = regime.get("signals") or []

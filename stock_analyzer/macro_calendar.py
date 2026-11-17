@@ -24,6 +24,7 @@ from stock_analyzer.constants import (
     REGIME_CPI_CONTROLLED_MAX,
     REGIME_CPI_ELEVATED_MIN,
     REGIME_CPI_HOT_MIN,
+    REGIME_CPI_FALLBACK_MAX_MONTHS,
     REGIME_FEDFUNDS_TREND_PP,
     REGIME_2S10S_INVERTED_PP,
     REGIME_2S10S_FLAT_PP,
@@ -40,6 +41,7 @@ from stock_analyzer.constants import (
     REGIME_VIX_CALM,
     REGIME_WINNING_SCORE_MIN,
 )
+from stock_analyzer import fred_periods as _fp
 
 def _today_et() -> _date:
     return _datetime.now(_pytz.timezone("America/New_York")).date()
@@ -570,53 +572,58 @@ def affected_sectors(category: str, min_severity: int = 2) -> set[str]:
 
 # ── FRED series config ────────────────────────────────────────────────────────
 # Maps each static event name to a FRED series + how to format its value.
-# limit must be large enough to compute BOTH current and previous values:
-#   yoy_pct  : needs 13 obs for current → fetch 14 so obs[1:] also has 13
+# "limit" is a ROW count handed to _fred_obs_dated (rows INCLUDE FRED's "."
+# rows), large enough to compute BOTH the current and the previous change BY
+# DATE (fred_periods; CpiYoyGap), with room for a gap row or two:
+#   yoy_pct  : current + previous need 14 monthly rows -> fetch 26
 #   mom_pct/
-#   mom_diff : needs  2 obs for current → fetch  3 so obs[1:] also has 2
-#   level    : needs  1 obs for current → fetch  2 so obs[1]  is available
+#   mom_diff : ~3 monthly rows                          -> fetch 6
+#   level    : ~2 rows (quarterly GDP: 2 quarters)      -> fetch 6
+# "step_months" (default 1) = the series' period length; the "previous" reading
+# is the current period minus one step (GDP: 3 months).
 _FRED_MAP: dict[str, dict] = {
     "CPI Inflation": {
         "series": "CPIAUCNS",        # CPI All Urban, NSA — matches the headline number quoted in media
         "transform": "yoy_pct",
         "label": "CPI YoY",
         "unit": "%",
-        "limit": 14,                 # 13 for current + 1 so previous can also compute YoY
+        "limit": 26,                 # rows: 14 for current + previous YoY, plus gap slack
     },
     "Non-Farm Payrolls": {
         "series": "PAYEMS",          # Total Nonfarm Employees (thousands)
         "transform": "mom_diff",
         "label": "NFP Chg",
         "unit": "K",
-        "limit": 3,                  # 2 for current diff + 1 extra so previous diff has 2 obs
+        "limit": 6,
     },
     "GDP Advance Estimate": {
         "series": "A191RL1Q225SBEA", # Real GDP QoQ annualised % change (pre-computed)
         "transform": "level",
         "label": "GDP QoQ Ann.",
         "unit": "%",
-        "limit": 2,
+        "limit": 6,
+        "step_months": 3,            # quarterly: previous = the quarter before
     },
     "PPI Producer Prices": {
         "series": "PPIACO",          # PPI All Commodities (index level)
         "transform": "mom_pct",
         "label": "PPI MoM",
         "unit": "%",
-        "limit": 3,                  # 2 for current pct + 1 extra for previous
+        "limit": 6,
     },
     "Retail Sales": {
         "series": "RSAFS",           # Advance Retail Sales, SA (millions)
         "transform": "mom_pct",
         "label": "Retail Sales MoM",
         "unit": "%",
-        "limit": 3,
+        "limit": 6,
     },
     "FOMC Rate Decision": {
         "series": "FEDFUNDS",        # Effective Fed Funds Rate (level)
         "transform": "level",
         "label": "Fed Funds Rate",
         "unit": "%",
-        "limit": 2,
+        "limit": 6,
     },
 }
 
@@ -663,6 +670,86 @@ def _fred_obs(series_id: str, limit: int, api_key: str | None) -> list[float]:
     except Exception as exc:
         _ah.record("fred", "error", f"{series_id}: {str(exc)[:120]}")
         return []
+
+
+def _fred_obs_dated(series_id: str, limit: int, api_key: str | None):
+    """
+    Fetch the newest `limit` ROWS of a FRED series WITH their dates, "." rows
+    kept (CpiYoyGap): ``[(date, float | None), ...]`` NEWEST FIRST, via
+    ``fred_periods.parse_dated_obs``. A "." row is ``(date, None)`` so a gap
+    month stays visible; every change is then computed by date, never by list
+    position.
+
+    Three states (offline is NOT empty):
+      * ``None``  -- could not check: no key, HTTP error, or an exception
+      * ``[]``    -- FRED answered with no rows
+      * rows      -- the observations (some values may be None)
+    Use ``_fred_obs`` only for level-only signals that compare no periods.
+    """
+    if not api_key:
+        return None
+    from stock_analyzer import api_health as _ah
+    import requests as _req
+    api_key = api_key.strip()   # guard against accidental whitespace in secrets
+    params: dict = {
+        "series_id":    series_id,
+        "api_key":      api_key,
+        "file_type":    "json",
+        "sort_order":   "desc",
+        "limit":        limit,
+    }
+    try:
+        resp = _req.get(_FRED_BASE, params=params, timeout=10)
+        if resp.status_code != 200:
+            _ah.record("fred", "error",
+                       f"HTTP {resp.status_code} ({series_id}): {resp.text[:120]}")
+            return None
+        return _fp.parse_dated_obs(resp.json())
+    except Exception as exc:
+        _ah.record("fred", "error", f"{series_id}: {str(exc)[:120]}")
+        return None
+
+
+def _valued_by_date(obs) -> dict:
+    """``{date: value}`` for the rows that HAVE a value; offline (None) and empty
+    both give ``{}`` here because the caller needs a common DATE and treats "no
+    common date" as one outcome (the signal is dropped either way)."""
+    if obs is None:
+        return {}
+    return {d: v for d, v in obs if v is not None}
+
+
+def _format_change_value(value: float, transform: str, unit: str) -> str:
+    """Format a computed change exactly as ``_apply_transform`` does (the
+    ``"LABEL: +x.xx%"`` strings ``macro_playbook._parse_number`` reads)."""
+    if transform == "level":
+        return f"{value:.2f}{unit}"
+    if transform == "mom_diff":
+        return f"{value:+,.0f}{unit}"
+    return f"{value:+.2f}{unit}"          # yoy_pct, mom_pct
+
+
+_CHANGE_KIND = {"yoy_pct": "12-month", "mom_pct": "month-over-month",
+                "mom_diff": "month-over-month"}
+
+
+def _change_note(change: dict, cfg: dict) -> str | None:
+    """Why a reading is not computable ("no 12-month figure: FRED has no Oct 2025
+    value"); None when ``change`` has a value. True for any gap, so it never
+    claims a cause ("never collected"). Kept OUT of the ``actual`` / ``previous``
+    strings (macro_playbook._parse_number reads the FIRST number in them)."""
+    if change["status"] == "ok":
+        return None
+    step = cfg.get("step_months", 1)
+    kind = _CHANGE_KIND.get(cfg["transform"])
+    what = f"no {kind} figure" if kind else "no figure"
+    if change["status"] == "base_missing":
+        base = _fp.format_period(change["base_period"], step)
+        if change.get("reason") == "base_zero":
+            return f"{what}: the {base} value is 0"
+        return f"{what}: FRED has no {base} value"
+    per = _fp.format_period(change["period"], step)
+    return f"{what}: FRED has no {per} value" if per else what
 
 
 def _apply_transform(vals: list[float], transform: str, unit: str) -> str | None:
@@ -788,14 +875,49 @@ def _same_day_released(last_updated_et: _datetime | None, today: _date,
     return last_updated_et.time().replace(tzinfo=None) >= sched
 
 
+def _apply_reading(ev: dict, field: str, change: dict, cfg: dict) -> None:
+    """Fill ``ev[field]`` ("actual" / "previous") from a date-keyed change.
+
+    A preset (truthy) value is kept as is. ``ev[field]`` keeps the EXACT
+    ``"LABEL: +x.xx%"`` shape (``macro_playbook._parse_number`` reads the FIRST
+    number in it, so no month or note may precede the value); the reading's
+    period and the not-computable note go to ``<field>_period`` /
+    ``<field>_note``. A change with no value leaves ``ev[field]`` None.
+    """
+    if ev.get(field):
+        return
+    step = cfg.get("step_months", 1)
+    ev[f"{field}_period"] = _fp.format_period(change["period"], step) or None
+    if change["status"] == "ok":
+        ev[field] = f"{cfg['label']}: " + _format_change_value(
+            change["value"], cfg["transform"], cfg["unit"])
+        ev[f"{field}_note"] = None
+    else:
+        ev[field] = None
+        ev[f"{field}_note"] = _change_note(change, cfg)
+
+
 def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
     """
     Enrich static event dicts in-place with FRED actual/previous values.
     Uses official St. Louis Fed data — no consensus estimates (FRED is releases only).
 
+    Every change is computed BY DATE (``fred_periods``; CpiYoyGap), never by
+    list position: FRED CPIAUCNS has no 2025-10 value, so a positional
+    "12 months ago" was 13 months for every print from Nov 2025 to Oct 2026.
+
     For future events:  previous = last released value, actual = None
     For past events:    actual   = most recent released value,
-                        previous = prior period value
+                        previous = the period one step before it (by date)
+
+    "Most recent" = the newest FRED row that has a value (unchanged mapping:
+    an event is shown the newest reading FRED holds, whichever period that is).
+    A reading that cannot be computed (a gap month, or a gap a year back for a
+    12-month change) leaves ``actual`` / ``previous`` None and says why in
+    ``actual_note`` / ``previous_note``; the period it describes is in
+    ``actual_period`` / ``previous_period`` ("Oct 2026" / "Q3 2026"). The
+    ``actual`` / ``previous`` strings stay ``"LABEL: +x.xx%"`` with nothing
+    before the value.
 
     A same-day event is treated as a past one only when FRED's series was
     updated today (ET) at or after the event's release time
@@ -804,8 +926,10 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
 
     Also populates three drift/release-tracking fields on every FRED-mapped event:
       released_at  : date FRED last updated the series (release proxy), or None
-      released     : True for a past event with a FRED actual, or a same-day
-                     event FRED updated at or after its release time
+      released     : True for a past event once FRED has posted a period for
+                     the series (a not-computable actual still reads released),
+                     or a same-day event FRED updated at or after its release
+                     time
       drift_days   : ev["date"] - released_at; positive means the static date
                      trails the actual release (e.g. static May 13 but FRED
                      released May 12 → drift_days = 1). Set only when both
@@ -814,7 +938,7 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
     """
     from stock_analyzer import api_health as _ah
 
-    fetched: dict[str, list[float]] = {}
+    fetched: dict[str, list | None] = {}
     fetched_meta: dict[str, _datetime | None] = {}
 
     for ev in events:
@@ -825,23 +949,21 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
 
         series = cfg["series"]
         if series not in fetched:
-            obs = _fred_obs(series, cfg["limit"], fred_key)
+            obs = _fred_obs_dated(series, cfg["limit"], fred_key)
             fetched[series] = obs
-            if obs:
+            if obs and any(v is not None for _, v in obs):
                 _ah.record("fred", "success")
             else:
                 _ah.record("fred", "empty")
 
-        obs = fetched.get(series, [])
-        if not obs:
+        obs = fetched.get(series)
+        if obs is None:       # offline (no key / HTTP error): nothing to enrich
             continue
-
-        # obs[0]  = most recently released value
-        # obs[1:] = shifted one period back — used to compute the "previous" reading
-        obs_shifted = obs[1:] if len(obs) > 1 else []
-
-        current_val  = _apply_transform(obs,         cfg["transform"], cfg["unit"])
-        previous_val = _apply_transform(obs_shifted, cfg["transform"], cfg["unit"])
+        step = cfg.get("step_months", 1)
+        cp = _fp.current_and_previous(obs, cfg["transform"], step)
+        cur, prev = cp["current"], cp["previous"]
+        if cur["status"] == "no_data":
+            continue          # offline, empty, or no valued row: leave the event as is
 
         # One series-meta fetch per unique series — cached in fetched_meta so a
         # CPI calendar entry and a CPI macro signal don't both pay for it.
@@ -849,7 +971,6 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
             fetched_meta[series] = _fred_series_last_updated_et(series, fred_key)
         last_updated = fetched_meta[series]
 
-        label = cfg["label"]
         # A same-day event counts as released only once FRED has updated the
         # series today; before the release FRED's newest obs is still the PRIOR
         # print (MacroSameDay), so it must read like a future event.
@@ -858,14 +979,17 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
         )
         if _is_future:
             # Future event: the most recently released FRED value IS the "previous" print
-            # (e.g. for May 13 CPI, obs[0] = March CPI YoY = the prior reading).
-            # previous_val (obs[1:]) would be one period further back — too old.
-            ev["previous"] = ev["previous"] or (f"{label}: {current_val}"  if current_val  else None)
-            ev["actual"]   = None
+            # (e.g. for May 13 CPI, the newest reading = March CPI YoY = the prior reading).
+            # The period one step further back would be too old.
+            _apply_reading(ev, "previous", cur, cfg)
+            ev["actual"]        = None
+            ev["actual_period"] = None
+            ev["actual_note"]   = None
         else:
-            # Past event: obs[0] is the released actual; obs_shifted gives the prior period.
-            ev["actual"]   = ev["actual"]   or (f"{label}: {current_val}"  if current_val  else None)
-            ev["previous"] = ev["previous"] or (f"{label}: {previous_val}" if previous_val else None)
+            # Past event: the newest reading is the released actual; the period one
+            # step before it (by date) is the prior reading.
+            _apply_reading(ev, "actual",   cur,  cfg)
+            _apply_reading(ev, "previous", prev, cfg)
 
         ev["source"] = "static+fred" if ev.get("source") == "static" else ev.get("source", "static+fred")
 
@@ -876,9 +1000,15 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
                 # Drift sign convention: positive = static date trails the real
                 # release (e.g. static = May 13, release = May 12 → +1).
                 ev["drift_days"] = (ev["date"] - last_updated.date()).days
-        # released flag — True iff a past event has a FRED-populated actual.
-        # Future events stay False (release hasn't happened yet).
-        ev["released"] = bool(ev["date"] <= today and ev.get("actual"))
+        # released flag — True iff a past (or same-day confirmed) event has a
+        # FRED-posted period: the newest valued row exists even when its change
+        # is not computable (CalLabels: a not-computable actual still reads
+        # ✓ Released). Future events stay False (release hasn't happened yet).
+        # A preset actual also counts, as before.
+        ev["released"] = bool(
+            ev["date"] <= today and not _is_future
+            and (ev.get("actual") or cur["period"] is not None)
+        )
 
 
 def build_macro_calendar(
@@ -931,6 +1061,13 @@ def build_macro_calendar(
             "previous":         None,
             "estimate":         None,
             "actual":           None,
+            # Period label ("Oct 2026" / "Q3 2026") and the not-computable note for
+            # each FRED reading (CpiYoyGap); kept OUT of previous / actual, whose
+            # first number macro_playbook._parse_number reads.
+            "actual_period":    None,
+            "previous_period":  None,
+            "actual_note":      None,
+            "previous_note":    None,
             "source":           "static",
             # Release/drift fields populated by _fetch_fred when a FRED series
             # is mapped for this event; non-FRED events keep these defaults.
@@ -1027,9 +1164,17 @@ _REGIME_NOTES: dict[str, dict[str, dict[str, str]]] = {
 }
 
 
+# Rows (FRED rows INCLUDE "." rows) the regime fetches per series; plumbing, not
+# policy. CPI: the reading month, REGIME_CPI_FALLBACK_MAX_MONTHS earlier ones,
+# and each one's base 12 months before = 13 + MAX months of rows.
+_REGIME_ROWS_MONTHLY = 6     # FEDFUNDS (2-month change), UNRATE (3-month change)
+_REGIME_ROWS_DAILY   = 10    # DGS2 / DGS10: enough to find a date both have
+_REGIME_CPI_ROWS     = 13 + REGIME_CPI_FALLBACK_MAX_MONTHS
+
 _NEUTRAL_REGIME: dict = {
     "regime": "neutral", "label": "Data-Dependent", "icon": "📊",
     "color": "#6b7280", "bg": "#111827", "fed_trend": "unknown", "cpi_yoy": None,
+    "cpi_yoy_month": None, "cpi_yoy_basis": "unavailable",
     "rationale": (
         "Regime detection unavailable — using textbook scenario interpretation. "
         "A free FRED key (fred.stlouisfed.org) enables auto-detection."
@@ -1046,10 +1191,11 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
     Auto-detect the current macro regime using 7-signal weighted scoring.
 
     Signals:
-      1. Fed Funds trend          (FEDFUNDS, 4 obs monthly)
-      2. CPI YoY                  (CPIAUCNS, 14 obs monthly)
-      3. 2yr-10yr yield spread    (DGS2 + DGS10, 3 obs each daily)
-      4. Unemployment 3-month Δ   (UNRATE, 4 obs monthly)
+      1. Fed Funds trend          (FEDFUNDS, monthly, change by date)
+      2. CPI YoY                  (CPIAUCNS, monthly, TRUE 12-month change by
+                                   date with a bounded fallback)
+      3. 2yr-10yr yield spread    (DGS2 + DGS10, daily, newest date both have)
+      4. Unemployment 3-month Δ   (UNRATE, monthly, change by date)
       5. HY credit spread         (BAMLH0A0HYM2, 3 obs daily)
       6. SPY 20-day return        (yfinance)
       7. VIX level                (yfinance, same download)
@@ -1062,7 +1208,13 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
       color       : hex colour for UI accents
       bg          : hex background colour
       fed_trend   : "cutting" | "hiking" | "holding" | "unknown"
-      cpi_yoy     : float or None
+      cpi_yoy     : float or None -- the true 12-month change actually used
+                    (None = unknown: Rate-Cut Optimism can't be selected)
+      cpi_yoy_month : date or None -- the month ``cpi_yoy`` describes
+      cpi_yoy_basis : "latest" | "fallback" | "unavailable" (CpiYoyGap: FRED has
+                    no 2025-10 CPI value, so the newest month can lack a
+                    12-month figure; the regime then uses the month before it,
+                    bounded by REGIME_CPI_FALLBACK_MAX_MONTHS)
       rationale   : one-sentence explanation
       confidence  : int 0-100
       scores      : dict of raw scores per regime
@@ -1085,58 +1237,85 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
 
     fed_trend = "unknown"
     cpi_yoy: float | None = None
+    cpi_yoy_month = None
+    cpi_yoy_basis = "unavailable"
 
     # ── Signal 1: Fed Funds trend ──────────────────────────────────────────────
+    # By DATE (CpiYoyGap sweep): newest valued month vs the month two earlier.
     try:
-        fed_obs = _fred_obs("FEDFUNDS", 4, _key)
-        if len(fed_obs) >= 3:
-            any_success = True
-            diff = fed_obs[0] - fed_obs[2]
-            if diff < -REGIME_FEDFUNDS_TREND_PP:
-                fed_trend = "cutting"
-                scores["rate_cut"] += 3
-                signals.append(("Fed Funds", f"{fed_obs[0]:.2f}% (cutting)", "✂️", "rate_cut"))
-            elif diff > REGIME_FEDFUNDS_TREND_PP:
-                fed_trend = "hiking"
-                scores["inflation_fight"] += 3
-                signals.append(("Fed Funds", f"{fed_obs[0]:.2f}% (hiking)", "🔺", "inflation_fight"))
-            else:
-                fed_trend = "holding"
-                signals.append(("Fed Funds", f"{fed_obs[0]:.2f}% (holding)", "→", None))
+        fed_obs = _fred_obs_dated("FEDFUNDS", _REGIME_ROWS_MONTHLY, _key)
+        _fed_cur = _fp.current_and_previous(fed_obs, "level")["current"]
+        if _fed_cur["status"] == "ok":
+            _fed_ch = _fp.change_by_period(fed_obs, "mom_diff", _fed_cur["period"], 2)
+            if _fed_ch["status"] == "ok":
+                any_success = True
+                diff = _fed_ch["value"]
+                _fed_now = _fed_ch["ref_value"]
+                if diff < -REGIME_FEDFUNDS_TREND_PP:
+                    fed_trend = "cutting"
+                    scores["rate_cut"] += 3
+                    signals.append(("Fed Funds", f"{_fed_now:.2f}% (cutting)", "✂️", "rate_cut"))
+                elif diff > REGIME_FEDFUNDS_TREND_PP:
+                    fed_trend = "hiking"
+                    scores["inflation_fight"] += 3
+                    signals.append(("Fed Funds", f"{_fed_now:.2f}% (hiking)", "🔺", "inflation_fight"))
+                else:
+                    fed_trend = "holding"
+                    signals.append(("Fed Funds", f"{_fed_now:.2f}% (holding)", "→", None))
     except Exception:
         pass
 
     # ── Signal 2: CPI YoY ─────────────────────────────────────────────────────
+    # A TRUE 12-month change by date (CpiYoyGap). If the newest month (or its
+    # base a year back) has no value, the regime falls back at most
+    # REGIME_CPI_FALLBACK_MAX_MONTHS month(s) to one that has; past that the CPI
+    # is UNKNOWN and Rate-Cut Optimism can't be selected (U1: missing data only
+    # tightens that gate).
     try:
-        cpi_obs = _fred_obs("CPIAUCNS", 14, _key)
-        if len(cpi_obs) >= 13:
+        cpi_obs = _fred_obs_dated("CPIAUCNS", _REGIME_CPI_ROWS, _key)
+        _cpi = _fp.cpi_yoy_for_regime(cpi_obs, REGIME_CPI_FALLBACK_MAX_MONTHS)
+        if _cpi["basis"] == "unavailable":
+            signals.append(("CPI YoY", "unavailable (Rate-Cut Optimism can't be selected)",
+                            "⚠️", None))
+        else:
             any_success = True
-            cpi_yoy = (cpi_obs[0] - cpi_obs[12]) / cpi_obs[12] * 100
+            cpi_yoy = _cpi["value"]
+            cpi_yoy_month = _cpi["month"]
+            cpi_yoy_basis = _cpi["basis"]
+            cpi_txt = f"{cpi_yoy:.1f}%"
+            if cpi_yoy_basis == "fallback":
+                cpi_txt += (f" ({_fp.format_period(_cpi['month'])}; "
+                            f"{_fp.format_period(_cpi['skipped_month'])} "
+                            f"has no 12-month figure)")
             if cpi_yoy > REGIME_CPI_HOT_MIN:
                 scores["inflation_fight"] += 3
                 scores["stagflation_risk"] += 2
                 scores["rate_cut"] -= 2
-                signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "🔥", "inflation_fight"))
+                signals.append(("CPI YoY", cpi_txt, "🔥", "inflation_fight"))
             elif cpi_yoy >= REGIME_CPI_ELEVATED_MIN:
                 scores["inflation_fight"] += 1
                 scores["stagflation_risk"] += 1
-                signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "⚠️", "inflation_fight"))
+                signals.append(("CPI YoY", cpi_txt, "⚠️", "inflation_fight"))
             elif cpi_yoy < REGIME_CPI_CONTROLLED_MAX:
                 scores["rate_cut"] += 2
                 scores["inflation_fight"] -= 2
-                signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "✅", "rate_cut"))
+                signals.append(("CPI YoY", cpi_txt, "✅", "rate_cut"))
             else:
-                signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "→", None))
+                signals.append(("CPI YoY", cpi_txt, "→", None))
     except Exception:
-        pass
+        cpi_yoy, cpi_yoy_month, cpi_yoy_basis = None, None, "unavailable"
 
     # ── Signal 3: 2yr-10yr yield spread ───────────────────────────────────────
     try:
-        dgs2_obs  = _fred_obs("DGS2",  3, _key)
-        dgs10_obs = _fred_obs("DGS10", 3, _key)
-        if dgs2_obs and dgs10_obs:
+        # One freshness per number: the spread uses the newest DATE both series
+        # have a value for, never each series' own newest (a day apart at times).
+        dgs2_obs  = _valued_by_date(_fred_obs_dated("DGS2",  _REGIME_ROWS_DAILY, _key))
+        dgs10_obs = _valued_by_date(_fred_obs_dated("DGS10", _REGIME_ROWS_DAILY, _key))
+        _dgs_common = set(dgs2_obs) & set(dgs10_obs)
+        if _dgs_common:
             any_success = True
-            spread = dgs10_obs[0] - dgs2_obs[0]
+            _dgs_day = max(_dgs_common)
+            spread = dgs10_obs[_dgs_day] - dgs2_obs[_dgs_day]
             spread_str = f"{spread:+.2f}%"
             if spread < REGIME_2S10S_INVERTED_PP:
                 scores["recession_fear"] += 3
@@ -1156,22 +1335,32 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
 
     # ── Signal 4: Unemployment 3-month delta ──────────────────────────────────
     try:
-        unrate_obs = _fred_obs("UNRATE", 4, _key)
-        if len(unrate_obs) >= 4:
-            any_success = True
-            unemp_delta = unrate_obs[0] - unrate_obs[3]
-            delta_str = f"{unemp_delta:+.1f}pp"
-            if unemp_delta > REGIME_UNEMP_DELTA_UP_PP:
-                scores["recession_fear"] += 2
-                scores["stagflation_risk"] += 1
-                signals.append(("Unemployment Δ3m", delta_str, "⚠️", "recession_fear"))
-            elif unemp_delta < REGIME_UNEMP_DELTA_DOWN_PP:
-                scores["rate_cut"] -= 1
-                scores["inflation_fight"] += 1
-                scores["recession_fear"] -= 1
-                signals.append(("Unemployment Δ3m", delta_str, "🟢", "rate_cut"))
+        # By DATE: newest valued month vs the month three earlier. FRED UNRATE
+        # has no 2025-10 value, so a base in a gap drops the signal (visibly).
+        unrate_obs = _fred_obs_dated("UNRATE", _REGIME_ROWS_MONTHLY, _key)
+        _un_cur = _fp.current_and_previous(unrate_obs, "level")["current"]
+        if _un_cur["status"] == "ok":
+            _un_ch = _fp.change_by_period(unrate_obs, "mom_diff", _un_cur["period"], 3)
+            if _un_ch["status"] != "ok":
+                signals.append(("Unemployment Δ3m",
+                                f"not computable: FRED has no "
+                                f"{_fp.format_period(_un_ch['base_period'])} value",
+                                "⚠️", None))
             else:
-                signals.append(("Unemployment Δ3m", delta_str + " (stable)", "→", None))
+                any_success = True
+                unemp_delta = _un_ch["value"]
+                delta_str = f"{unemp_delta:+.1f}pp"
+                if unemp_delta > REGIME_UNEMP_DELTA_UP_PP:
+                    scores["recession_fear"] += 2
+                    scores["stagflation_risk"] += 1
+                    signals.append(("Unemployment Δ3m", delta_str, "⚠️", "recession_fear"))
+                elif unemp_delta < REGIME_UNEMP_DELTA_DOWN_PP:
+                    scores["rate_cut"] -= 1
+                    scores["inflation_fight"] += 1
+                    scores["recession_fear"] -= 1
+                    signals.append(("Unemployment Δ3m", delta_str, "🟢", "rate_cut"))
+                else:
+                    signals.append(("Unemployment Δ3m", delta_str + " (stable)", "→", None))
     except Exception:
         pass
 
@@ -1262,10 +1451,14 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
     # VIX, strong SPY) push the score that way. Without this, a 3.95% CPI print
     # could still land in the rate-cut regime — a direct contradiction of the
     # label.
+    #
+    # An UNKNOWN CPI (cpi_yoy None: series down, no key, or no month within
+    # REGIME_CPI_FALLBACK_MAX_MONTHS has a true 12-month figure) blocks it too
+    # (CpiYoyGap U1): missing data only tightens, because "controlled inflation"
+    # can't be claimed on a number that wasn't read.
     if (
         winner == "rate_cut"
-        and cpi_yoy is not None
-        and cpi_yoy > REGIME_CPI_CONTROLLED_MAX
+        and (cpi_yoy is None or cpi_yoy > REGIME_CPI_CONTROLLED_MAX)
     ):
         _alt_scores = {k: v for k, v in scores.items() if k != "rate_cut"}
         if _alt_scores:
@@ -1345,6 +1538,8 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
         "bg":         defn["bg"],
         "fed_trend":  fed_trend,
         "cpi_yoy":    cpi_yoy,
+        "cpi_yoy_month": cpi_yoy_month,
+        "cpi_yoy_basis": cpi_yoy_basis,
         "rationale":  defn["rationale"],
         "confidence": confidence,
         "scores":     dict(scores),

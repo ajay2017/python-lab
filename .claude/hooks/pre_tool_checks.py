@@ -1032,6 +1032,10 @@ _GATE_FILES = {
     # check and the EOD writer's rows) that keeps a fallback-frame stop from
     # falling below the last full-basis one; added while still unwired.
     "stock_analyzer/held_stop_floor.py",
+    # Added 2026-11-16 (CpiYoyGap C1, docs/plans/cpi-yoy-gap-spec.md): date-keyed FRED
+    # changes and the regime's CPI input (with its bounded fallback) that the
+    # Rate-Cut Optimism hard gate reads; added while still unwired.
+    "stock_analyzer/fred_periods.py",
     # Added 2026-10-30 (finding #13): whether a same-day macro release has passed,
     # i.e. whether the Brief macro card / Pre-Event Playbook still show a pre-release
     # hold / reduce instruction; imported by the gate file act_today_view.

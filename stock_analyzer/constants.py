@@ -1187,6 +1187,14 @@ MACRO_EXPOSURE_MEDIUM_PCT   = 15
 REGIME_CPI_CONTROLLED_MAX = 2.5   # ≤ this = controlled inflation (rate-cut supportive + gate ceiling)
 REGIME_CPI_ELEVATED_MIN   = 3.0   # ≥ this (and ≤ HOT) = mild inflation-fight pressure
 REGIME_CPI_HOT_MIN        = 4.0   # > this = strong inflation-fight / stagflation signal
+# How many months back the regime may fall to find a CPI reading that HAS a true
+# 12-month change (owner decision U2, 2026-11-16; docs/plans/cpi-yoy-gap-spec.md).
+# FRED has no 2025-10 CPI value, so the newest month (or its base month a year
+# earlier) can be missing; the regime then uses the previous month's true 12-month
+# change, labelled with its month, never a 13-month figure. 1 = one month back only.
+# Nothing within the bound -> CPI unknown -> Rate-Cut Optimism can't be selected
+# (missing data only ever tightens that gate).
+REGIME_CPI_FALLBACK_MAX_MONTHS = 1
 
 # ── Regime-classifier remaining 6 signal families (macro_calendar.detect_macro_regime) ─
 # Named per 2026-07-29 audit H2 — these were bare literals (only the CPI ladder
