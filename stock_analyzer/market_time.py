@@ -46,12 +46,13 @@ def today_et() -> date:
 def most_recent_sunday(d: date) -> date:
     """Return the Sunday on or before date `d`.
 
-    Anchors `week_ending`/`period_end` for the weekly-debrief/monthly-report
-    tables, which are UNIQUE on that exact column: a genuine Sunday run, a
-    cron `force` retry on a later calendar day, and an interactive "Generate
-    Now" click on any weekday must all compute the IDENTICAL date so the
-    upsert overwrites in place instead of creating a one-day-off duplicate
-    row. `.weekday()` is Monday=0..Sunday=6, so the offset back to the prior
+    Anchors `week_ending` for the weekly-debrief table, which is UNIQUE on that
+    exact column: a genuine Sunday run, a cron `force` retry on a later calendar
+    day, and an interactive "Generate Now" click on any weekday must all compute
+    the IDENTICAL date so the upsert overwrites in place instead of creating a
+    one-day-off duplicate row. (The monthly report no longer uses it: its
+    `period_end` is a calendar month's last day, `report_periods.monthly_period`.)
+    `.weekday()` is Monday=0..Sunday=6, so the offset back to the prior
     Sunday is `(weekday() + 1) % 7` (0 on a Sunday itself). Originally a
     private `_most_recent_sunday` in `cron_runner.py`; centralized here so
     app.py's interactive buttons anchor on the same formula rather than a

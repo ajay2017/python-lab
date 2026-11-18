@@ -3132,24 +3132,44 @@ def _run_monthly_report(now_et, force: bool) -> int:
     from stock_analyzer import intelligence_report as _ir
     from stock_analyzer import notify as _notify
     from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED
-    from stock_analyzer.market_time import most_recent_sunday
+    from stock_analyzer import report_periods as _rp
 
-    # Anchored to the most recent Sunday, not raw now_et.date() — a `force`
-    # retry on a different calendar day must land on the SAME period_end as
-    # the original run (see market_time.most_recent_sunday docstring).
-    period_end   = most_recent_sunday(now_et.date())
-    period_start = period_end - _dt.timedelta(days=28)   # trailing ~4 weeks
+    # The previous CALENDAR month (owner U12, 2026-11-17), also on `force`: the
+    # first-Sunday run of month M covers the 1st..last day of M-1, so there is
+    # no gap or overlap between reports, and a `force` retry on any later day
+    # of M lands on the SAME period_end (the upsert key) as the original run.
+    # (The old window was most_recent_sunday - 28 days, which left a gap
+    # whenever first Sundays were 5 weeks apart.) There is no already-sent
+    # guard here: a re-run re-saves the row and emails again, as before.
+    period_start, period_end = _rp.monthly_period(now_et.date())
+    # Outcomes are measured TO the run date: stock outcomes use live prices, so the
+    # SPY benchmark, days_since and outcome_maturing must stop at the same date
+    # (not at period_end, which is already in the past on a calendar-month report).
+    as_of = now_et.date()
 
-    recs_df   = db.load_recommendations(start_date=period_start, end_date=period_end)
-    trades_df = db.load_trades()
+    # _or_none loaders (offline contract): a failed read is None, never an
+    # empty frame -- an unreadable journal would otherwise grade every name
+    # "missed", and an unreadable rec log would read as "nothing to report".
+    recs_df   = db.load_recommendations_or_none(start_date=period_start, end_date=period_end)
+    trades_df = db.load_trades_or_none()
 
-    if recs_df is None or recs_df.empty:
-        # load_recommendations() itself never actually returns None (a read
-        # failure degrades to the same empty DataFrame as genuinely zero
-        # recs) — the `is None` half of this check is defensive, not load-
-        # bearing. The real protection is the unconditional probe below:
-        # empty alone doesn't distinguish "nothing to report yet" from "the
-        # DB couldn't be read", so probe before concluding it's the former.
+    _offline = [n for n, d in (("recommendations", recs_df), ("trades", trades_df))
+                if d is None]
+    if _offline:
+        # Probe whether the whole DB is down (outage email) or only these reads
+        # failed; either way the lane FAILS: no report saved, no email.
+        _detail = _db_unavailable_detail()
+        if _detail:
+            return _handle_db_unavailable("monthly", now_et, _detail)
+        _LAST_LANE_FAILURE_DETAIL = f"monthly_inputs_offline: {', '.join(_offline)}"
+        _log(f"monthly: {', '.join(_offline)} unreadable — no report written.")
+        _notify_failure("monthly", _LAST_LANE_FAILURE_DETAIL)
+        return 1
+
+    if recs_df.empty:
+        # A non-None empty frame is a genuine zero-row read, but keep the
+        # probe: it is cheap and tells "nothing to report yet" apart from a
+        # DB that went away between the read and now.
         _detail = _db_unavailable_detail()
         if _detail:
             return _handle_db_unavailable("monthly", now_et, _detail)
@@ -3182,7 +3202,7 @@ def _run_monthly_report(now_et, force: bool) -> int:
     try:
         import yfinance as yf
         spy = yf.download("SPY", start=str(period_start - _dt.timedelta(days=5)),
-                          end=str(period_end + _dt.timedelta(days=1)),
+                          end=str(as_of + _dt.timedelta(days=1)),
                           progress=False, auto_adjust=True)
         if spy is not None and not spy.empty and "Close" in spy.columns:
             for idx, row in spy.iterrows():
@@ -3201,12 +3221,16 @@ def _run_monthly_report(now_et, force: bool) -> int:
     except Exception:
         pass
 
-    # Recent weekly debriefs for the trajectory line.
+    # Weekly debriefs for the trajectory line: only the weeks that belong to THIS
+    # period (majority-of-week rule, report_periods.weekly_rows_for_period), not the
+    # newest few. limit=60 reaches back over a year, so a forced run for an older
+    # month still finds its weeks.
     weekly_rows: list = []
     try:
-        wdf = db.load_weekly_debriefs(limit=5)
+        wdf = db.load_weekly_debriefs(limit=60)
         if wdf is not None and not wdf.empty:
-            weekly_rows = wdf.to_dict("records")
+            weekly_rows = _rp.weekly_rows_for_period(
+                wdf.to_dict("records"), period_start, period_end)
     except Exception:
         pass
 
@@ -3215,6 +3239,7 @@ def _run_monthly_report(now_et, force: bool) -> int:
         recs_df=recs_df, trades_df=trades_df,
         current_prices=prices, spy_close_by_date=spy_by_date,
         weekly_rows=weekly_rows, min_graded=MONTHLY_REPORT_MIN_GRADED,
+        as_of=as_of,
     )
     _log(f"monthly: {package['n_total']} rec(s) · acted={package['n_acted']} · "
          f"graded={package['n_graded']} · q0_ready={package['q0_ready']} · "

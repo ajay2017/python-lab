@@ -42544,6 +42544,63 @@ elif page == "📄 Reports":
     # One Anthropic key read for the page (the Weekly Debrief and Monthly
     # Decision Review branches both use it; a secrets read, no network).
     _ai_api_key = _anthropic_key()
+
+    def _rpt_emailed_preview(state_key, noun, save_fn, sections):
+        """U14 (docs/plans/acted-rule-and-report-periods.md): a regenerated report is
+        held here as an UNSAVED preview, never written over a saved row, when that row
+        was already EMAILED ("preview_emailed") or when we couldn't check
+        ("preview_unchecked"). Each preview sits in session_state keyed by its period,
+        so it survives the rerun a button click causes; the save button saves that SAME
+        result (no second LLM call). The read-only viewer never sees it. The
+        confirmation after a save is a flash slot, popped on the next run, because
+        st.rerun() would discard an st.success shown before it."""
+        from stock_analyzer import report_periods as _rpp
+        _pv_flash = st.session_state.pop(f"{state_key}_flash", None)
+        if _pv_flash:
+            st.success(_pv_flash)
+        _pv_all = st.session_state.get(state_key)
+        if not isinstance(_pv_all, dict) or not _pv_all:
+            return
+        for _pv_period in sorted(_pv_all):
+            _pv = _pv_all[_pv_period]
+            _pv_when = _rpp.generated_et_text(_pv.get("generated_at"))
+            _pv_when = f" (generated {_pv_when})" if _pv_when else ""
+            if _pv.get("kind") == "preview_unchecked":
+                st.warning(
+                    "Couldn't check whether this period was already emailed, so nothing was "
+                    f"saved. The regenerated version is shown below as a preview{_pv_when}."
+                )
+                _pv_btn = "Save this version"
+            else:
+                st.warning(
+                    f"Preview only{_pv_when}: the {noun} for {_pv_period} was already emailed, "
+                    "so the emailed version is kept. The regenerated version below is NOT saved."
+                )
+                _pv_btn = "Replace the emailed version"
+            if _pv.get("result_reason"):
+                st.info("Account result unknown — " + str(_pv["result_reason"]))
+            if _pv.get("excluded_account_line"):
+                st.caption("⚠️ " + _pv["excluded_account_line"])
+            for _pv_lbl, _pv_col in sections:
+                if _pv["result"].get(_pv_col):
+                    st.markdown(f"**{_pv_lbl}**")
+                    st.markdown(_rdisp.report_markdown(_pv["result"][_pv_col]))
+            _pv_c1, _pv_c2 = st.columns(2)
+            if not db.is_readonly():
+                if _pv_c1.button(_pv_btn, key=f"{state_key}_replace_{_pv_period}"):
+                    if save_fn(_pv["result"]):
+                        _pv_all.pop(_pv_period, None)
+                        st.session_state[state_key] = _pv_all
+                        st.session_state[f"{state_key}_flash"] = (
+                            f"Saved the {noun} for {_pv_period}.")
+                        st.rerun()
+                    else:
+                        st.warning("Save failed (DB offline); nothing was changed.")
+            if _pv_c2.button("Discard preview", key=f"{state_key}_discard_{_pv_period}"):
+                _pv_all.pop(_pv_period, None)
+                st.session_state[state_key] = _pv_all
+                st.rerun()
+
     st.title("📄 Reports")
     # 2026-11-10: moved here from the 💰 Account page's third tab. Step 2 (same
     # day) opened the page to the read-only viewer so they keep the Weekly
@@ -43444,10 +43501,12 @@ elif page == "📄 Reports":
                             )
         elif _rpt_kind == "🗓️ Weekly Debrief":
             # 2026-11-10 (docs/plans/reports-page.md step 2): moved here from
-            # 🧠 AI Insights → 📅 Debriefs. Open to a read-only viewer exactly as
-            # it was there (the save is refused by db.save_weekly_debrief).
+            # 🧠 AI Insights → 📅 Debriefs. A read-only viewer can still READ saved
+            # debriefs here; Generate is refused for them before any read or LLM call
+            # (report_periods.regenerate_action).
             from stock_analyzer import db as _ai_db
             from stock_analyzer import debrief_advisor as _dba
+            from stock_analyzer import report_periods as _rp
             try:
                 _thesis_reviews_df = _ai_db.load_thesis_reviews_or_none()  # None = couldn't load
             except Exception:
@@ -43464,9 +43523,15 @@ elif page == "📄 Reports":
             )
 
             # On-demand generation
-            if st.button("Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
-                         help="Generate a debrief for the last completed Mon–Sun week, using the "
-                              "same numbers as 📄 Reports → Performance Review → Last week."):
+            _wd_clicked = st.button(
+                "Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
+                help="Generate a debrief for the last completed Mon–Sun week, using the "
+                     "same numbers as 📄 Reports → Performance Review → Last week.")
+            # U14: a read-only viewer is refused FIRST, before any DB read or LLM call.
+            if _wd_clicked and _rp.regenerate_action(None, db.is_readonly()) == "refused":
+                st.info("🔒 Generating a debrief is owner-only in read-only viewer mode.")
+                _wd_clicked = False
+            if _wd_clicked:
                 with st.spinner("Assembling data and calling AI..."):
                     from stock_analyzer import period_inputs as _wd_pi
 
@@ -43475,6 +43540,16 @@ elif page == "📄 Reports":
                     # on the SAME week_ending and the upsert (UNIQUE on week_ending)
                     # overwrites in place instead of creating a one-day-off duplicate.
                     _wd_start, _wd_today = _pa_mod.resolve_period("last_week", _today_et())
+
+                    # U14: an already-EMAILED debrief for this week is previewed, never
+                    # overwritten. A FRESH strict read (not the page-load frame, which may be
+                    # stale or a failed read shown as empty): None = couldn't check, which
+                    # previews rather than writing blind.
+                    _wd_chk = _ai_db.load_weekly_debriefs_or_none(limit=8)
+                    _wd_action = _rp.regenerate_action(
+                        None if _wd_chk is None else _rp.find_period_row(
+                            _wd_chk.to_dict("records"), "week_ending", _wd_today),
+                        False, rows_checked=_wd_chk is not None)
 
                     # Reuse the day-scoped cross-page caches when they are populated
                     # (same keys Reports uses); otherwise let the helper load.
@@ -43551,6 +43626,18 @@ elif page == "📄 Reports":
                         _wd_result = _dba.generate_debrief(_wd_pkg, _ai_api_key)
                         if _wd_result is None:
                             st.error("AI debrief failed — LLM offline or the week's numbers could not be read.")
+                        elif _wd_action in ("preview_emailed", "preview_unchecked"):
+                            # Held, not saved: rendered by _rpt_emailed_preview just below.
+                            _wd_pv = st.session_state.get("_wd_previews")
+                            _wd_pv = _wd_pv if isinstance(_wd_pv, dict) else {}
+                            _wd_pv[str(_wd_today)] = {
+                                "kind": _wd_action,
+                                "generated_at": _now_et().isoformat(),
+                                "result": _wd_result,
+                                "result_reason": _wd_pkg.get("result_reason"),
+                                "excluded_account_line": _wd_pkg.get("excluded_account_line"),
+                            }
+                            st.session_state["_wd_previews"] = _wd_pv
                         else:
                             _saved = _ai_db.save_weekly_debrief(_wd_result)
                             if _saved:
@@ -43578,6 +43665,13 @@ elif page == "📄 Reports":
                                         st.markdown(f"**{_lbl}**")
                                         st.markdown(_rdisp.report_markdown(_wd_result[_col]))
 
+            _rpt_emailed_preview(
+                "_wd_previews", "debrief", _ai_db.save_weekly_debrief,
+                [("What happened", "section_facts"),
+                 ("Decisions you made", "section_decisions"),
+                 ("Patterns this week", "section_patterns"),
+                 ("One thing to watch", "section_watchnext")])
+
             # Display most recent debrief
             if _wd_df.empty:
                 st.info(
@@ -43597,7 +43691,7 @@ elif page == "📄 Reports":
                     f"Week ending {_wd.get('week_ending', '—')} · "
                     # generated_at is stored in UTC; an evening run read as tomorrow
                     f"generated {_dba.generated_et_date(_wd.get('generated_at'))}"
-                    + (" · ✉ emailed" if _wd.get("email_sent") else "")
+                    + _rp.emailed_suffix(_wd)
                     + ("" if _wd_cur else " · older method")
                 )
 
@@ -43771,11 +43865,19 @@ elif page == "📄 Reports":
             # 2026-11-10 (docs/plans/reports-page.md step 2): moved here from
             # 🧠 AI Insights → 📅 Debriefs; renamed from "Monthly Portfolio
             # Intelligence" (label only: F-4, monthly_reports and the cron are
-            # unchanged). Open to a read-only viewer exactly as it was there.
+            # unchanged). A read-only viewer can still READ saved reports here; Generate is
+            # refused for them before any read or LLM call (report_periods.regenerate_action).
             from stock_analyzer import db as _ai_db
             from stock_analyzer import intelligence_report as _ir
+            from stock_analyzer import report_periods as _rp
             from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED as _MR_MIN_GRADED
+            from stock_analyzer.market_time import today_et as _mr_today_et
             _mr_df = _ai_db.load_monthly_reports(limit=12)
+            # The archive picker's entries are built BEFORE the Generate button, which needs
+            # the picked month to know which window to rebuild (U13). The picker widget below
+            # still renders where it always did; its choice arrives here via session_state.
+            _mr_rows = _mr_df.to_dict("records")
+            _mr_opts = _rp.monthly_archive_options(_mr_rows)
             # ── Monthly Decision Review (AI) (F-4) ────────────────────────────────────
             st.subheader("🧭 Monthly Decision Review (AI)")
             st.markdown(
@@ -43784,19 +43886,43 @@ elif page == "📄 Reports":
                 "discipline)? It surfaces patterns; it never changes a gate."
             )
 
-            if st.button("Generate Monthly Report", key="_mr_generate_btn", disabled=not _ai_api_key,
-                         help="Generate a decision review for the trailing ~4 weeks from recommendation history."):
+            # U12 / U13: Generate rebuilds the last completed CALENDAR month, or, when an
+            # older month is picked in the archive below, that row's own stored window.
+            # The picker's value is the row's period_end (not its list position), so a row the
+            # cron inserts while the page is open can't change which window a click builds.
+            _mr_keys = _rp.archive_option_keys(_mr_rows, _mr_opts)
+            _mr_sel_key = st.session_state.get("_mr_period_select")
+            try:
+                _mr_start, _mr_end = _rp.monthly_generate_window(
+                    _mr_today_et(), _mr_rows, _mr_opts, _mr_sel_key)
+            except ValueError:
+                _mr_start, _mr_end = None, None
+            if _mr_end is not None:
+                st.caption(f"Generate builds the report for {_mr_start} → {_mr_end}.")
+            else:
+                st.warning("The selected report's period dates can't be read, so Generate is off "
+                           "for it. Pick the newest month to generate the last completed one.")
+            _mr_clicked = st.button(
+                "Generate Monthly Report", key="_mr_generate_btn",
+                disabled=(not _ai_api_key) or _mr_end is None,
+                help="Generate a decision review for the last completed calendar month, or, "
+                     "when an older month is picked below, for the dates shown above this "
+                     "button. Built from recommendation history.")
+            # U14: a read-only viewer is refused FIRST, before any DB read or LLM call.
+            if _mr_clicked and _rp.regenerate_action(None, db.is_readonly()) == "refused":
+                st.info("🔒 Generating a monthly report is owner-only in read-only viewer mode.")
+                _mr_clicked = False
+            if _mr_clicked:
                 with st.spinner("Assembling scorecard and calling AI..."):
-                    from stock_analyzer.market_time import today_et as _mr_today_et
-                    from stock_analyzer.market_time import most_recent_sunday as _mr_most_recent_sunday
-
-                    # Anchored to the most recent Sunday, not the raw click date — a
-                    # weekday click must land on the SAME period_end the Sunday cron
-                    # would compute, or the upsert (UNIQUE on period_end) creates a
-                    # one-day-off duplicate row instead of overwriting in place. See
-                    # market_time.most_recent_sunday docstring.
-                    _mr_end   = _mr_most_recent_sunday(_mr_today_et())
-                    _mr_start = _mr_end - timedelta(days=28)
+                    # U14: an already-EMAILED report for this period is previewed, never
+                    # overwritten. A FRESH strict read (not the page-load frame, which may be
+                    # stale or a failed read shown as empty): None = could not check, which
+                    # previews rather than writing blind. limit=24 covers every archived month.
+                    _mr_chk = _ai_db.load_monthly_reports_or_none(limit=24)
+                    _mr_action = _rp.regenerate_action(
+                        None if _mr_chk is None else _rp.find_period_row(
+                            _mr_chk.to_dict("records"), "period_end", _mr_end),
+                        False, rows_checked=_mr_chk is not None)
                     # _or_none (not the lenient loader, whose "is None" branch
                     # below was dead code -- load_recommendations() never
                     # actually returns None) so classify_recommendations_read can
@@ -43804,19 +43930,24 @@ elif page == "📄 Reports":
                     # yet" — same class as the Weekly Debrief fix above.
                     _mr_recs  = _ai_db.load_recommendations_or_none(start_date=_mr_start, end_date=_mr_end)
                     _mr_status = _ir.classify_recommendations_read(_mr_recs)
+                    # The journal too: a failed read must never grade every name "missed".
+                    _mr_trades = _ai_db.load_trades_or_none()
                     if _mr_status == "outage":
                         st.error(
                             "Could not read recommendation history — the database "
                             "may be unreachable. Try again in a moment."
                         )
+                    elif _mr_trades is None:
+                        st.error(
+                            "Could not read your trade journal — the database may be "
+                            "unreachable, so no report was generated. Try again in a moment."
+                        )
                     elif _mr_status == "empty":
                         st.warning(
-                            "No recommendations recorded in the trailing 4 weeks yet. As Today's "
-                            "Brief surfaces picks day after day, this report will fill in."
+                            f"No recommendations were recorded for {_mr_start} → {_mr_end}, "
+                            "so there is nothing to review."
                         )
                     else:
-                        _mr_trades = st.session_state.get("trades_df", pd.DataFrame())
-
                         # Current prices for the rec tickers (marks open BUYs + missed-rec gains).
                         _mr_prices: dict = {}
                         _mr_tickers = sorted({
@@ -43836,7 +43967,9 @@ elif page == "📄 Reports":
                         # SPY close-by-date for the regime/alpha benchmark.
                         _mr_spy_by_date: dict = {}
                         try:
-                            _mr_spy_hist = _cached_spy("6mo")
+                            # 2y: an archived month's window must be covered too, and the
+                            # series has to reach the run date (outcomes are measured to it).
+                            _mr_spy_hist = _cached_spy("2y")
                             if _mr_spy_hist is not None and not _mr_spy_hist.empty and "Close" in _mr_spy_hist.columns:
                                 for _sidx, _srow in _mr_spy_hist.iterrows():
                                     _sd = _sidx.date() if hasattr(_sidx, "date") else None
@@ -43849,12 +43982,15 @@ elif page == "📄 Reports":
                         except Exception:
                             _mr_spy_by_date = {}
 
-                        # Recent weekly debriefs for the trajectory line.
+                        # Weekly debriefs for the trajectory line: only the weeks that belong to
+                        # THIS period (majority-of-week rule), not the newest few. limit=60
+                        # reaches back over a year, so an archived month still finds its weeks.
                         _mr_weekly: list = []
                         try:
-                            _mr_wdf = _ai_db.load_weekly_debriefs(limit=5)
+                            _mr_wdf = _ai_db.load_weekly_debriefs(limit=60)
                             if _mr_wdf is not None and not _mr_wdf.empty:
-                                _mr_weekly = _mr_wdf.to_dict("records")
+                                _mr_weekly = _rp.weekly_rows_for_period(
+                                    _mr_wdf.to_dict("records"), _mr_start, _mr_end)
                         except Exception:
                             _mr_weekly = []
 
@@ -43863,6 +43999,7 @@ elif page == "📄 Reports":
                             recs_df=_mr_recs, trades_df=_mr_trades,
                             current_prices=_mr_prices, spy_close_by_date=_mr_spy_by_date,
                             weekly_rows=_mr_weekly, min_graded=_MR_MIN_GRADED,
+                            as_of=_mr_today_et(),   # outcomes use live prices: measure SPY to the same day
                         )
                         _mr_result = _ir.generate_report(_mr_pkg, _ai_api_key)
                         if _mr_result is None:
@@ -43873,20 +44010,37 @@ elif page == "📄 Reports":
                                     f"Note: only {_mr_pkg['n_graded']} matured graded entr(ies) — "
                                     f"entry-quality grading firms up at {_MR_MIN_GRADED}+."
                                 )
-                            _mr_saved = _ai_db.save_monthly_report(_mr_result)
-                            if _mr_saved:
-                                st.success("Monthly report generated and saved.")
-                                st.rerun()
+                            if _mr_action in ("preview_emailed", "preview_unchecked"):
+                                # Held, not saved: rendered by _rpt_emailed_preview just below.
+                                _mr_pv = st.session_state.get("_mr_previews")
+                                _mr_pv = _mr_pv if isinstance(_mr_pv, dict) else {}
+                                _mr_pv[str(_mr_end)] = {
+                                    "kind": _mr_action,
+                                    "generated_at": _now_et().isoformat(),
+                                    "result": _mr_result,
+                                }
+                                st.session_state["_mr_previews"] = _mr_pv
                             else:
-                                st.warning("Generated but save failed (DB offline) — showing inline:")
-                                for _lbl, _col in [
-                                    ("Entry quality", "section_entry_quality"),
-                                    ("Signal discipline", "section_signal_discipline"),
-                                    ("Pattern & focus", "section_patterns"),
-                                ]:
-                                    if _mr_result.get(_col):
-                                        st.markdown(f"**{_lbl}**")
-                                        st.markdown(_rdisp.report_markdown(_mr_result[_col]))
+                                _mr_saved = _ai_db.save_monthly_report(_mr_result)
+                                if _mr_saved:
+                                    st.success("Monthly report generated and saved.")
+                                    st.rerun()
+                                else:
+                                    st.warning("Generated but save failed (DB offline) — showing inline:")
+                                    for _lbl, _col in [
+                                        ("Entry quality", "section_entry_quality"),
+                                        ("Signal discipline", "section_signal_discipline"),
+                                        ("Pattern & focus", "section_patterns"),
+                                    ]:
+                                        if _mr_result.get(_col):
+                                            st.markdown(f"**{_lbl}**")
+                                            st.markdown(_rdisp.report_markdown(_mr_result[_col]))
+
+            _rpt_emailed_preview(
+                "_mr_previews", "monthly report", _ai_db.save_monthly_report,
+                [("Entry quality", "section_entry_quality"),
+                 ("Signal discipline", "section_signal_discipline"),
+                 ("Pattern & focus", "section_patterns")])
 
             # Display most recent report
             if _mr_df.empty:
@@ -43896,44 +44050,25 @@ elif page == "📄 Reports":
                     "table — run the DDL in Supabase to activate)."
                 )
             else:
-                # Month-by-month archive: one entry per calendar month (the row with the latest
-                # period_end in each month wins, since an on-demand re-run within a month would
-                # otherwise duplicate), newest first. _mr_df is ordered period_end DESC, so the
-                # first row seen per month key is that month's latest. Labelled by the month
-                # most of the report's window falls in (report_labels), not its end date's.
-                from stock_analyzer.report_labels import (
-                    period_label as _period_label, period_month_key as _period_month_key,
-                    generated_et_date as _generated_et_date,
-                )
-                _mr_opts: list = []
-                _mr_seen: set = set()
-                for _ri in range(len(_mr_df)):
-                    try:
-                        _pe = pd.to_datetime(_mr_df.iloc[_ri].get("period_end"))
-                        _ps = _mr_df.iloc[_ri].get("period_start")
-                        _key = _period_month_key(_ps, _pe)
-                        _lbl = _period_label(_ps, _pe)
-                        if _key is None or _lbl is None:
-                            _key, _lbl = (_pe.year, _pe.month), _pe.strftime("%B %Y")
-                    except Exception:
-                        _key, _lbl = (_ri,), f"Report {_ri + 1}"
-                    if _key in _mr_seen:
-                        continue
-                    _mr_seen.add(_key)
-                    _mr_opts.append((_lbl, _ri))
-
+                # Month-by-month archive: entries come from report_periods.monthly_archive_options
+                # (built above the Generate button); the label and the content index are from the
+                # SAME row. Labelled by the month most of the report's window falls in
+                # (report_labels), not its end date's.
+                from stock_analyzer.report_labels import generated_et_date as _generated_et_date
                 if len(_mr_opts) > 1:
-                    # Harden the variable-options widget: drop a stored selection that has aged
-                    # out of the window (a month falling past limit=12), else Streamlit raises on
-                    # an out-of-range persisted value (feedback_streamlit_widget_options_state).
-                    if st.session_state.get("_mr_period_select") not in range(len(_mr_opts)):
+                    # Harden the variable-options widget: drop a stored selection that is no
+                    # longer an option (a month aged out of the window, or a stale value from the
+                    # old position-keyed picker), else Streamlit raises on an invalid persisted
+                    # value (feedback_streamlit_widget_options_state).
+                    if st.session_state.get("_mr_period_select") not in _mr_keys:
                         st.session_state.pop("_mr_period_select", None)
-                    _mr_sel_i = st.selectbox(
-                        "Report month", options=list(range(len(_mr_opts))),
-                        format_func=lambda i: _mr_opts[i][0], key="_mr_period_select",
+                    _mr_sel_k = st.selectbox(
+                        "Report month", options=_mr_keys,
+                        format_func=lambda k: _mr_opts[_mr_keys.index(k)][0],
+                        key="_mr_period_select",
                         help="Browse past monthly reports. Each is frozen exactly as it was generated.",
                     )
-                    _mr_idx = _mr_opts[_mr_sel_i][1]
+                    _mr_idx = _mr_opts[_mr_keys.index(_mr_sel_k)][1]
                 else:
                     _mr_idx = _mr_opts[0][1] if _mr_opts else 0
 
@@ -43943,7 +44078,7 @@ elif page == "📄 Reports":
                 st.caption(
                     f"Period {_mr.get('period_start', '—')} → {_mr.get('period_end', '—')} · "
                     f"generated {_generated_et_date(_mr.get('generated_at')) or str(_mr.get('generated_at', ''))[:10]} ET"
-                    + (" · ✉ emailed" if _mr.get("email_sent") else "")
+                    + _rp.emailed_suffix(_mr)
                 )
 
                 # Visuals come from ONE snapshot so the header, Sankey, band bar and missed bar
@@ -43975,43 +44110,54 @@ elif page == "📄 Reports":
                     _mr_en2: list = []
                     try:
                         _mr_ps_d = pd.to_datetime(_mr.get("period_start")).date() if _mr.get("period_start") else None
-                        _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else date.today()
+                        _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else _mr_today_et()
                         _mr_recs2 = _ai_db.load_recommendations(start_date=_mr_ps_d, end_date=_mr_pe_d)
                         if _mr_recs2 is not None and not _mr_recs2.empty:
-                            _mr_tr2 = st.session_state.get("trades_df", pd.DataFrame())
-                            _mr_tk2 = sorted({
-                                str(t).strip().upper()
-                                for t in _mr_recs2["ticker"].dropna().tolist() if str(t).strip()
-                            })
-                            _mr_px2: dict = {}
-                            try:
-                                _p2 = fetch_live_prices(_mr_tk2, realtime=False) if _mr_tk2 else {}
-                                _mr_px2 = {t: float(d.get("price", 0)) for t, d in (_p2 or {}).items() if d and d.get("price")}
-                            except Exception:
-                                _mr_px2 = {}
-                            _mr_spy2: dict = {}
-                            try:
-                                _h2 = _cached_spy("6mo")
-                                if _h2 is not None and not _h2.empty and "Close" in _h2.columns:
-                                    for _i2, _r2 in _h2.iterrows():
-                                        _d2 = _i2.date() if hasattr(_i2, "date") else None
-                                        try:
-                                            _c2 = float(_r2["Close"])
-                                        except (TypeError, ValueError):
-                                            _c2 = None
-                                        if _d2 is not None and _c2 and _c2 > 0:
-                                            _mr_spy2[_d2] = _c2
-                            except Exception:
-                                _mr_spy2 = {}
-                            _mr_en2 = _mrco(
-                                _mrm(_mr_recs2, _mr_tr2), _mr_px2, today=_mr_pe_d,
-                                spy_close_by_date=_mr_spy2, min_days=_MR_MINDAYS,
-                            )
+                            # The journal read must succeed: a failed read is shown, never
+                            # graded as "every name missed" (offline contract).
+                            _mr_tr2 = _ai_db.load_trades_or_none()
+                            if _mr_tr2 is None:
+                                st.error(
+                                    "Could not read your trade journal, so this report's signal-flow "
+                                    "visuals can't be rebuilt right now. Try again in a moment."
+                                )
+                            else:
+                                _mr_tk2 = sorted({
+                                    str(t).strip().upper()
+                                    for t in _mr_recs2["ticker"].dropna().tolist() if str(t).strip()
+                                })
+                                _mr_px2: dict = {}
+                                try:
+                                    _p2 = fetch_live_prices(_mr_tk2, realtime=False) if _mr_tk2 else {}
+                                    _mr_px2 = {t: float(d.get("price", 0)) for t, d in (_p2 or {}).items() if d and d.get("price")}
+                                except Exception:
+                                    _mr_px2 = {}
+                                _mr_spy2: dict = {}
+                                try:
+                                    _h2 = _cached_spy("2y")   # reaches the run date, covers archived months
+                                    if _h2 is not None and not _h2.empty and "Close" in _h2.columns:
+                                        for _i2, _r2 in _h2.iterrows():
+                                            _d2 = _i2.date() if hasattr(_i2, "date") else None
+                                            try:
+                                                _c2 = float(_r2["Close"])
+                                            except (TypeError, ValueError):
+                                                _c2 = None
+                                            if _d2 is not None and _c2 and _c2 > 0:
+                                                _mr_spy2[_d2] = _c2
+                                except Exception:
+                                    _mr_spy2 = {}
+                                # Outcomes use live prices, so measure SPY / days_since to the
+                                # SAME day (today), not to the report's period end.
+                                _mr_en2 = _mrco(
+                                    _mrm(_mr_recs2, _mr_tr2), _mr_px2, today=_mr_today_et(),
+                                    spy_close_by_date=_mr_spy2, min_days=_MR_MINDAYS,
+                                )
                     except Exception:
                         _mr_en2 = []
                     if _mr_en2:
                         try:
                             _mr_viz = _mr_vizfn(_mr_en2, rec_types=("new_pick",))
+                            _mr_viz["as_of"] = str(_mr_today_et())   # same key a frozen report carries
                         except Exception:
                             _mr_viz = None
 
@@ -44045,6 +44191,9 @@ elif page == "📄 Reports":
                        if _mr_frozen
                        else "Recomputed live (saved before report-freezing was added).")
                     + _rdisp.monthly_tiles_caption_suffix(_mr_alpha, _mr_skip_avg, _mr_skip_saved)
+                    # A report saved before as_of existed has no date: say nothing, never guess.
+                    + (f" Outcomes measured to {_mr_viz['as_of']}."
+                       if _mr_viz and _mr_viz.get("as_of") else "")
                 )
                 st.markdown("")
 
@@ -45883,9 +46032,9 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🎯 Post-earnings Thesis Checkpoint** — Within 14 days of a held position reporting earnings, a prompt surfaces on AI Insights → Positions. Claude compares the result (actual vs estimated EPS, beat/miss, surprise %) against your thesis and suggests INTACT / WEAKENING / BROKEN. Confirming the suggestion writes a timestamped review row tagged as an earnings checkpoint. Suggestion-only — never auto-saves or auto-changes a recommendation.
 
-- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Lives on the 📄 Reports page, and uses the same numbers as 📄 Reports → Performance Review → Last week when it is generated; your account's net-equity change vs SPY over the same dates. A saved debrief keeps the figures it was generated with, and the page says when they differ from Performance Review → Last week (for example after the account record was repaired, or when it is for an earlier week).
+- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Lives on the 📄 Reports page, and uses the same numbers as 📄 Reports → Performance Review → Last week when it is generated; your account's net-equity change vs SPY over the same dates. A saved debrief keeps the figures it was generated with, and the page says when they differ from Performance Review → Last week (for example after the account record was repaired, or when it is for an earlier week). Regenerating a week that was already emailed shows the new version as a preview and keeps the emailed one; only **Replace the emailed version** overwrites it.
 
-- **🧭 Monthly Decision Review (AI) — "is the engine picking well, and am I acting well?"** Lives on the 📄 Reports page. A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. Two tiles open it: **Names you bought** and **Names you skipped**, each a count of distinct names with its average alpha vs SPY in percentage points (bought: over the matured surfacings you acted on; skipped: over every matured surfacing of the names you never bought). The skipped average is saved from the first report generated after this update (2026-11-14); an older report says it wasn't saved rather than recomputing it. The report is visual (funnel chart with each step's count, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
+- **🧭 Monthly Decision Review (AI) — "is the engine picking well, and am I acting well?"** Lives on the 📄 Reports page. A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. Two tiles open it: **Names you bought** and **Names you skipped**, each a count of distinct names with its average alpha vs SPY in percentage points (bought: over the matured surfacings you acted on; skipped: over every matured surfacing of the names you never bought). The skipped average is saved from the first report generated after this update (2026-11-14); an older report says it wasn't saved rather than recomputing it. The report is visual (funnel chart with each step's count, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing. Each report covers **one calendar month** (the email on the first Sunday of December covers 1–30 November), and each pick's result is measured up to the day the report was generated. **Generate** rebuilds the last completed month, or the month you picked in the picker; reports made before 2026-11-17 covered the 4 weeks ending on a Sunday and show their own dates. Regenerating a month that was already emailed shows a preview and keeps the emailed version; only **Replace the emailed version** overwrites it. If your trade journal or the recommendations can't be read, no report is built (it would otherwise read every name as skipped).
 
 - **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A position whose label changed since the last day it was scored auto-expands with a **"🆕 Changed since your last visit"** badge, so a real tier shift can't get missed just because this tab only recomputes once per trading day. Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears in the "⚠️ Alerts" group near the top of 🏠 Home (alongside Day Shock, price cross-check, and the other awareness banners) when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
 

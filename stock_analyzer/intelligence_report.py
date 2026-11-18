@@ -2,7 +2,7 @@
 Portfolio Intelligence Report — F-4 AI Intelligence Layer (monthly retrospective).
 
 Where the Weekly Debrief (F-3) looks back one week at *what happened*, this
-monthly report looks back ~4 weeks at *how decisions were made* — the slower
+monthly report looks back over a calendar month at *how decisions were made* — the slower
 questions that only surface across weeks:
 
   Q0  Entry quality      — did the ENGINE pick well? (composite band → alpha vs SPY)
@@ -141,6 +141,7 @@ def build_report_package(
     weekly_rows: list[dict] | None = None,
     min_graded: int = 5,
     rec_types: tuple = ("new_pick",),
+    as_of: date | None = None,
 ) -> dict:
     """
     Assemble the structured scorecard package for the monthly report.
@@ -163,6 +164,11 @@ def build_report_package(
     spy_close_by_date:  {date: close} SPY series for the regime/alpha benchmark.
     weekly_rows:        recent weekly_debriefs dicts (perf/spy/alpha) for trajectory.
     min_graded:         matured graded recs required before Q0 is narrated.
+    as_of:              the date outcomes are measured TO (None = period_end). Stock
+                        outcomes use live prices from the run date, so SPY, `days_since`
+                        and `outcome_maturing` must be measured to that same date, not
+                        to period_end (a calendar-month report is built after its end).
+                        The caller's SPY series must reach it.
 
     Returns a dict consumed by generate_report(). has_data=False when no actionable
     recs surfaced in the window (caller surfaces "nothing to report yet").
@@ -173,9 +179,12 @@ def build_report_package(
     )
     from stock_analyzer.constants import REC_SCORE_MIN_DAYS
 
+    _as_of = as_of if as_of is not None else period_end
+
     package: dict = {
         "period_start":   str(period_start),
         "period_end":     str(period_end),
+        "as_of":          str(_as_of),
         "rec_scope":      ", ".join(rec_types) if rec_types else "all",
         "has_data":       False,
         "q0_ready":       False,
@@ -213,7 +222,7 @@ def build_report_package(
     # engine's real entry picks, not the awareness feed.
     matched      = match_recs_to_trades(recs_df, trades_df)
     enriched_all = compute_outcomes(
-        matched, current_prices or {}, today=period_end,
+        matched, current_prices or {}, today=_as_of,
         spy_close_by_date=spy_close_by_date or {}, min_days=REC_SCORE_MIN_DAYS,
     )
     if not enriched_all:
@@ -225,6 +234,7 @@ def build_report_package(
     # report (db viz_json) and re-rendered verbatim; the app shares this exact helper on
     # its live-fallback path so a frozen report and a recompute can never diverge.
     viz  = report_viz_snapshot(enriched_all, rec_types=rec_types)
+    viz["as_of"] = str(_as_of)   # frozen with the report: the date its outcomes are measured to
     flow = viz["flow"]
     package["viz"]         = viz
     package["has_data"]    = flow["n_total"] > 0
@@ -284,6 +294,10 @@ def build_report_package(
 def _format_prompt(package: dict) -> str:
     lines = [
         f"Period: {package['period_start']} to {package['period_end']}",
+    ]
+    if package.get("as_of"):
+        lines.append(f"Outcomes are measured to {package['as_of']} (the run date), not to the period end.")
+    lines += [
         "",
         "SCOPE: these are the App's ACTIONABLE entry recommendations only — names "
         "surfaced as \"New Positions to Initiate\" (they cleared all gates, composite "

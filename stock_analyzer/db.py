@@ -2566,12 +2566,14 @@ _WEEKLY_DEBRIEF_COLS = [
 ]
 
 
-def load_weekly_debriefs(limit: int = 4) -> "pd.DataFrame":
-    """Load the most recent weekly debriefs, newest first."""
+def load_weekly_debriefs_or_none(limit: int = 4) -> "pd.DataFrame | None":
+    """Same query as `load_weekly_debriefs`, but `None` (the offline sentinel)
+    when the table could not be read, so "no debrief for this week" is never
+    confused with "couldn't check". An EMPTY frame means the read succeeded and
+    there are no rows. Never raises."""
     import pandas as pd
-    empty = pd.DataFrame(columns=_WEEKLY_DEBRIEF_COLS)
     if not has_db():
-        return empty
+        return None
     try:
         rows = (
             _client()
@@ -2582,9 +2584,18 @@ def load_weekly_debriefs(limit: int = 4) -> "pd.DataFrame":
             .execute()
             .data
         )
-        return pd.DataFrame(rows) if rows else empty
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=_WEEKLY_DEBRIEF_COLS)
     except Exception:
-        return empty
+        return None
+
+
+def load_weekly_debriefs(limit: int = 4) -> "pd.DataFrame":
+    """Load the most recent weekly debriefs, newest first. Lenient: a failed
+    read degrades to the same empty frame as "none yet" (display callers);
+    use `load_weekly_debriefs_or_none` where that distinction matters."""
+    import pandas as pd
+    df = load_weekly_debriefs_or_none(limit)
+    return pd.DataFrame(columns=_WEEKLY_DEBRIEF_COLS) if df is None else df
 
 
 def save_weekly_debrief(record: dict) -> bool:
@@ -2614,13 +2625,14 @@ _MONTHLY_REPORT_COLS = [
 ]
 
 
-def load_monthly_reports(limit: int = 3) -> "pd.DataFrame":
-    """Load the most recent monthly intelligence reports, newest first. Empty
-    DataFrame when the table does not exist yet (inert until DDL is applied)."""
+def load_monthly_reports_or_none(limit: int = 3) -> "pd.DataFrame | None":
+    """Same query as `load_monthly_reports`, but `None` (the offline sentinel)
+    when the table could not be read (including "table not created yet"), so
+    "no report for this period" is never confused with "couldn't check". An
+    EMPTY frame means the read succeeded and there are no rows. Never raises."""
     import pandas as pd
-    empty = pd.DataFrame(columns=_MONTHLY_REPORT_COLS)
     if not has_db():
-        return empty
+        return None
     try:
         rows = (
             _client()
@@ -2631,9 +2643,19 @@ def load_monthly_reports(limit: int = 3) -> "pd.DataFrame":
             .execute()
             .data
         )
-        return pd.DataFrame(rows) if rows else empty
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=_MONTHLY_REPORT_COLS)
     except Exception:
-        return empty
+        return None
+
+
+def load_monthly_reports(limit: int = 3) -> "pd.DataFrame":
+    """Load the most recent monthly intelligence reports, newest first. Empty
+    DataFrame when the table does not exist yet (inert until DDL is applied).
+    Lenient; use `load_monthly_reports_or_none` where a failed read must be
+    told apart from "none yet"."""
+    import pandas as pd
+    df = load_monthly_reports_or_none(limit)
+    return pd.DataFrame(columns=_MONTHLY_REPORT_COLS) if df is None else df
 
 
 def save_monthly_report(record: dict) -> bool:

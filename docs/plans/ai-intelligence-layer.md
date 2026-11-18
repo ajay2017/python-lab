@@ -451,7 +451,7 @@ The first engine-health review (2026-06-18) judged the engine **HEALTHY** on the
 #### 4.1 Cadence and trigger
 
 - **Monthly:** first Sunday of the month, delivered as email (Resend + GitHub Actions cron — same pattern as the F-140s). Runs in the **existing Sunday cron lane** alongside thesis (F-1) and debrief (F-3); gated to fire the report only on the first Sunday of the month.
-- **On-demand:** "Generate Monthly Report" button on the AI Insights page, for the trailing ~4 weeks.
+- **On-demand:** "Generate Monthly Report" button on the AI Insights page, for the trailing ~4 weeks. *(Superseded 2026-11-17: a report covers the previous calendar month; see `docs/plans/acted-rule-and-report-periods.md`.)*
 
 #### 4.2 Inputs (Python builder assembles; LLM only narrates)
 

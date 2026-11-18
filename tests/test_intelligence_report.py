@@ -442,3 +442,69 @@ def test_generate_report_no_text_block_returns_none_not_an_empty_report():
     package["has_data"] = True
     _install_fake_anthropic_no_text_block()
     assert ir.generate_report(package, api_key="fake-key") is None
+
+
+# ─── as_of: outcomes measured to the run date, stock and SPY alike ────────────
+
+def _real_pipeline_package(monkeypatch, *, as_of, period_end=None):
+    """The REAL match / compute_outcomes / viz pipeline (only compute_outcomes is
+    wrapped to capture its rows) for one new_pick surfaced 2 days before the period
+    end, with live prices and a SPY series that runs past the period end."""
+    import datetime as dt
+    captured = {}
+    real = rh.compute_outcomes
+
+    def _wrap(*a, **k):
+        out = real(*a, **k)
+        captured["rows"], captured["today"] = out, k.get("today")
+        return out
+
+    monkeypatch.setattr(rh, "compute_outcomes", _wrap)
+    recs_df = pd.DataFrame([{
+        "id": 1, "ticker": "AAA", "rec_date": "2026-01-29", "rec_type": "new_pick",
+        "surfaced_at": "2026-01-29T14:00:00+00:00", "price_at_surface": 50.0,
+        "composite_score": 70.0, "verdict": "Confirmed",
+    }])
+    spy = {dt.date(2026, 1, 29): 100.0, dt.date(2026, 1, 30): 110.0,
+           dt.date(2026, 2, 10): 120.0}
+    pkg = ir.build_report_package(
+        dt.date(2026, 1, 1), period_end or dt.date(2026, 1, 31), recs_df, pd.DataFrame(),
+        current_prices={"AAA": 55.0}, spy_close_by_date=spy, as_of=as_of)
+    return pkg, captured
+
+
+def test_as_of_measures_the_stock_and_spy_to_the_same_date(monkeypatch):
+    import datetime as dt
+    pkg, cap = _real_pipeline_package(monkeypatch, as_of=dt.date(2026, 2, 10))
+    row = cap["rows"][0]
+    assert cap["today"] == dt.date(2026, 2, 10)
+    # SPY runs 100 -> 120 to the run date (not 100 -> 110 to the period end), so the
+    # stock's live +10% reads as -10.0 alpha against the SAME window
+    assert row["spy_return_pct"] == 20.0
+    assert row["outcome_pct"] == pytest.approx(10.0)
+    assert row["alpha_pct"] == pytest.approx(-10.0)
+    assert row["days_since"] == 12
+    assert pkg["as_of"] == "2026-02-10" and pkg["viz"]["as_of"] == "2026-02-10"
+
+
+def test_a_rec_young_at_period_end_but_old_at_as_of_is_not_maturing(monkeypatch):
+    import datetime as dt
+    _pkg, cap = _real_pipeline_package(monkeypatch, as_of=dt.date(2026, 2, 10))
+    assert cap["rows"][0]["outcome_maturing"] is False       # 12 days at as_of
+    _pkg, cap = _real_pipeline_package(monkeypatch, as_of=None)
+    assert cap["rows"][0]["days_since"] == 2                 # measured to period_end
+    assert cap["rows"][0]["outcome_maturing"] is True
+
+
+def test_as_of_defaults_to_the_period_end(monkeypatch):
+    import datetime as dt
+    pkg, cap = _real_pipeline_package(monkeypatch, as_of=None)
+    assert cap["today"] == dt.date(2026, 1, 31)
+    assert pkg["as_of"] == "2026-01-31"
+    assert cap["rows"][0]["spy_return_pct"] == 10.0           # 100 -> 110 (Jan 30 close)
+
+
+def test_prompt_states_the_as_of_line_only_when_the_package_has_one():
+    with_as_of = ir._format_prompt(_base_package(as_of="2026-12-06"))
+    assert "Outcomes are measured to 2026-12-06 (the run date), not to the period end." in with_as_of
+    assert "Outcomes are measured to" not in ir._format_prompt(_base_package())

@@ -11,12 +11,20 @@ instead of overwriting. Confirmed live in production: `weekly_debriefs` has
 real pairs `2026-06-27`/`2026-06-28` and `2026-08-09`/`2026-08-10`, one day
 apart.
 
-The fix anchors both to `market_time.most_recent_sunday(now_et.date())`, so a
-genuine Sunday run, a same-week cron retry, AND an interactive "Generate Now"
-/ "Generate Monthly Report" click on any weekday in `app.py` all compute the
-IDENTICAL date. The formula itself now lives in `stock_analyzer.market_time`
-(originally a private `_most_recent_sunday` in this module) so `cron_runner`
-and `app.py` share one definition instead of risking two that drift.
+The WEEKLY fix anchors `week_ending` to `market_time.most_recent_sunday(now_et.date())`
+(via `resolve_period("last_week", ...)`), so a genuine Sunday run, a same-week
+cron retry, AND an interactive "Generate Now" click on any weekday in `app.py`
+all compute the IDENTICAL date. The formula lives in `stock_analyzer.market_time`
+so `cron_runner` and `app.py` share one definition instead of risking two that
+drift.
+
+The MONTHLY lane no longer uses the Sunday anchor (owner U12, 2026-11-17,
+docs/plans/acted-rule-and-report-periods.md C1): its window is the previous
+CALENDAR month (`report_periods.monthly_period`), so `period_end` is always a
+month's last day and a `force` retry on any later day of the month still lands
+on the same upsert key. The old "most recent Sunday - 28 days" window left a gap
+whenever first Sundays were five weeks apart. That change is deliberate; the
+monthly tests below pin the calendar-month window on purpose.
 """
 import datetime
 
@@ -485,7 +493,7 @@ def test_run_debrief_both_signal_reads_failing_names_both_failures(monkeypatch):
     assert _EXIT_LINE in notified[0][1] and _RECS_LINE in notified[0][1]
 
 
-# ── _run_monthly_report: same anchor, same guarantee ──────────────────────────
+# ── _run_monthly_report: the previous CALENDAR month (U12) ────────────────────
 
 def _capture_load_recommendations(monkeypatch, captured):
     """Empty (not None) recs frame + a healthy DB probe -> _run_monthly_report
@@ -495,55 +503,142 @@ def _capture_load_recommendations(monkeypatch, captured):
         captured["start_date"] = start_date
         captured["end_date"] = end_date
         return pd.DataFrame()
-    monkeypatch.setattr(cr.db, "load_recommendations", _fake)
-    monkeypatch.setattr(cr.db, "load_trades", lambda: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none", _fake)
+    monkeypatch.setattr(cr.db, "load_trades_or_none", lambda: pd.DataFrame())
     monkeypatch.setattr(cr.db, "has_db", lambda: True)
     monkeypatch.setattr(cr.db, "load_holdings_or_none",
                         lambda: pd.DataFrame({"Ticker": ["AAPL"]}))
 
 
-def test_run_monthly_report_anchors_a_genuine_sunday_to_itself(monkeypatch):
+def _monthly_window(monkeypatch, when, force=True):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     captured = {}
     _capture_load_recommendations(monkeypatch, captured)
+    rc = cr._run_monthly_report(cr._ET.localize(when), force=force)
+    return rc, captured
 
-    now_et = cr._ET.localize(datetime.datetime(2026, 8, 16, 18, 0, 0))  # Sunday
-    rc = cr._run_monthly_report(now_et, force=True)
 
+def test_run_monthly_report_covers_the_previous_calendar_month(monkeypatch):
+    rc, cap = _monthly_window(monkeypatch, datetime.datetime(2026, 8, 16, 18, 0, 0))  # a Sunday
     assert rc == 0
-    assert captured["end_date"] == datetime.date(2026, 8, 16)
-    assert captured["start_date"] == datetime.date(2026, 8, 16) - datetime.timedelta(days=28)
+    assert cap["start_date"] == datetime.date(2026, 7, 1)
+    assert cap["end_date"] == datetime.date(2026, 7, 31)
 
 
-def test_run_monthly_report_forced_retry_the_next_day_anchors_to_the_same_sunday(monkeypatch):
-    """The actual bug, applied to period_end: a force=True retry on Monday must
-    compute the SAME period_end as the Sunday run it's retrying."""
+def test_run_monthly_report_first_sunday_of_december_covers_november(monkeypatch):
+    """The owner's 12-06 email: November 1-30, no 28-day rolling window."""
+    rc, cap = _monthly_window(monkeypatch, datetime.datetime(2026, 12, 6, 18, 0, 0), force=False)
+    assert rc == 0
+    assert (cap["start_date"], cap["end_date"]) == (datetime.date(2026, 11, 1),
+                                                    datetime.date(2026, 11, 30))
+
+
+def test_run_monthly_report_first_sunday_on_a_dst_change_day(monkeypatch):
+    """2026-11-01 is both a first Sunday and the fall-back day."""
+    rc, cap = _monthly_window(monkeypatch, datetime.datetime(2026, 11, 1, 18, 0, 0), force=False)
+    assert rc == 0
+    assert (cap["start_date"], cap["end_date"]) == (datetime.date(2026, 10, 1),
+                                                    datetime.date(2026, 10, 31))
+
+
+@pytest.mark.parametrize("when", [
+    datetime.datetime(2026, 12, 13, 18, 0, 0),    # the second Sunday
+    datetime.datetime(2026, 12, 7, 9, 0, 0),      # the Monday after the first Sunday
+    datetime.datetime(2026, 12, 8, 9, 0, 0),      # a weekday inside the first week
+])
+def test_run_monthly_report_not_forced_only_runs_on_the_first_sunday(monkeypatch, when):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     captured = {}
     _capture_load_recommendations(monkeypatch, captured)
+    assert cr._run_monthly_report(cr._ET.localize(when), force=False) == 0
+    assert captured == {}, "the lane must skip before reading any data"
 
-    now_et = cr._ET.localize(datetime.datetime(2026, 8, 17, 9, 0, 0))  # Monday retry
-    rc = cr._run_monthly_report(now_et, force=True)
 
+@pytest.mark.parametrize("when", [
+    datetime.datetime(2026, 8, 17, 9, 0, 0),      # the Monday retry
+    datetime.datetime(2026, 8, 22, 9, 0, 0),      # the Saturday retry
+    datetime.datetime(2026, 8, 31, 23, 30, 0),    # the last evening of the month
+])
+def test_run_monthly_report_forced_retry_later_in_the_month_lands_on_the_same_period_end(
+        monkeypatch, when):
+    """The upsert key: a force=True retry on ANY day of August must compute the
+    SAME period_end (July 31) as the first-Sunday run it is retrying."""
+    _rc, original = _monthly_window(monkeypatch, datetime.datetime(2026, 8, 2, 18, 0, 0),
+                                    force=False)               # first Sunday of August
+    rc, retry = _monthly_window(monkeypatch, when)
     assert rc == 0
-    assert captured["end_date"] == datetime.date(2026, 8, 16), \
-        "a Monday retry must land on the same period_end as the Sunday run"
-    assert captured["end_date"] != now_et.date(), \
-        "must not regress to raw now_et.date()"
+    assert retry["end_date"] == original["end_date"] == datetime.date(2026, 7, 31)
+    assert retry["start_date"] == original["start_date"] == datetime.date(2026, 7, 1)
+    assert retry["end_date"] != when.date(), "must not regress to raw now_et.date()"
 
 
-def test_run_monthly_report_forced_retry_six_days_later_still_anchors_to_the_same_sunday(monkeypatch):
-    """A Saturday retry (offset 6) pins the exact formula, not just Monday."""
+def test_run_monthly_report_in_january_covers_the_previous_decembers_calendar_month(monkeypatch):
+    rc, cap = _monthly_window(monkeypatch, datetime.datetime(2027, 1, 3, 18, 0, 0), force=False)
+    assert rc == 0
+    assert (cap["start_date"], cap["end_date"]) == (datetime.date(2026, 12, 1),
+                                                    datetime.date(2026, 12, 31))
+
+
+# ── _run_monthly_report: offline contract (an unreadable read is a FAILURE) ───
+
+def _monthly_offline(monkeypatch, *, recs, trades, probe=None):
+    from stock_analyzer import intelligence_report as ir
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    captured = {}
-    _capture_load_recommendations(monkeypatch, captured)
+    calls = {"package": 0, "generate": 0, "saved": [], "notified": [], "outage": [],
+             "emailed": []}
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none", lambda **kw: recs)
+    monkeypatch.setattr(cr.db, "load_trades_or_none", lambda: trades)
+    monkeypatch.setattr(cr, "_db_unavailable_detail", lambda: probe)
+    monkeypatch.setattr(cr, "_handle_db_unavailable",
+                        lambda lane, now, detail: calls["outage"].append((lane, detail)) or 1)
+    monkeypatch.setattr(cr, "_notify_failure", lambda m, d: calls["notified"].append((m, d)))
+    monkeypatch.setattr(cr, "_send_email", lambda *a, **k: calls["emailed"].append(a))
+    monkeypatch.setattr(cr.db, "save_monthly_report", lambda r: calls["saved"].append(r) or True)
+    monkeypatch.setattr(ir, "build_report_package",
+                        lambda **kw: calls.__setitem__("package", calls["package"] + 1) or {})
+    monkeypatch.setattr(ir, "generate_report",
+                        lambda p, k: calls.__setitem__("generate", calls["generate"] + 1))
+    monkeypatch.setattr(cr, "_LAST_LANE_FAILURE_DETAIL", None)
+    rc = cr._run_monthly_report(cr._ET.localize(datetime.datetime(2026, 12, 6, 18, 0, 0)),
+                                force=False)
+    return rc, calls
 
-    now_et = cr._ET.localize(datetime.datetime(2026, 8, 22, 9, 0, 0))  # Saturday
-    rc = cr._run_monthly_report(now_et, force=True)
 
+def test_run_monthly_report_unreadable_trades_fails_the_lane_with_no_report_or_email(monkeypatch):
+    rc, calls = _monthly_offline(monkeypatch, recs=pd.DataFrame({"ticker": ["AAPL"]}),
+                                 trades=None)
+    assert rc == 1
+    assert cr._LAST_LANE_FAILURE_DETAIL == "monthly_inputs_offline: trades"
+    assert calls["notified"] == [("monthly", "monthly_inputs_offline: trades")]
+    assert calls["package"] == 0 and calls["generate"] == 0
+    assert calls["saved"] == [] and calls["emailed"] == []
+
+
+def test_run_monthly_report_unreadable_recommendations_fails_the_lane(monkeypatch):
+    rc, calls = _monthly_offline(monkeypatch, recs=None, trades=pd.DataFrame())
+    assert rc == 1
+    assert cr._LAST_LANE_FAILURE_DETAIL == "monthly_inputs_offline: recommendations"
+    assert calls["package"] == 0 and calls["saved"] == [] and calls["emailed"] == []
+
+
+def test_run_monthly_report_both_reads_failing_names_both(monkeypatch):
+    rc, _calls = _monthly_offline(monkeypatch, recs=None, trades=None)
+    assert rc == 1
+    assert cr._LAST_LANE_FAILURE_DETAIL == "monthly_inputs_offline: recommendations, trades"
+
+
+def test_run_monthly_report_unreadable_read_with_the_db_down_sends_the_outage_email(monkeypatch):
+    rc, calls = _monthly_offline(monkeypatch, recs=pd.DataFrame({"ticker": ["AAPL"]}),
+                                 trades=None, probe="supabase unreachable")
+    assert rc == 1
+    assert calls["outage"] == [("monthly", "supabase unreachable")]
+    assert calls["package"] == 0 and calls["saved"] == [] and calls["emailed"] == []
+
+
+def test_run_monthly_report_empty_recs_with_readable_trades_is_still_a_quiet_skip(monkeypatch):
+    rc, calls = _monthly_offline(monkeypatch, recs=pd.DataFrame(), trades=pd.DataFrame())
     assert rc == 0
-    assert captured["end_date"] == datetime.date(2026, 8, 16)
-    assert captured["end_date"] != now_et.date()
+    assert calls["notified"] == [] and calls["outage"] == [] and calls["package"] == 0
 
 
 # ── _run_monthly_report: B4b, an empty report with data is a failed lane ──────
@@ -552,9 +647,9 @@ def _monthly_with_package(monkeypatch, has_data, notified):
     from stock_analyzer import intelligence_report as ir
     import yfinance
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(cr.db, "load_recommendations",
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none",
                         lambda **kw: pd.DataFrame({"ticker": ["AAPL"]}))
-    monkeypatch.setattr(cr.db, "load_trades", lambda: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_trades_or_none", lambda: pd.DataFrame())
     monkeypatch.setattr(cr.db, "load_weekly_debriefs", lambda limit=5: pd.DataFrame())
     monkeypatch.setattr("stock_analyzer.data.fetch_live_prices",
                         lambda *a, **k: {})
@@ -584,3 +679,51 @@ def test_run_monthly_report_none_without_data_is_a_quiet_skip(monkeypatch):
     now_et = cr._ET.localize(datetime.datetime(2026, 8, 16, 18, 0, 0))
     assert cr._run_monthly_report(now_et, force=True) == 0
     assert cr._LAST_LANE_FAILURE_DETAIL is None and notified == []
+
+
+# ── _run_monthly_report: as_of + the period's own weekly trajectory ───────────
+
+def _monthly_capture_package_inputs(monkeypatch, now_et, weeks):
+    """Run the lane up to build_report_package and capture what it was given: the
+    kwargs, and the `end=` the SPY download was asked for."""
+    from stock_analyzer import intelligence_report as ir
+    import yfinance
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    seen = {}
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none",
+                        lambda **kw: pd.DataFrame({"ticker": ["AAPL"]}))
+    monkeypatch.setattr(cr.db, "load_trades_or_none", lambda: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_weekly_debriefs",
+                        lambda limit=5: seen.setdefault("limit", limit) and pd.DataFrame(
+                            [{"week_ending": w, "metrics_version": 2} for w in weeks]))
+    monkeypatch.setattr("stock_analyzer.data.fetch_live_prices", lambda *a, **k: {})
+    monkeypatch.setattr(yfinance, "download",
+                        lambda *a, **k: seen.update(spy_end=k.get("end")) or pd.DataFrame())
+    monkeypatch.setattr(ir, "build_report_package",
+                        lambda **kw: seen.update(pkg=kw) or {
+                            "n_total": 1, "n_acted": 0, "n_graded": 0, "q0_ready": False,
+                            "has_data": False})
+    monkeypatch.setattr(ir, "generate_report", lambda package, api_key: None)
+    assert cr._run_monthly_report(now_et, force=False) == 0
+    return seen
+
+
+def test_run_monthly_report_measures_outcomes_to_the_run_date(monkeypatch):
+    now_et = cr._ET.localize(datetime.datetime(2026, 12, 6, 18, 0, 0))
+    seen = _monthly_capture_package_inputs(monkeypatch, now_et, [])
+    assert seen["pkg"]["period_end"] == datetime.date(2026, 11, 30)
+    assert seen["pkg"]["as_of"] == datetime.date(2026, 12, 6)
+    # the SPY series must reach the run date (yfinance's `end` is exclusive)
+    assert seen["spy_end"] == "2026-12-07"
+
+
+def test_run_monthly_report_trajectory_is_the_periods_own_weeks(monkeypatch):
+    """The 12-06 run for November: week_ending 12-06 (a December week) and 11-01
+    (an October week) are out; 11-08 .. 11-29 are in, newest first."""
+    now_et = cr._ET.localize(datetime.datetime(2026, 12, 6, 18, 0, 0))
+    weeks = ["2026-12-06", "2026-11-29", "2026-11-22", "2026-11-15", "2026-11-08",
+             "2026-11-01", "2026-10-25"]
+    seen = _monthly_capture_package_inputs(monkeypatch, now_et, weeks)
+    assert [w["week_ending"] for w in seen["pkg"]["weekly_rows"]] == [
+        "2026-11-29", "2026-11-22", "2026-11-15", "2026-11-08"]
+    assert seen["limit"] >= 52, "must reach back far enough for a forced run on an older month"
