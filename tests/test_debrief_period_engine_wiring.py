@@ -129,3 +129,116 @@ def test_cron_debrief_failure_paths_are_wired():
 def test_weekly_debrief_cols_carry_the_method_version():
     from stock_analyzer import db
     assert "metrics_version" in db._WEEKLY_DEBRIEF_COLS
+
+
+def test_weekly_debrief_cols_carry_the_acted_rule_version():
+    from stock_analyzer import db
+    assert "acted_rule_version" in db._WEEKLY_DEBRIEF_COLS
+
+
+# ── acted-rule C3b wiring pins: the new calls must FEED the loads / renders ───
+# Each pin is a function over source text, so a test can run it on the real
+# source AND on an in-memory copy with the wiring removed (it must then fail).
+
+_WD_REGION_START = "from stock_analyzer import debrief_entry_calls as _wd_dec"
+_WD_REGION_END = "# Numbers behind the debrief just generated"
+
+
+def _weekly_debrief_region(text: str) -> str:
+    lo, hi = text.index(_WD_REGION_START), text.index(_WD_REGION_END)
+    assert lo < hi
+    return text[lo:hi]
+
+
+def _pin_generate_recs_start(region: str) -> bool:
+    """The Generate path's recommendations load takes start_date from
+    debrief_entry_calls.recs_load_start(week_start) and ends at the week's end."""
+    import re
+    return bool(re.search(
+        r"load_recommendations_or_none\(\s*start_date\s*=\s*_wd_dec\.recs_load_start\(\s*_wd_start\s*\)"
+        r"\s*,\s*end_date\s*=\s*_wd_today\s*,?\s*\)", region))
+
+
+def _pin_strict_weekly_read(region: str) -> bool:
+    """The page-load read is the strict one, never the lenient loader, and a
+    None read shows the "couldn't read" message (not "No weekly debriefs yet")."""
+    import re
+    strict = re.search(r"_wd_df\s*=\s*_ai_db\.load_weekly_debriefs_or_none\(", region)
+    lenient = re.search(r"\bload_weekly_debriefs\(", region)
+    flag = re.search(r"_wd_read_failed\s*=\s*_wd_df\s+is\s+None", region)
+    branch = re.search(
+        r"if\s+_wd_read_failed:\s*\n\s*st\.warning\(\s*\n?\s*\"Couldn't read the saved debriefs", region)
+    return bool(strict and flag and branch and not lenient)
+
+
+def _pin_stored_row_caption(region: str) -> bool:
+    """The stored row's version feeds acted_rule_caption and the result is shown."""
+    import re
+    return bool(re.search(
+        r"(\w+)\s*=\s*_wd_dec\.acted_rule_caption\(\s*_wd\.get\(\"acted_rule_version\"\)\s*\)"
+        r"\s*\n\s*if\s+\1:\s*\n\s*st\.caption\(\s*\1\s*\)", region))
+
+
+def _without(region: str, old: str, new: str) -> str:
+    assert old in region, f"mutation target not found: {old!r}"
+    mutated = region.replace(old, new)
+    assert mutated != region
+    return mutated
+
+
+def test_app_generate_loads_recs_from_recs_load_start(app_parts):
+    region = _weekly_debrief_region(app_parts[0])
+    assert _pin_generate_recs_start(region)
+    # wiring removed in memory -> the pin fails (the bare week start, or the call
+    # merely sitting elsewhere in the block, does not satisfy it)
+    assert not _pin_generate_recs_start(
+        _without(region, "_wd_dec.recs_load_start(_wd_start)", "_wd_start"))
+    assert not _pin_generate_recs_start(
+        _without(region, "start_date=_wd_dec.recs_load_start(_wd_start),",
+                 "start_date=_wd_start,  # _wd_dec.recs_load_start(_wd_start)\n"))
+
+
+def test_app_weekly_view_reads_saved_debriefs_strictly_with_a_none_message(app_parts):
+    region = _weekly_debrief_region(app_parts[0])
+    assert _pin_strict_weekly_read(region)
+    assert not _pin_strict_weekly_read(_without(
+        region, "_wd_df = _ai_db.load_weekly_debriefs_or_none(", "_wd_df = _ai_db.load_weekly_debriefs("))
+    assert not _pin_strict_weekly_read(_without(
+        region, "if _wd_read_failed:\n                st.warning(", "if _wd_read_failed:\n                st.info("))
+    assert not _pin_strict_weekly_read(_without(
+        region, "_wd_read_failed = _wd_df is None", "_wd_read_failed = False"))
+
+
+def test_app_stored_row_render_captions_the_acted_rule_version(app_parts):
+    region = _weekly_debrief_region(app_parts[0])
+    assert _pin_stored_row_caption(region)
+    assert not _pin_stored_row_caption(_without(region, "st.caption(_wd_rule_cap)", "pass"))
+    assert not _pin_stored_row_caption(_without(
+        region, '_wd.get("acted_rule_version")', '_wd.get("metrics_version")'))
+
+
+def _pin_cron_recs_start(fn_source: str) -> bool:
+    """In _run_debrief the week-scoped recs read's start_date is a name assigned
+    from recs_load_start(...), and it ends at week_ending."""
+    fn = ast.parse(fn_source).body[0]
+    reads = [c for n, c in _calls(fn) if n == "load_recommendations_or_none"
+             and any(k.arg == "start_date" for k in c.keywords)]
+    if len(reads) != 1:
+        return False
+    start = next(k.value for k in reads[0].keywords if k.arg == "start_date")
+    end = next((k.value for k in reads[0].keywords if k.arg == "end_date"), None)
+    if not (isinstance(start, ast.Name) and isinstance(end, ast.Name) and end.id == "week_ending"):
+        return False
+    return any(
+        isinstance(a, ast.Assign) and any(isinstance(t, ast.Name) and t.id == start.id for t in a.targets)
+        and isinstance(a.value, ast.Call) and isinstance(a.value.func, ast.Attribute)
+        and a.value.func.attr == "recs_load_start"
+        for a in ast.walk(fn))
+
+
+def test_cron_debrief_recs_start_comes_from_recs_load_start():
+    # Also pinned behaviourally in test_cron_debrief_monthly_date_anchor.py
+    # (Sunday 2026-11-08 loads from 2026-10-26); this is the source-level pin.
+    src = ast.get_source_segment(CRON.read_text(encoding="utf-8"), _run_debrief_node())
+    assert _pin_cron_recs_start(src)
+    assert not _pin_cron_recs_start(_without(src, "_dec.recs_load_start(week_start)", "week_start"))

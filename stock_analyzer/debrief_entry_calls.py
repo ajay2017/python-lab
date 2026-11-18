@@ -62,6 +62,15 @@ _UNKNOWN_REASON_TEXT = {
     eca.REASON_NO_CALL_DATE: "the call has no readable date",
 }
 
+_UNKNOWN_REASON_FALLBACK = "the call couldn't be judged"
+
+
+def unknown_reason_text(code) -> str:
+    """Plain words for why a call is "not judged" (an `entry_call_action` reason
+    code). The one source for the bullets AND the model prompt, so they can't drift."""
+    return _UNKNOWN_REASON_TEXT.get(code, _UNKNOWN_REASON_FALLBACK)
+
+
 # Merge precedence for a name that is both this week's and carried over
 # (the same order `entry_call_action.per_name` uses).
 _STATUS_RANK = {eca.STATUS_ACTED: 0, eca.STATUS_STILL_OPEN: 1,
@@ -438,8 +447,7 @@ def _entry_line(row: dict, n: int, *, carried: bool) -> str:
         text = (f"Still open (decision window{ends}); next week's debrief says "
                 f"whether you acted.")
     else:
-        why = _UNKNOWN_REASON_TEXT.get(row.get("reason"),
-                                       "the call couldn't be judged")
+        why = unknown_reason_text(row.get("reason"))
         text = f"Not judged: {why}."
     return f"{head} {text}"
 

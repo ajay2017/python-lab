@@ -2863,6 +2863,7 @@ def _run_debrief(now_et, force: bool) -> int:
         return 0
 
     from stock_analyzer import debrief_advisor as _da
+    from stock_analyzer import debrief_entry_calls as _dec
     from stock_analyzer import notify as _notify
     from stock_analyzer import period_attribution as _pa
     from stock_analyzer import period_inputs as _pi
@@ -2952,7 +2953,14 @@ def _run_debrief(now_et, force: bool) -> int:
     # lenient db.load_recommendations() returns an EMPTY frame on a failed read and
     # the saved debrief then said "No actionable signals were surfaced this week."
     # None is passed on as recs_unavailable (disclosed in the debrief, lane failure).
-    recs_df   = db.load_recommendations_or_none(start_date=week_start, end_date=week_ending)
+    # The load reaches back to `recs_load_start(week_start)` (the earliest call whose
+    # decision window still reaches this week, and last week's calls) so a call that
+    # was still open at last Sunday is carried over and judged; calls after
+    # `week_ending` are never loaded (acted-rule C3).
+    _recs_from = _dec.recs_load_start(week_start)
+    _log(f"debrief: recommendations lookback starts {_recs_from} "
+         f"(week {week_start} to {week_ending}).")
+    recs_df   = db.load_recommendations_or_none(start_date=_recs_from, end_date=week_ending)
     recs_unavailable = recs_df is None
     if recs_unavailable:
         _log("debrief: recommendations lookup failed — this week's debrief will "
@@ -3017,8 +3025,16 @@ def _run_debrief(now_et, force: bool) -> int:
         exit_signals_unavailable = exit_signals_unavailable,
         recs_unavailable = recs_unavailable,
     )
+    if package.get("recs_status") == "unavailable" and not recs_unavailable:
+        # the read worked but the entry-call module failed (or the frame was unusable):
+        # the debrief still goes out disclosed, and the lane goes red like any other
+        # unavailable input (same list the later failure paths and the heartbeat use)
+        _log(f"debrief: entry-call module failed ({package.get('entry_error') or 'unusable recs frame'}); "
+             "entry signals not judged")
+        _repair_failures = list(_repair_failures) + [
+            "debrief: entry-call check failed — entry signals disclosed as unavailable"]
     _log(f"debrief: result_status={package.get('result_status')} · "
-         f"recs={'unreadable' if recs_unavailable else len(recs_df)} · "
+         f"recs loaded (from lookback)={'unreadable' if recs_unavailable else len(recs_df)} · "
          f"account={package.get('performance_pct')} · SPY={package.get('spy_pct')}")
 
     result = _da.generate_debrief(package, api_key)

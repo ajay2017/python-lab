@@ -614,6 +614,88 @@ def test_rec_type_filtered_to_new_pick_and_add_winner():
     assert "DDD" not in tickers
 
 
+# ─── entry calls on the shared rule (acted-rule C3b) ─────────────────────────
+
+def _call(ticker, rec_date, rec_type="new_pick", **kw):
+    row = {"ticker": ticker, "rec_date": rec_date, "rec_type": rec_type,
+           "verdict": "Confirmed"}
+    row.update(kw)
+    return row
+
+
+def test_enter_now_is_listed_and_buy_candidate_is_not():
+    pkg = _generic_pkg(pd.DataFrame([
+        _call("AAA", "2026-07-20", "enter_now"),
+        _call("DDD", "2026-07-20", "buy_candidate"),
+        _call("FFF", "2026-07-20", "overflow_pick")]))
+    assert [r["ticker"] for r in pkg["recs_surfaced"]] == ["AAA"]
+    assert pkg["recs_surfaced"][0]["rec_types"] == ["enter_now"]
+
+
+def test_a_sell_of_the_name_never_credits_a_call_ccc_not_acted():
+    # CCC is SOLD on 07-22 in the generic world; a sell is not a buy of the call
+    pkg = _generic_pkg(pd.DataFrame([_call("CCC", "2026-07-20")]))
+    ccc = pkg["recs_surfaced"][0]
+    assert ccc["status"] == "not_acted" and ccc["acted"] is False
+    assert [r["ticker"] for r in pkg["signals_ignored"]] == ["CCC"]
+    assert pkg["entry_follow"]["share_pct"] == 0
+
+
+def test_a_call_still_inside_its_window_is_open_and_not_a_signal_ignored():
+    # Fri 07-24 call: its window (2 sessions) ends Tue 07-28, past the week's end
+    pkg = _generic_pkg(pd.DataFrame([_call("DDD", "2026-07-24")]))
+    ddd = pkg["recs_surfaced"][0]
+    assert ddd["status"] == "still_open" and ddd["acted"] is False
+    assert pkg["signals_ignored"] == []
+    assert pkg["entry_follow"]["n_still_open"] == 1 and pkg["entry_follow"]["share_pct"] is None
+
+
+def test_a_prior_week_open_call_is_carried_over_and_counted_in_the_share():
+    # Fri 07-17 call, window ends Tue 07-21, BUY Tue 07-21: still open at last
+    # Sunday, acted by this week's end -> carried over, counted (UD-1)
+    pkg = _generic_pkg(
+        pd.DataFrame([_call("AAA", "2026-07-17"), _call("DDD", "2026-07-21")]),
+        trades_extra=[{"ticker": "AAA", "action": "BUY",
+                       "traded_at": "2026-07-21T14:00:00+00:00"}])
+    assert [r["ticker"] for r in pkg["entry_carried_over"]] == ["AAA"]
+    assert pkg["entry_carried_over"][0]["status"] == "acted"
+    assert pkg["entry_follow"]["n_carried"] == 1 and pkg["entry_follow"]["n_acted"] == 1
+    assert [r["ticker"] for r in pkg["recs_surfaced"]] == ["DDD"]     # this week's call only
+    assert pkg["entry_window_days"] == 2 and pkg["entry_judge_state"] == "ok"
+    assert pkg["acted_rule_version"] == 2
+
+
+def test_module_failure_reads_as_unavailable_never_a_quiet_week(monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr("stock_analyzer.debrief_entry_calls.weekly_entry_calls", _boom)
+    pkg = _generic_pkg(_one_rec())
+    assert pkg["recs_status"] == "unavailable" and pkg["recs_surfaced"] == []
+    assert pkg["entry_follow"] is None and pkg["entry_error"] == "RuntimeError"
+    assert da.RECS_UNAVAILABLE_PROMPT_LINE in da._format_prompt(pkg)
+    # the read worked, so the note must not blame the database
+    assert da.recs_unavailable_note(pkg) == da.RECS_ENTRY_ERROR_NOTE
+    assert "couldn't be loaded" in da.RECS_ENTRY_ERROR_NOTE and "not the database" in da.RECS_ENTRY_ERROR_NOTE
+
+
+def test_module_failure_on_a_failed_recs_read_never_says_not_the_database(monkeypatch):
+    """Double fault: the recs read failed AND the module raised. The note must
+    not claim the database was fine."""
+    def _boom(*a, **k):
+        raise KeyError("boom")
+    monkeypatch.setattr("stock_analyzer.debrief_entry_calls.weekly_entry_calls", _boom)
+    pkg = _generic_pkg(None, recs_unavailable=True)
+    assert pkg["recs_status"] == "unavailable" and pkg["entry_error"] is None
+    assert da.recs_unavailable_note(pkg) == da.RECS_UNAVAILABLE_NOTE
+    assert "not the database" not in da.recs_unavailable_note(pkg)
+
+
+def test_recs_frame_missing_its_columns_is_unavailable():
+    pkg = _generic_pkg(pd.DataFrame([{"ticker": "AAA", "rec_type": "new_pick"}]))
+    assert pkg["recs_status"] == "unavailable"
+    assert pkg["entry_error"] is None and da.recs_unavailable_note(pkg) == da.RECS_UNAVAILABLE_NOTE
+
+
 # ─── protective_signals (WATCH/TRIM/EXIT) ─────────────────────────────────────
 
 def _exit_sig(ticker, signal_date, signal_type, pnl_pct=-5.0, dd_from_peak_pct=-8.0):
@@ -715,6 +797,13 @@ def test_protective_signals_empty_when_none_or_outside_window():
 
 _QUIET_LINE = "No protective (WATCH/TRIM/EXIT) signals fired this week."
 
+# What the app itself writes at the top of "Decisions you made" for a supplied,
+# empty recommendations frame (a genuinely quiet week).
+_ENTRY_QUIET_BLOCK = (
+    "Entry signals this week:\n"
+    "• No entry signals (new positions, adds to winners, Enter Now) were surfaced "
+    "this week.")
+
 
 def test_unavailable_protective_read_sets_status_prompt_line_and_note():
     pkg = _generic_pkg(exit_signals_df=None, exit_signals_unavailable=True)
@@ -771,13 +860,16 @@ def test_generated_debrief_carries_the_note_in_the_saved_decisions_text():
     pkg = da.build_debrief_package(SUN, core, pd.DataFrame(), t, exit_signals_unavailable=True)
     _install_fake_anthropic(_RAW)
     result = da.generate_debrief(pkg, api_key="fake-key")
-    assert result["section_decisions"] == "Decisions text.\n\n" + da.PROTECTIVE_UNAVAILABLE_NOTE
+    # the app's own entry block (a supplied empty frame = a quiet week) leads
+    assert result["section_decisions"] == (
+        _ENTRY_QUIET_BLOCK + "\n\nDecisions text.\n\n" + da.PROTECTIVE_UNAVAILABLE_NOTE)
     assert "$" not in da.PROTECTIVE_UNAVAILABLE_NOTE and "**" not in da.PROTECTIVE_UNAVAILABLE_NOTE
-    assert set(result) <= set(db._WEEKLY_DEBRIEF_COLS)    # no new column to write
+    assert set(result) <= set(db._WEEKLY_DEBRIEF_COLS)    # every key has a column
     # a reply with an empty Decisions section still shows the line
     _install_fake_anthropic("**What happened**\nFacts text.")
     only_facts = da.generate_debrief(pkg, api_key="fake-key")
-    assert only_facts["section_decisions"] == da.PROTECTIVE_UNAVAILABLE_NOTE
+    assert only_facts["section_decisions"] == (
+        _ENTRY_QUIET_BLOCK + "\n\n" + da.PROTECTIVE_UNAVAILABLE_NOTE)
 
 
 def test_generated_debrief_without_failure_has_no_note():
@@ -786,7 +878,8 @@ def test_generated_debrief_without_failure_has_no_note():
         pkg = da.build_debrief_package(SUN, core, pd.DataFrame(), t, **kw)
         _install_fake_anthropic(_RAW)
         result = da.generate_debrief(pkg, api_key="fake-key")
-        assert result["section_decisions"] == "Decisions text."
+        assert result["section_decisions"] == _ENTRY_QUIET_BLOCK + "\n\nDecisions text."
+        assert "couldn't be loaded" not in result["section_decisions"]
 
 
 def test_email_body_shows_the_unavailable_line():
@@ -805,7 +898,8 @@ def test_email_body_shows_the_unavailable_line():
 
 # ─── DebRecs: a failed recommendations read is disclosed, never a quiet week ──
 
-_NO_SIGNALS_LINE = "No actionable signals were surfaced this week."
+_NO_SIGNALS_LINE = "No entry signals were surfaced this week (the app has written that line)."
+_OLD_NO_SIGNALS_LINE = "No actionable signals were surfaced this week."
 
 
 def _quiet_protective(**kw):
@@ -832,10 +926,14 @@ def test_none_recs_frame_is_unavailable_never_zero_signals():
     assert pkg["recs_surfaced"] == []
     prompt = da._format_prompt(pkg)
     assert da.RECS_UNAVAILABLE_PROMPT_LINE in prompt
-    assert _NO_SIGNALS_LINE not in prompt
+    assert _NO_SIGNALS_LINE not in prompt and _OLD_NO_SIGNALS_LINE not in prompt
     assert da.recs_unavailable_note(pkg) == (
-        "Entry signals couldn't be loaded for this week, so this section is "
-        "missing (not a quiet week).")
+        "Entry signals (new positions / adds to winners / Enter Now) couldn't be "
+        "loaded for this week, so this section is missing (not a quiet week).")
+    assert da.RECS_UNAVAILABLE_PROMPT_LINE == (
+        "Entry signals (new positions / adds to winners / Enter Now) couldn't be "
+        "loaded for this week; do not say there were none.")
+    assert da._entry_bullet_lines(pkg) == []       # no Python block: the note discloses it
 
 
 def test_recs_unavailable_flag_wins_over_a_supplied_frame():
@@ -893,6 +991,88 @@ def test_system_prompt_forbids_none_claim_for_an_unloaded_signal_kind():
     assert "couldn't be loaded" in da._SYSTEM_PROMPT
 
 
+def test_system_prompt_leaves_the_entry_bullets_to_the_app_and_never_restates():
+    sp = da._SYSTEM_PROMPT
+    assert ("The app writes the entry-signal bullets itself (new positions, adds to winners "
+            "and Enter Now calls: acted on, not acted on, still open or not judged) and "
+            "places them at the top of this section. Do NOT write a bullet for an entry "
+            "signal, and never restate or contradict whether one was acted on. Write bullets "
+            "only for the protective WATCH/TRIM/EXIT signals and the closed positions below.") in sp
+    assert "Example (entry)" not in sp and "conviction tier (Strong Buy / Buy) is given" not in sp
+    assert "No protective signals fired this week." in sp
+    assert "No actionable signals were surfaced this week." not in sp
+    assert ("Signal follower: the entry-signal follow-through line shows ≥80% (it already "
+            "leaves out still-open and not-judged signals; never count them yourself)") in sp
+    assert "and no entry signal is still open or not judged" in sp
+
+
+def _generate_for(pkg, reply):
+    _install_fake_anthropic(reply)
+    return da.generate_debrief(pkg, api_key="fake-key")
+
+
+_ENTRY_REPLY = (
+    "**What happened**\nFacts text.\n\n"
+    "**Decisions you made**\n"
+    "• AAA: Strong Buy new position signal. You did not act.\n"
+    "• BBB: TRIM signal (surfaced 2×). You held — not acted on.\n"
+    "• CCC: Position closed this week.\n"
+    "• A TRIM signal on DDD fired.\n\n"
+    "**Patterns this week**\n• AAA: pattern text that stays.\n\n"
+    "**One thing to watch**\nWatch text.")
+
+
+def test_generate_puts_the_app_entry_bullets_first_and_strips_the_ai_entry_bullets():
+    sigs = pd.DataFrame([_exit_sig("BBB", "2026-07-21", "TRIM")])
+    pkg = _generic_pkg(
+        pd.DataFrame([_call("AAA", "2026-07-20"), _call("BBB", "2026-07-20"),
+                      _call("CCC", "2026-07-20")]),
+        trades_extra=[{"ticker": "AAA", "action": "BUY",
+                       "traded_at": "2026-07-21T14:00:00+00:00"}],
+        exit_signals_df=sigs)
+    result = _generate_for(pkg, _ENTRY_REPLY)
+    dec = result["section_decisions"]
+    assert dec.startswith("Entry signals this week:\n• AAA: New position call (Confirmed) on "
+                          "Mon Jul 20. Acted on: you bought on Tue Jul 21. Ended the week +5.0%.")
+    # the model's bullet for an entry name is gone; protective / closed names keep theirs
+    assert "You did not act" not in dec
+    assert "• BBB: TRIM signal (surfaced 2×)" in dec and "• CCC: Position closed this week." in dec
+    assert "• A TRIM signal on DDD fired." in dec                  # prose, not a ticker bullet
+    # order: app entry block, then the model's text
+    assert dec.index("Entry signals this week:") < dec.index("• BBB: TRIM signal")
+    # Patterns is never stripped
+    assert result["section_patterns"] == "• AAA: pattern text that stays."
+    assert result["acted_rule_version"] == 2
+    assert set(result) <= set(db._WEEKLY_DEBRIEF_COLS)
+    assert "acted_rule_version" in db._WEEKLY_DEBRIEF_COLS
+
+
+def test_generate_entry_block_survives_an_empty_model_decisions_section():
+    pkg = _generic_pkg(pd.DataFrame([_call("DDD", "2026-07-20")]),
+                       exit_signals_df=pd.DataFrame())
+    result = _generate_for(pkg, "**What happened**\nFacts text.")
+    assert result["section_decisions"].startswith("Entry signals this week:\n• DDD: New position call")
+    assert "Not acted on: no buy on the call day or the 2 trading days after it" in result["section_decisions"]
+
+
+def test_generate_cut_off_note_survives_when_the_last_bullet_is_stripped(monkeypatch):
+    pkg = _generic_pkg(pd.DataFrame([_call("AAA", "2026-07-20")]), exit_signals_df=pd.DataFrame())
+    monkeypatch.setattr(_FakeResponse, "stop_reason", "max_tokens", raising=False)
+    result = _generate_for(
+        pkg, "**What happened**\nFacts text.\n\n**Decisions you made**\n• AAA: model bullet")
+    monkeypatch.setattr(_FakeResponse, "stop_reason", "end_turn", raising=False)
+    assert "model bullet" not in result["section_decisions"]
+    assert "(cut off — the debrief hit its length limit)" in result["section_decisions"]
+
+
+def test_generate_with_unavailable_recs_has_no_entry_block_and_still_stamps_the_rule():
+    core, (t, _a, _dl) = _week_core()
+    pkg = da.build_debrief_package(SUN, core, None, t, exit_signals_df=pd.DataFrame())
+    result = _generate_for(pkg, _RAW)
+    assert "Entry signals this week:" not in result["section_decisions"]
+    assert result["acted_rule_version"] == 2
+
+
 # ─── behavioral / decision-quality enrichment ─────────────────────────────────
 
 def test_behavioral_enrichment_populates_package(monkeypatch):
@@ -903,11 +1083,12 @@ def test_behavioral_enrichment_populates_package(monkeypatch):
                        "buy": {"n": 10, "n_acted": 3, "action_rate": 30.0},
                        "delta_pp": 50.0}
     monkeypatch.setattr("stock_analyzer.behavioral_fingerprint.momentum_recency_pattern",
-                        lambda matched, min_n: fake_momentum)
+                        lambda matched, min_n, meaningful_delta_pp=5.0: fake_momentum)
     monkeypatch.setattr("stock_analyzer.behavioral_fingerprint.conviction_tier_pattern",
                         lambda matched, strong_buy_floor, min_n: fake_conviction)
     recs_df = pd.DataFrame([
-        {"ticker": "AAA", "rec_type": "new_pick", "momentum_score": 80.0, "composite_score": 78.0},
+        {"ticker": "AAA", "rec_type": "new_pick", "rec_date": "2026-07-20",
+         "momentum_score": 80.0, "composite_score": 78.0},
     ])
     package = _generic_pkg(recs_df, trades_extra=[
         {"ticker": "AAA", "action": "BUY", "traded_at": "2026-07-21T14:00:00+00:00"}],
@@ -921,12 +1102,46 @@ def test_behavioral_enrichment_exception_caught_stays_default(monkeypatch):
         raise RuntimeError("boom")
     monkeypatch.setattr("stock_analyzer.behavioral_fingerprint.momentum_recency_pattern", _boom)
     recs_df = pd.DataFrame([
-        {"ticker": "AAA", "rec_type": "new_pick", "momentum_score": 80.0, "composite_score": 78.0},
+        {"ticker": "AAA", "rec_type": "new_pick", "rec_date": "2026-07-20",
+         "momentum_score": 80.0, "composite_score": 78.0},
     ])
     package = _generic_pkg(recs_df, trades_extra=[
         {"ticker": "AAA", "action": "BUY", "traded_at": "2026-07-21T14:00:00+00:00"}],
         all_recs_df=recs_df)
     assert package["behavioral"] == {}
+
+
+def test_behavioural_input_follows_the_shared_rule_and_leaves_out_still_open(monkeypatch):
+    seen = {}
+
+    def _mrp(matched, min_n, meaningful_delta_pp=5.0):
+        seen["matched"] = list(matched)
+        seen["delta"] = meaningful_delta_pp
+        return None
+    monkeypatch.setattr("stock_analyzer.behavioral_fingerprint.momentum_recency_pattern", _mrp)
+    hist = pd.DataFrame([
+        _call("AAA", "2026-07-20", momentum_score=80.0, composite_score=78.0),   # bought 07-21: acted
+        _call("DDD", "2026-07-20", momentum_score=60.0, composite_score=60.0),   # never bought: not acted
+        _call("EEE", "2026-07-24", momentum_score=50.0, composite_score=50.0),   # window runs on: still open
+        _call("FFF", "2026-07-28", momentum_score=40.0, composite_score=40.0),   # after the week: not read
+    ])
+    _generic_pkg(hist.iloc[:3], trades_extra=[
+        {"ticker": "AAA", "action": "BUY", "traded_at": "2026-07-21T14:00:00+00:00"}],
+        all_recs_df=hist)
+    assert [m["acted_on"] for m in seen["matched"]] == [True, False]
+    assert [m["momentum_score"] for m in seen["matched"]] == [80.0, 60.0]
+    from stock_analyzer.constants import BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP as _D
+    assert seen["delta"] == _D
+
+
+def test_behavioural_block_keeps_its_skip_on_an_empty_trade_journal(monkeypatch):
+    called = []     # (a raise would be swallowed by the block's own try/except)
+    monkeypatch.setattr("stock_analyzer.behavioral_fingerprint.momentum_recency_pattern",
+                        lambda *a, **k: called.append(1))
+    core, (_t, _a, _dl) = _week_core()
+    hist = pd.DataFrame([_call("AAA", "2026-10-12")])
+    pkg = da.build_debrief_package(SUN, core, hist, pd.DataFrame(), all_recs_df=hist)
+    assert pkg["behavioral"] == {} and not called      # an empty journal would read every call not acted on
 
 
 def test_decision_quality_populates_current_month(monkeypatch):
@@ -1096,16 +1311,111 @@ def test_format_prompt_contributors_detractors_format_dollars_shape_and_pct():
     assert "BBB: -$50 (position sold this week — the move up to the sale)" in text
 
 
+def _erow(ticker, status, **kw):
+    """One debrief_entry_calls row, as the package carries it."""
+    row = {"ticker": ticker, "status": status, "reason": None,
+           "rec_types": ["new_pick"], "conviction": "", "verdict": "",
+           "times_surfaced": 1, "call_dates": ["2026-07-20"], "window_end": "2026-07-22",
+           "matched_trade_date": None, "matched_trade_id": None,
+           "end_week_pct": None, "acted": status == "acted"}
+    row.update(kw)
+    return row
+
+
+_FOLLOW0 = {"n_acted": 0, "n_not_acted": 0, "n_still_open": 0, "n_unknown": 0,
+            "n_carried": 0, "share_pct": None}
+
+
+def _entry_package(this_week=(), carried=(), follow=None, judge_state="ok", **kw):
+    return _base_package(
+        recs_status="ok", recs_surfaced=list(this_week), entry_carried_over=list(carried),
+        entry_follow=dict(_FOLLOW0 if follow is None else follow),
+        entry_judge_state=judge_state, entry_n_undated=0, entry_window_days=2, **kw)
+
+
 def test_format_prompt_recs_surfaced_times_suffix_only_when_greater_than_1():
-    package = _base_package(recs_surfaced=[
-        {"ticker": "AAA", "rec_type": "new_pick", "acted": True, "verdict": "Confirmed",
-         "times_surfaced": 1, "end_week_pct": None},
-        {"ticker": "BBB", "rec_type": "new_pick", "acted": False, "verdict": "Confirmed",
-         "times_surfaced": 3, "end_week_pct": None},
-    ])
+    package = _entry_package(
+        [_erow("AAA", "acted", matched_trade_date="2026-07-21"),
+         _erow("BBB", "not_acted", verdict="Confirmed", times_surfaced=3)],
+        follow={**_FOLLOW0, "n_acted": 1, "n_not_acted": 1, "share_pct": 50})
     text = da._format_prompt(package)
     assert "AAA" in text and "surfaced" not in text.split("BBB")[0].split("AAA")[-1]
     assert "(surfaced 3× this week)" in text
+
+
+def test_format_prompt_entry_block_names_each_status_and_tells_the_model_not_to_restate():
+    package = _entry_package(
+        [_erow("AAA", "acted", rec_types=["enter_now"], conviction="Strong Buy",
+               verdict="Confirmed", matched_trade_date="2026-07-21", end_week_pct=3.1),
+         _erow("BBB", "not_acted"),
+         _erow("CCC", "still_open", window_end="2026-07-28"),
+         _erow("DDD", "unknown", reason="trade_date_unreadable")],
+        follow={**_FOLLOW0, "n_acted": 1, "n_not_acted": 1, "n_still_open": 1,
+                "n_unknown": 1, "share_pct": 50})
+    text = da._format_prompt(package)
+    assert ("Entry signals this week (new positions, adds to winners, Enter Now; 4 name(s)). "
+            "The app has already written one bullet per name at the top of "
+            "\"Decisions you made\". Do not write entry-signal bullets and do not restate "
+            "whether they were acted on; use these for Patterns and One thing to watch only:") in text
+    assert ("  AAA: Enter Now (Strong Buy) [Confirmed] — acted on (bought 2026-07-21); "
+            "ended week +3.1%") in text
+    assert "  BBB: New position — not acted on" in text
+    assert "  CCC: New position — still open (decision window ends 2026-07-28)" in text
+    assert "  DDD: New position — not judged (a buy of this name has a date that couldn't be read)" in text
+    assert ("Entry-signal follow-through this week (by name, including 0 carried over; "
+            "acted = a buy on the call day or within 2 trading days): acted on 1 of 2 "
+            "judged (50%); 1 still open and 1 not judged are not counted.") in text
+    assert _OLD_NO_SIGNALS_LINE not in text
+
+
+def test_format_prompt_follow_through_counts_carried_names_and_lists_them():
+    package = _entry_package(
+        [_erow("AAA", "acted", matched_trade_date="2026-07-21")],
+        carried=[_erow("ZZZ", "acted", matched_trade_date="2026-07-20",
+                       call_dates=["2026-07-17"], carried_from="still_open")],
+        follow={**_FOLLOW0, "n_acted": 2, "n_carried": 1, "share_pct": 100})
+    text = da._format_prompt(package)
+    assert "by name, including 1 carried over;" in text
+    assert "acted on 2 of 2 judged (100%)" in text
+    assert "Carried over from last week (already written by the app):" in text
+    assert "  ZZZ: New position — acted on (bought 2026-07-20)" in text
+
+
+def test_format_prompt_trades_unavailable_forbids_a_share_and_a_verdict():
+    package = _entry_package(
+        [_erow("AAA", "unknown", reason="trades_unavailable")],
+        follow={**_FOLLOW0, "n_unknown": 1}, judge_state="trades_unavailable")
+    text = da._format_prompt(package)
+    assert ("Whether these were acted on couldn't be checked (the trade journal couldn't "
+            "be read); do not say they were or weren't, and do not compute a follow-through "
+            "share.") in text
+    assert "follow-through this week" not in text
+
+
+def test_format_prompt_quiet_entry_week_and_package_without_entry_info():
+    quiet = da._format_prompt(_entry_package())
+    assert "No entry signals were surfaced this week (the app has written that line)." in quiet
+    assert "couldn't be loaded" not in quiet
+    # a package with no entry-call info reads "unavailable", never "none"
+    bare = da._format_prompt(_base_package())
+    assert da.RECS_UNAVAILABLE_PROMPT_LINE in bare
+    assert "No entry signals were surfaced" not in bare and _OLD_NO_SIGNALS_LINE not in bare
+    assert da._entry_bullet_lines(_base_package()) == []
+
+
+def test_format_prompt_behavioural_headers_state_the_acted_rule():
+    package = _base_package(entry_window_days=2, behavioral={
+        "momentum": {"high": {"n": 10, "n_acted": 5, "action_rate": 50.0},
+                     "low": {"n": 10, "n_acted": 2, "action_rate": 20.0},
+                     "delta_pp": 30.0, "direction": "chases"},
+        "conviction": {"strong_buy": {"n": 10, "n_acted": 8, "action_rate": 80.0},
+                       "buy": {"n": 10, "n_acted": 3, "action_rate": 30.0},
+                       "delta_pp": 50.0}})
+    text = da._format_prompt(package)
+    basis = ("all-time entry-signal history; acted = a buy within 2 trading days of the "
+             "call; still-open calls not counted")
+    assert f"Behavioral pattern — momentum tendency ({basis}):" in text
+    assert f"Behavioral pattern — conviction tier ({basis}):" in text
 
 
 def test_format_prompt_closed_positions_note_only_when_nonempty():
@@ -1212,3 +1522,29 @@ def test_generate_debrief_llm_failure_returns_none():
 
 def test_classify_snapshot_read_is_retired():
     assert not hasattr(da, "classify_snapshot_read")
+
+
+def test_prompt_uses_the_same_plain_reason_words_as_the_bullets_never_a_code():
+    import re
+    from stock_analyzer import debrief_entry_calls as dec
+    reasons = {
+        "trades_unavailable": "the trade journal couldn't be read",
+        "trades_unreadable": "the trade journal couldn't be read",
+        "trade_date_unreadable": "a buy of this name has a date that couldn't be read",
+        "no_call_date": "the call has no readable date",
+    }
+    for code, words in reasons.items():
+        assert dec.unknown_reason_text(code) == words
+        row = _erow("AAA", "unknown", reason=code)
+        bullet = dec.entry_signal_lines({
+            "recs_status": "ok", "judge_state": "ok", "this_week": [row], "carried_over": [],
+            "n_undated": 0, "follow": dict(_FOLLOW0, n_unknown=1), "window_trading_days": 2})
+        assert any(f"Not judged: {words}." in ln for ln in bullet)
+        text = da._format_prompt(_entry_package(
+            [row], follow=dict(_FOLLOW0, n_unknown=1)))
+        assert f"not judged ({words})" in text
+        entry_lines = [ln for ln in text.splitlines() if ln.startswith("  AAA:")]
+        assert entry_lines and not any(re.search(r"[a-z]+_[a-z_]+", ln) for ln in entry_lines)
+    # an unknown code falls back to plain words too
+    assert dec.unknown_reason_text("something_new") == "the call couldn't be judged"
+    assert dec.unknown_reason_text(None) == "the call couldn't be judged"

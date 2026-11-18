@@ -15,8 +15,14 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
+from stock_analyzer import debrief_entry_calls as _dec
+from stock_analyzer import entry_call_action as _eca
 from stock_analyzer import llm
-from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
+from stock_analyzer.constants import (
+    BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP,
+    ENTRY_CALL_ACTION_WINDOW_TRADING_DAYS,
+    LLM_REQUEST_TIMEOUT_SEC,
+)
 
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
@@ -27,12 +33,12 @@ Section 1 — WHAT HAPPENED (2–3 sentences):
 State the account result: your account (net equity) moved X% ($Y) from the <d0> close to the <d1> close; SPY moved Z% over the same dates. If leverage is given, say once that at about L× leverage the account moves roughly L times the holdings' own move while SPY is unlevered — never call the gap skill. If the account result is unknown, say so in one sentence with the reason given; never estimate. Name contributors/detractors with their $: a position sold this week shows the move up to the sale, one bought this week the move from its buy price. If names are listed as not measured, say their P&L isn't included. If margin interest is listed as not recorded for a month, say the interest line may be understated. Do not speculate about the unexplained remainder. This is the same figure as 📄 Reports → Performance Review → Last week. Facts only.
 
 Section 2 — DECISIONS YOU MADE (bullet list):
-For each actionable signal surfaced this week — both new-position entry signals AND protective WATCH/TRIM/EXIT signals — did the investor act or not, and what happened to the name by week-end? Be specific. When a conviction tier (Strong Buy / Buy) is given for an entry signal, name it.
-Example (entry): "• NVDA: Strong Buy new position signal (confirmed, surfaced 3×). You did not act. Name fell 6.8% by Friday."
+The app writes the entry-signal bullets itself (new positions, adds to winners and Enter Now calls: acted on, not acted on, still open or not judged) and places them at the top of this section. Do NOT write a bullet for an entry signal, and never restate or contradict whether one was acted on. Write bullets only for the protective WATCH/TRIM/EXIT signals and the closed positions below.
+For each protective signal surfaced this week, did the investor act or not, and what happened to the name by week-end? Be specific.
 Example (protective): "• TSLA: TRIM signal (surfaced 2×). You held — not acted on. When it fired on 2026-07-22 the position was 9.2% below its peak, P&L −4.1%."
 A protective signal's drawdown and P&L are a snapshot from the day it fired — always say that day, and never present them as the week-end figure or as a distance "from peak" with a plus sign.
 If a ticker appears under "Positions fully closed this week", write ONLY: "• TICKER: Position closed this week." — do NOT describe it as a price loss or wipeout; closing a position on a signal is correct behaviour.
-If no signals of either kind were surfaced, write "• No actionable signals were surfaced this week." — but only when the data says signals were checked and none fired; if the data says a kind of signal couldn't be loaded, never write that none were surfaced for it.
+If no protective signals fired, write "• No protective signals fired this week." — but only when the data says protective signals were checked and none fired; if the data says a kind of signal couldn't be loaded, never write that none were surfaced for it.
 
 Section 3 — PATTERNS THIS WEEK (1–3 bullets, or "No clear pattern this week." if none):
 What behavioural pattern, if any, showed up? Combine this week's signals with any "Behavioral pattern" and "Decision quality" blocks in the data package:
@@ -40,9 +46,9 @@ What behavioural pattern, if any, showed up? Combine this week's signals with an
 - If a conviction-tier pattern is provided: name whether action rate is higher on Strong Buy vs plain Buy signals, or the reverse, and what that suggests.
 - If a Decision Quality grade is provided: include a single concise line (e.g., "Month-to-date decision quality: B (72/100) across 8 trades").
 Other named patterns (use only when applicable to this week):
-- Signal follower: acted on ≥80% of actionable signals this week
+- Signal follower: the entry-signal follow-through line shows ≥80% (it already leaves out still-open and not-judged signals; never count them yourself)
 - Concentration creep: added to a name already above single-name ceiling
-- Calm week: no signals fired or all signals acted on cleanly (only when every signal kind was loaded; never when the data says a kind couldn't be loaded)
+- Calm week: no signals fired or all signals acted on cleanly, and no entry signal is still open or not judged (only when every signal kind was loaded; never when the data says a kind couldn't be loaded)
 Note: a low raw action rate alone is NOT a named pattern — only flag it if it tracks a specific dimension like conviction tier or momentum.
 
 Section 4 — ONE THING TO WATCH (1–2 sentences):
@@ -201,11 +207,17 @@ def protective_unavailable_note(package) -> "str | None":
 # quiet week; a failed read (None) is not, and must never print "No actionable
 # signals were surfaced this week."  Wording only -- no policy value.
 RECS_UNAVAILABLE_PROMPT_LINE = (
-    "Entry signals (new positions / adds to winners) couldn't be loaded for this "
-    "week; do not say there were none.")
+    "Entry signals (new positions / adds to winners / Enter Now) couldn't be "
+    "loaded for this week; do not say there were none.")
 RECS_UNAVAILABLE_NOTE = (
-    "Entry signals couldn't be loaded for this week, so this section is missing "
-    "(not a quiet week).")
+    "Entry signals (new positions / adds to winners / Enter Now) couldn't be "
+    "loaded for this week, so this section is missing (not a quiet week).")
+# The read worked but the app's own entry-signal check failed: say so, never blame
+# the database.
+RECS_ENTRY_ERROR_NOTE = (
+    "Entry signals (new positions / adds to winners / Enter Now) couldn't be "
+    "loaded for this week (the app's entry-signal check failed, not the "
+    "database), so this section is missing (not a quiet week).")
 
 
 def recs_status(recs_df, unavailable: bool = False) -> str:
@@ -222,7 +234,7 @@ def recs_unavailable_note(package) -> "str | None":
     """The visible line for a package whose recommendations read failed, else
     None.  Appended to the saved Decisions text alongside the protective note."""
     if isinstance(package, dict) and package.get("recs_status") == "unavailable":
-        return RECS_UNAVAILABLE_NOTE
+        return RECS_ENTRY_ERROR_NOTE if package.get("entry_error") else RECS_UNAVAILABLE_NOTE
     return None
 
 
@@ -250,6 +262,11 @@ def unknown_result_reason(recon, account_return, excluded=None) -> str:
         note = account_row_trust.period_left_out_note(recon, excluded, see_note=False)
         return text + (" " + note if note else "")
     return "the account result couldn't be measured for this period."
+
+
+def _as_list(v) -> list:
+    """A list from a package list field; an absent (None) field reads as no rows."""
+    return [] if v is None else list(v)
 
 
 def _names(rows) -> "list[str]":
@@ -423,6 +440,16 @@ def build_debrief_package(
         "protective_signals_status": protective_signals_status(
             exit_signals_df, exit_signals_unavailable),
         "recs_status":            recs_status(recs_df, recs_unavailable),
+        # the entry-call block (debrief_entry_calls.weekly_entry_calls); None / []
+        # until it has run, so a package without it reads "no entry info"
+        "entry_carried_over":     [],
+        "entry_follow":           None,
+        "entry_judge_state":      None,
+        "entry_n_undated":        0,
+        "entry_window_days":      None,
+        "acted_rule_version":     _eca.ACTED_RULE_VERSION,
+        # exception type when the entry-call module itself failed (not the read)
+        "entry_error":            None,
         "broken_theses":          broken_theses or [],
         "behavioral":             {},
         "decision_quality_month": None,
@@ -534,73 +561,45 @@ def build_debrief_package(
             return None
         return _price_pct(rec)
 
-    # Recommendations surfaced this week — actionable types only.
-    # buy_candidate is an awareness-only feed; including it inflates the signal
-    # count and makes action-rate comparisons misleading.
+    # Entry calls (new_pick / add_winner / enter_now), judged by the shared rule
+    # (docs/plans/acted-rule-c3-spec.md): a call is acted on only by a BUY on the
+    # call day or within the decision window, judged as of the week's end; a name
+    # whose window ran past last Sunday is carried over. buy_candidate is an
+    # awareness-only feed and is never listed. Any failure of the module reads as
+    # "entry signals unavailable", never as a quiet week.
     if recs_unavailable:
         # a frame flagged unavailable is never read: no recs-derived list, and no
         # fall-back to it in the behavioural block below
         recs_df = None
-    if recs_df is not None and not (hasattr(recs_df, "empty") and recs_df.empty):
-        date_col = "rec_date" if "rec_date" in recs_df.columns else (
-            "surfaced_at" if "surfaced_at" in recs_df.columns else None
-        )
-        # Known, documented gap (data-foundation A5 follow-up, 2026-09-23):
-        # this string-slice is CORRECT for the common "rec_date" path (a
-        # plain date column, no tz offset) and deliberately NOT rewritten to
-        # the utc=True/tz_convert idiom used elsewhere in this file -- doing
-        # so would introduce a NEW off-by-one-day bug on every plain-date
-        # row (midnight UTC is the prior evening in ET) to fix a rarer
-        # fallback. The "surfaced_at" fallback path (a genuine timestamptz)
-        # is unreachable in practice: db.py's loader always supplies
-        # rec_date, so date_col never actually resolves to "surfaced_at" in
-        # production. Left as-is; not queued as active work.
-        if date_col:
-            week_recs = recs_df[
-                recs_df[date_col].astype(str).str[:10] >= str(week_start)
-            ].copy()
-
-            if "rec_type" in week_recs.columns:
-                week_recs = week_recs[week_recs["rec_type"].isin(["new_pick", "add_winner"])]
-
-            week_trades = pd.DataFrame()
-            if trades_df is not None and not (hasattr(trades_df, "empty") and trades_df.empty):
-                week_trades = trades_df[_traded_at_et_dates(trades_df) >= week_start]
-            acted_tickers = set(week_trades["ticker"].astype(str).str.upper()) if not week_trades.empty else set()
-
-            # Deduplicate by ticker — one entry with a times_surfaced count and
-            # the dominant verdict across the week's appearances.
-            by_ticker: dict[str, dict] = {}
-            for _, rec in week_recs.iterrows():
-                tk       = str(rec.get("ticker", "")).upper()
-                if not tk:
-                    continue
-                verdict    = str(rec.get("verdict") or "")
-                rec_type   = str(rec.get("rec_type") or "")
-                conviction = str(rec.get("conviction") or "")
-                if tk not in by_ticker:
-                    by_ticker[tk] = {
-                        "ticker":         tk,
-                        "rec_type":       rec_type,
-                        "conviction":     conviction,
-                        "_verdicts":      [verdict] if verdict else [],
-                        "times_surfaced": 1,
-                        "acted":          tk in acted_tickers,
-                        # Price % over the window (close_end / close_start − 1);
-                        # None for a closed position or when either close is missing.
-                        "end_week_pct":   _end_week_pct(tk),
-                    }
-                else:
-                    by_ticker[tk]["times_surfaced"] += 1
-                    if verdict:
-                        by_ticker[tk]["_verdicts"].append(verdict)
-
-            for entry in by_ticker.values():
-                verdicts = entry.pop("_verdicts")
-                entry["verdict"] = max(set(verdicts), key=verdicts.count) if verdicts else ""
-                package["recs_surfaced"].append(entry)
-                if not entry["acted"]:
-                    package["signals_ignored"].append(entry)
+    try:
+        _entry = _dec.weekly_entry_calls(
+            recs_df, trades_df, week_start=week_start, week_ending=week_ending)
+    except Exception as _e:
+        _entry = None
+        if not recs_unavailable:
+            # only blame the module when the database read worked: on a double
+            # fault the plain "couldn't be loaded" note stays true
+            package["entry_error"] = type(_e).__name__
+    if _entry is None:
+        package["recs_status"] = "unavailable"
+    else:
+        package["recs_status"] = _entry["recs_status"]
+    if _entry is not None and _entry["recs_status"] == _dec.RECS_OK:
+        _rows = []
+        for _r in _entry["this_week"]:
+            _row = dict(_r)
+            _row["end_week_pct"] = _end_week_pct(_row["ticker"])
+            _row["acted"] = _row["status"] == _eca.STATUS_ACTED
+            _rows.append(_row)
+        package["recs_surfaced"] = _rows
+        package["signals_ignored"] = [
+            r for r in _rows if r["status"] == _eca.STATUS_NOT_ACTED]
+        package["entry_carried_over"] = list(_entry["carried_over"])
+        package["entry_follow"] = dict(_entry["follow"])
+        package["entry_judge_state"] = _entry["judge_state"]
+        package["entry_n_undated"] = _entry["n_undated"]
+        package["entry_window_days"] = _entry["window_trading_days"]
+        package["acted_rule_version"] = _entry["acted_rule_version"]
 
     # ── Protective signals (WATCH/TRIM/EXIT) surfaced this week ──────────────
     # Symmetric counterpart to recs_surfaced above — without this, the debrief
@@ -674,31 +673,23 @@ def build_debrief_package(
             COMPOSITE_STRONG_BUY    as _CSB,
         )
         _hist = all_recs_df if (all_recs_df is not None and not getattr(all_recs_df, "empty", True)) else recs_df
+        # An empty journal is skipped here (as before): it would read every call
+        # not acted on, and a pattern built on that is worse than none.
         if _hist is not None and not getattr(_hist, "empty", True) and \
                 trades_df is not None and not getattr(trades_df, "empty", True):
-            _ar = _hist[_hist["rec_type"].isin(["new_pick", "add_winner"])].copy() \
-                  if "rec_type" in _hist.columns else _hist.copy()
-            _buy_set = set(
-                trades_df[trades_df["action"].str.upper() == "BUY"]["ticker"]
-                .astype(str).str.upper()
-            )
-            _matched: list[dict] = [
-                {
-                    "momentum_score":  r.get("momentum_score"),
-                    "composite_score": r.get("composite_score"),
-                    "acted_on":        str(r.get("ticker", "")).upper() in _buy_set,
-                }
-                for _, r in _ar.iterrows()
-                if str(r.get("ticker", "")).strip()
-            ]
-            _beh: dict = {}
-            _mp = _mrp(_matched, min_n=int(_BMIN))
-            if _mp:
-                _beh["momentum"] = _mp
-            _cp = _ctp(_matched, strong_buy_floor=float(_CSB), min_n=int(_BMIN))
-            if _cp:
-                _beh["conviction"] = _cp
-            package["behavioral"] = _beh
+            # the shared entry-call rule, judged as of the week's end; still-open,
+            # not-judged and credit-deduped calls are left out of both arms
+            _matched = _dec.behavioural_rows(_hist, trades_df, cutoff=week_ending)
+            if _matched is not None:
+                _beh: dict = {}
+                _mp = _mrp(_matched, min_n=int(_BMIN),
+                           meaningful_delta_pp=float(BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP))
+                if _mp:
+                    _beh["momentum"] = _mp
+                _cp = _ctp(_matched, strong_buy_floor=float(_CSB), min_n=int(_BMIN))
+                if _cp:
+                    _beh["conviction"] = _cp
+                package["behavioral"] = _beh
     except Exception:
         pass  # behavioral enrichment is optional — never block the debrief
 
@@ -749,6 +740,99 @@ def _leg_line(c: dict) -> str:
     pct = c.get("price_pct")
     pct_str = f"; price {_pct(pct)}" if pct is not None else ""
     return f"  {c['ticker']}: {_usd_plain(c['pnl'])} ({_SHAPE_TEXT.get(c.get('shape'), 'traded')}{pct_str})"
+
+
+_ENTRY_TYPE_LABELS = (("new_pick", "New position"),
+                      ("add_winner", "Add to winner"),
+                      ("enter_now", "Enter Now"))
+
+
+def _trading_days_phrase(n) -> str:
+    n = ENTRY_CALL_ACTION_WINDOW_TRADING_DAYS if n is None else int(n)
+    return "1 trading day" if n == 1 else f"{n} trading days"
+
+
+def _entry_status_text(r: dict) -> str:
+    status = r.get("status")
+    if status == _eca.STATUS_ACTED:
+        bought = r.get("matched_trade_date")
+        return f"acted on (bought {bought})" if bought else "acted on"
+    if status == _eca.STATUS_NOT_ACTED:
+        return "not acted on"
+    if status == _eca.STATUS_STILL_OPEN:
+        wend = r.get("window_end")
+        return f"still open (decision window ends {wend})" if wend else "still open"
+    return f"not judged ({_dec.unknown_reason_text(r.get('reason'))})"
+
+
+def _entry_prompt_line(r: dict, *, carried: bool) -> str:
+    have = {str(t) for t in _as_list(r.get("rec_types"))}
+    label = " + ".join(lbl for key, lbl in _ENTRY_TYPE_LABELS if key in have) or "Entry"
+    conviction = r.get("conviction") or ""
+    verdict = r.get("verdict") or ""
+    conv_str = f" ({conviction})" if conviction else ""
+    verdict_str = f" [{verdict}]" if verdict else ""
+    times = r.get("times_surfaced") or 1
+    times_str = (f" (surfaced {times}×{'' if carried else ' this week'})"
+                 if times > 1 else "")
+    end_str = ""
+    if not carried and r.get("end_week_pct") is not None:
+        end_str = f"; ended week {_pct(r['end_week_pct'])}"
+    return (f"  {r['ticker']}: {label}{conv_str}{verdict_str}{times_str} — "
+            f"{_entry_status_text(r)}{end_str}")
+
+
+def _entry_prompt_lines(package: dict) -> "list[str]":
+    """The entry-signal part of the model prompt. The app writes the bullets
+    itself (debrief_entry_calls.entry_signal_lines); the model only reads these
+    lines for Patterns and One thing to watch. A package with no entry-call info
+    (recs unavailable, or handwritten) says so, never "none"."""
+    if package.get("recs_status") != "ok" or package.get("entry_follow") is None:
+        return [RECS_UNAVAILABLE_PROMPT_LINE]
+    this_week = _as_list(package.get("recs_surfaced"))
+    carried = _as_list(package.get("entry_carried_over"))
+    follow = package["entry_follow"]
+    n_win = package.get("entry_window_days")
+    out: list[str] = []
+    if this_week:
+        out.append(
+            "Entry signals this week (new positions, adds to winners, Enter Now; "
+            f"{len(this_week)} name(s)). The app has already written one bullet per "
+            "name at the top of \"Decisions you made\". Do not write entry-signal "
+            "bullets and do not restate whether they were acted on; use these for "
+            "Patterns and One thing to watch only:")
+        out.extend(_entry_prompt_line(r, carried=False) for r in this_week)
+    elif package.get("entry_n_undated"):
+        out.append("Some entry-signal rows had no readable date and are not shown "
+                   "(the app has noted that).")
+    else:
+        out.append("No entry signals were surfaced this week (the app has written "
+                   "that line).")
+    if this_week or carried:
+        if package.get("entry_judge_state") != "ok":
+            out.append(
+                "Whether these were acted on couldn't be checked (the trade journal "
+                "couldn't be read); do not say they were or weren't, and do not "
+                "compute a follow-through share.")
+        elif follow.get("share_pct") is not None:
+            judged = follow["n_acted"] + follow["n_not_acted"]
+            out.append(
+                "Entry-signal follow-through this week (by name, including "
+                f"{follow.get('n_carried', 0)} carried over; acted = a buy on the "
+                f"call day or within {_trading_days_phrase(n_win)}): acted on "
+                f"{follow['n_acted']} of {judged} judged ({follow['share_pct']}%); "
+                f"{follow.get('n_still_open', 0)} still open and "
+                f"{follow.get('n_unknown', 0)} not judged are not counted.")
+        else:
+            out.append(
+                "No entry signal could be judged as acted on or not yet "
+                f"({follow.get('n_still_open', 0)} still open, "
+                f"{follow.get('n_unknown', 0)} not judged); do not compute a "
+                "follow-through share.")
+    if carried:
+        out.append("Carried over from last week (already written by the app):")
+        out.extend(_entry_prompt_line(r, carried=True) for r in carried)
+    return out
 
 
 def _format_prompt(package: dict) -> str:
@@ -819,27 +903,7 @@ def _format_prompt(package: dict) -> str:
             lines.append(_leg_line(d))
 
     lines.append("")
-    _rec_type_label = {"new_pick": "New position", "add_winner": "Add to winner"}
-    if package.get("recs_surfaced"):
-        lines.append(
-            f"Actionable signals surfaced this week ({len(package['recs_surfaced'])} unique names,"
-            " new_pick and add_winner only — buy_candidate awareness feed excluded):"
-        )
-        for r in package["recs_surfaced"]:
-            acted_str  = "acted on" if r["acted"] else "NOT acted on"
-            end_str    = f"; ended week {_pct(r['end_week_pct'])}" if r.get("end_week_pct") is not None else ""
-            times      = r.get("times_surfaced", 1)
-            times_str  = f" (surfaced {times}× this week)" if times > 1 else ""
-            label      = _rec_type_label.get(r.get("rec_type", ""), r.get("rec_type", "Signal"))
-            verdict    = r.get("verdict", "")
-            verdict_str = f" [{verdict}]" if verdict else ""
-            conviction  = r.get("conviction", "")
-            conv_str    = f" ({conviction})" if conviction else ""
-            lines.append(f"  {r['ticker']}: {label}{conv_str}{verdict_str}{times_str} — {acted_str}{end_str}")
-    elif package.get("recs_status") == "unavailable":
-        lines.append(RECS_UNAVAILABLE_PROMPT_LINE)
-    else:
-        lines.append("No actionable signals were surfaced this week.")
+    lines.extend(_entry_prompt_lines(package))
 
     if package.get("protective_signals_status") in _PROTECTIVE_UNVERIFIED:
         lines.append("")
@@ -872,12 +936,15 @@ def _format_prompt(package: dict) -> str:
         lines.append(f"Positions with BROKEN thesis: {', '.join(package['broken_theses'])}")
 
     beh = package.get("behavioral") or {}
+    _beh_basis = ("all-time entry-signal history; acted = a buy within "
+                  f"{_trading_days_phrase(package.get('entry_window_days'))} of the "
+                  "call; still-open calls not counted")
     if beh.get("momentum"):
         mp = beh["momentum"]
         h  = mp.get("high", {})
         lo = mp.get("low",  {})
         lines.append("")
-        lines.append("Behavioral pattern — momentum tendency (all-time buy-side signal history):")
+        lines.append(f"Behavioral pattern — momentum tendency ({_beh_basis}):")
         lines.append(f"  High-momentum signals: {h.get('n', 0)} surfaced, "
                      f"{h.get('n_acted', 0)} acted on ({h.get('action_rate', 0):.0f}% rate)")
         lines.append(f"  Low-momentum signals:  {lo.get('n', 0)} surfaced, "
@@ -891,7 +958,7 @@ def _format_prompt(package: dict) -> str:
         sb = cp.get("strong_buy", {})
         b  = cp.get("buy", {})
         lines.append("")
-        lines.append("Behavioral pattern — conviction tier (all-time buy-side signal history):")
+        lines.append(f"Behavioral pattern — conviction tier ({_beh_basis}):")
         lines.append(f"  Strong Buy signals: {sb.get('n', 0)} surfaced, "
                      f"{sb.get('n_acted', 0)} acted on ({sb.get('action_rate', 0):.0f}% rate)")
         lines.append(f"  Buy signals:        {b.get('n', 0)} surfaced, "
@@ -947,6 +1014,22 @@ def _parse_response(text: str) -> dict:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _entry_bullet_lines(package: dict) -> "list[str]":
+    """The app-written entry-signal bullets for a package, [] when it carries no
+    entry-call info (recs unavailable: RECS_UNAVAILABLE_NOTE discloses it)."""
+    if package.get("recs_status") != "ok" or package.get("entry_follow") is None:
+        return []
+    return _dec.entry_signal_lines({
+        "recs_status":          "ok",
+        "judge_state":          package.get("entry_judge_state"),
+        "this_week":            _as_list(package.get("recs_surfaced")),
+        "carried_over":         _as_list(package.get("entry_carried_over")),
+        "n_undated":            package.get("entry_n_undated") or 0,
+        "follow":               package["entry_follow"],
+        "window_trading_days":  package.get("entry_window_days"),
+    })
+
+
 def generate_debrief(
     package: dict,
     api_key: str,
@@ -978,18 +1061,37 @@ def generate_debrief(
             return None
         text     = r.text
         sections = _parse_response(text)
+        _cut_last = None
         if r.truncated:
             # never let a cut-off sentence read as the model's whole thought
-            _last = next((k for k in reversed(list(sections)) if sections.get(k)), None)
-            if _last is not None:
-                sections[_last] = sections[_last].rstrip() + " … (cut off — the debrief hit its length limit)"
+            _cut_last = next((k for k in reversed(list(sections)) if sections.get(k)), None)
+        # UD-5: the app writes the entry-signal bullets, so a model bullet that opens
+        # with an entry name (other than a protective / closed one) is dropped; only
+        # the Decisions section, never Patterns.
+        _entry_names = [r_["ticker"] for r_ in _as_list(package.get("recs_surfaced"))
+                        + _as_list(package.get("entry_carried_over"))]
+        _keep_names = ([p_["ticker"] for p_ in _as_list(package.get("protective_signals"))]
+                       + _as_list(package.get("closed_positions")))
+        sections["section_decisions"] = _dec.drop_ai_entry_bullets(
+            sections.get("section_decisions"), _entry_names, _keep_names).strip()
+        if _cut_last is not None:
+            sections[_cut_last] = (
+                sections[_cut_last].rstrip()
+                + " … (cut off — the debrief hit its length limit)").strip()
+        # The deterministic entry bullets lead the Decisions section, then the model's
+        # text, then the disclosure notes (a stored debrief that silently lacks a
+        # signal section reads as a quiet week).
+        _parts = []
+        _entry_lines = _entry_bullet_lines(package)
+        if _entry_lines:
+            _parts.append("\n".join(_entry_lines))
+        if (sections.get("section_decisions") or "").strip():
+            _parts.append(sections["section_decisions"].strip())
         for _note in (protective_unavailable_note(package),
                       recs_unavailable_note(package)):
             if _note:
-                # deterministic disclosure, not left to the model: a stored debrief
-                # that silently lacks a signal section reads as a quiet week
-                sections["section_decisions"] = (
-                    (sections.get("section_decisions") or "").rstrip() + "\n\n" + _note).strip()
+                _parts.append(_note)
+        sections["section_decisions"] = "\n\n".join(_parts)
         return {
             "week_ending":      package["week_ending"],
             "metrics_version":  package["metrics_version"],
@@ -998,6 +1100,7 @@ def generate_debrief(
             "spy_pct":          package.get("spy_pct"),
             "alpha_pct":        package.get("alpha_pct"),
             **sections,
+            "acted_rule_version": _eca.ACTED_RULE_VERSION,
             "email_sent":       False,
         }
     except Exception:

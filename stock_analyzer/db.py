@@ -2563,6 +2563,9 @@ _WEEKLY_DEBRIEF_COLS = [
     "id", "week_ending", "generated_at", "performance_pct", "spy_pct",
     "alpha_pct", "section_facts", "section_decisions", "section_patterns",
     "section_watchnext", "email_sent", "email_sent_at", "metrics_version",
+    # which acted rule wrote the entry-signal bullets (NULL / 1 = the old same-day
+    # any-trade rule; ACTED_RULE_VERSION = the shared entry-call rule). None-safe on read.
+    "acted_rule_version",
 ]
 
 

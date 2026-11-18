@@ -180,6 +180,49 @@ def test_run_debrief_no_minimum_snapshot_floor_anymore(monkeypatch):
     assert reached and reached[0]["end_date"] == datetime.date(2026, 8, 9)
 
 
+def _recs_kwargs_for_sunday(monkeypatch, when):
+    """Run the debrief lane up to its week-scoped recommendations read and return
+    that read's kwargs (the read raises, so nothing after it runs)."""
+    from stock_analyzer import period_inputs as pi
+    monkeypatch.setattr(cr._acct_autorepair, "run_auto_repair",
+                        lambda *_a, **_k: {"ok": True, "since": "x", "checked": 0, "applied": [],
+                                          "failed": [], "refusals": [], "error": None})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(pi, "load_engine_inputs", lambda db, s, e, **kw: {
+        "trades_df": pd.DataFrame(), "account_snapshots_df": pd.DataFrame(),
+        "daily_snapshots_df": pd.DataFrame(), "flows": [], "income_events": []})
+    seen, logs = [], []
+
+    def _stop(**kw):
+        seen.append(kw)
+        raise RuntimeError("stop here")
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none", _stop)
+    monkeypatch.setattr(cr.db, "load_thesis_reviews_or_none", lambda: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_holdings_or_none", lambda: pd.DataFrame({"Ticker": []}))
+    monkeypatch.setattr(cr, "_log", lambda msg: logs.append(msg))
+    with pytest.raises(RuntimeError, match="stop here"):
+        cr._run_debrief(cr._ET.localize(when), force=False)
+    return seen[0], logs
+
+
+def test_run_debrief_loads_recs_back_to_last_weeks_start_so_open_calls_carry_over(monkeypatch):
+    """Acted-rule C3: the Sunday 2026-11-08 debrief covers Mon 11-02 .. Sun 11-08,
+    but a call from the week before can still be open and must be carried over,
+    so the read reaches back to 2026-10-26 (week_start - 7), and stops at the
+    week's end (never past it)."""
+    kw, logs = _recs_kwargs_for_sunday(monkeypatch, datetime.datetime(2026, 11, 8, 18, 0, 0))
+    assert kw["start_date"] == datetime.date(2026, 10, 26)
+    assert kw["end_date"] == datetime.date(2026, 11, 8)
+    assert any("lookback starts 2026-10-26" in m for m in logs)
+
+
+def test_run_debrief_recs_start_is_the_shared_helpers_value(monkeypatch):
+    from stock_analyzer import debrief_entry_calls as dec
+    kw, _logs = _recs_kwargs_for_sunday(monkeypatch, datetime.datetime(2026, 11, 15, 18, 0, 0))
+    assert kw["start_date"] == dec.recs_load_start(datetime.date(2026, 11, 9))
+    assert kw["end_date"] == datetime.date(2026, 11, 15)
+
+
 # ── _run_debrief: a paid result that is not saved / not generated fails the lane ──
 
 def _full_lane(monkeypatch, *, generate, saved, notified, repair=None, calls=None):
@@ -466,7 +509,7 @@ def test_run_debrief_unreadable_recs_is_disclosed_and_fails_the_heartbeat(monkey
     assert notified == [("debrief", "debrief saved; " + _RECS_LINE)]
     assert cr._LAST_LANE_FAILURE_DETAIL == "debrief saved; " + _RECS_LINE
     assert any("recommendations lookup failed" in m for m in logs)
-    assert any("recs=unreadable" in m for m in logs)      # the result line no longer crashes on None
+    assert any("recs loaded (from lookback)=unreadable" in m for m in logs)      # the result line no longer crashes on None
 
 
 def test_run_debrief_readable_recs_passes_not_unavailable_and_stays_green(monkeypatch):
@@ -484,6 +527,59 @@ def test_run_debrief_unreadable_full_history_is_logged_but_not_a_lane_failure(mo
     assert rc == 0 and notified == [] and cr._LAST_LANE_FAILURE_DETAIL is None
     assert kws[0]["all_recs_df"] is None and kws[0]["recs_unavailable"] is False
     assert any("full recommendation history lookup failed" in m for m in logs)
+
+
+_ENTRY_LINE = "debrief: entry-call check failed — entry signals disclosed as unavailable"
+
+
+def _lane_with_real_package(monkeypatch, *, entry_boom):
+    """The fully-mocked lane, but with the REAL build_debrief_package, so the
+    entry-call module runs (or, with `entry_boom`, raises) for real."""
+    from stock_analyzer import debrief_advisor as da
+    real_build = da.build_debrief_package
+    notified, calls, logs, pkgs = [], [], [], []
+    _full_lane(monkeypatch, generate=dict(_RESULT), saved=True, notified=notified, calls=calls)
+    monkeypatch.setattr(da, "build_debrief_package", real_build)
+    monkeypatch.setattr(da, "generate_debrief",
+                        lambda pkg, key: pkgs.append(pkg) or dict(_RESULT))
+    if entry_boom:
+        def _boom(*a, **k):
+            raise RuntimeError("boom")
+        monkeypatch.setattr("stock_analyzer.debrief_entry_calls.weekly_entry_calls", _boom)
+    monkeypatch.setattr(cr, "_log", lambda msg: logs.append(msg))
+    notified.clear()
+    monkeypatch.setattr(cr, "_LAST_LANE_FAILURE_DETAIL", None)
+    rc = cr._run_debrief(cr._ET.localize(datetime.datetime(2026, 8, 9, 18, 0, 0)), force=False)
+    return rc, notified, logs, pkgs
+
+
+def test_run_debrief_entry_module_crash_turns_the_lane_red_and_stays_disclosed(monkeypatch):
+    from stock_analyzer import debrief_advisor as da
+    rc, notified, logs, pkgs = _lane_with_real_package(monkeypatch, entry_boom=True)
+    assert rc == 1 and len(notified) == 1
+    assert notified[0] == ("debrief", "debrief saved; " + _ENTRY_LINE)
+    assert cr._LAST_LANE_FAILURE_DETAIL == "debrief saved; " + _ENTRY_LINE
+    assert any("debrief: entry-call module failed (RuntimeError); entry signals not judged" in m
+               for m in logs)
+    # the debrief itself is still generated, and its package carries the disclosure
+    assert len(pkgs) == 1 and pkgs[0]["recs_status"] == "unavailable"
+    assert pkgs[0]["entry_error"] == "RuntimeError"
+    note = da.recs_unavailable_note(pkgs[0])
+    assert "couldn't be loaded" in note and "not the database" in note
+
+
+def test_run_debrief_healthy_entry_check_stays_green(monkeypatch):
+    rc, notified, logs, pkgs = _lane_with_real_package(monkeypatch, entry_boom=False)
+    assert rc == 0 and notified == []
+    assert pkgs[0]["recs_status"] == "ok" and pkgs[0]["entry_error"] is None
+    assert not any("entry-call module failed" in m for m in logs)
+
+
+def test_run_debrief_unreadable_recs_does_not_also_report_a_module_failure(monkeypatch):
+    # the read failure has its own line; the module line is only for a good read
+    rc, notified, _calls, kws, logs = _lane_with_recs_read(monkeypatch, None)
+    assert not any("entry-call module failed" in m for m in logs)
+    assert notified == [("debrief", "debrief saved; " + _RECS_LINE)]
 
 
 def test_run_debrief_both_signal_reads_failing_names_both_failures(monkeypatch):

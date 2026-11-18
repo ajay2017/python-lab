@@ -42615,13 +42615,18 @@ elif page == "📄 Reports":
     )
     # 2026-11-14 (Reports polish): the guide sits under the picker, collapsed.
     with st.expander("ℹ️ Which report answers what", expanded=False):
+        from stock_analyzer.constants import ENTRY_CALL_ACTION_WINDOW_TRADING_DAYS as _RPT_ENTRY_WINDOW_N
         st.markdown(
             "- **📈 Performance Review**: what your account did over a period, and why. "
             "Recomputed each time you open it; Last week, Last month, "
             "This/Last quarter, This tax year, Since tracking or Custom.\n"
             "- **🗓️ Weekly Debrief**: an AI narrative of the week, using the same numbers as "
             "Performance Review → Last week. A saved debrief keeps the figures it was generated "
-            "with; the page says when they differ from Performance Review → Last week.\n"
+            "with; the page says when they differ from Performance Review → Last week. Its "
+            "entry-signal bullets are written by the app: a call counts as acted on when you "
+            f"bought that name on the call day or within {_RPT_ENTRY_WINDOW_N} trading day(s) "
+            "after it; a call still inside that window shows as still open and is judged in "
+            "the next week's debrief. A debrief saved under the earlier rule says so.\n"
             "- **🧭 Monthly Decision Review (AI)**: is the engine picking well, and do you act "
             "on what it surfaces. Frozen once generated; it is not a returns report "
             "(for the month's result, use Performance Review → Last month).\n"
@@ -43506,6 +43511,7 @@ elif page == "📄 Reports":
             # (report_periods.regenerate_action).
             from stock_analyzer import db as _ai_db
             from stock_analyzer import debrief_advisor as _dba
+            from stock_analyzer import debrief_entry_calls as _wd_dec
             from stock_analyzer import report_periods as _rp
             try:
                 _thesis_reviews_df = _ai_db.load_thesis_reviews_or_none()  # None = couldn't load
@@ -43514,7 +43520,12 @@ elif page == "📄 Reports":
             _open_tickers = set()
             if "holdings_df" in st.session_state and not st.session_state.holdings_df.empty:
                 _open_tickers = set(st.session_state.holdings_df["Ticker"].astype(str).str.upper())
-            _wd_df = _ai_db.load_weekly_debriefs(limit=8)
+            # The strict read: None = the table couldn't be read, which must never
+            # show as "No weekly debriefs yet" (an empty frame = read fine, no rows).
+            _wd_df = _ai_db.load_weekly_debriefs_or_none(limit=8)
+            _wd_read_failed = _wd_df is None
+            if _wd_read_failed:
+                _wd_df = pd.DataFrame()
             # ── Weekly Portfolio Debrief ──────────────────────────────────────────────
             st.subheader("🗓️ Weekly Debrief")
             st.markdown(
@@ -43581,8 +43592,12 @@ elif page == "📄 Reports":
                             "unreachable. Try again in a moment."
                         )
                     else:
+                        # Reaches back far enough to carry over last week's still-open
+                        # calls (the same start the Sunday cron uses); never past the
+                        # week's end.
                         _wd_recs = _ai_db.load_recommendations_or_none(
-                            start_date=_wd_start, end_date=_wd_today
+                            start_date=_wd_dec.recs_load_start(_wd_start),
+                            end_date=_wd_today,
                         )
                         _wd_all_recs = _ai_db.load_recommendations_or_none()
                         if _wd_recs is None:
@@ -43673,7 +43688,12 @@ elif page == "📄 Reports":
                  ("One thing to watch", "section_watchnext")])
 
             # Display most recent debrief
-            if _wd_df.empty:
+            if _wd_read_failed:
+                st.warning(
+                    "Couldn't read the saved debriefs just now (the database may be "
+                    "unreachable). That is not the same as having none yet; reload in a moment."
+                )
+            elif _wd_df.empty:
                 st.info(
                     "No weekly debriefs yet. Click **Generate Now** to create one on-demand, "
                     "or wait for the Sunday evening cron."
@@ -43802,6 +43822,12 @@ elif page == "📄 Reports":
                     if _wd.get(_wd_col):
                         st.markdown(f"**{_wd_label}**")
                         st.markdown(_rdisp.report_markdown(_wd.get(_wd_col)))
+                        if _wd_col == "section_decisions":
+                            # a debrief written under the older acted rule says so
+                            _wd_rule_cap = _wd_dec.acted_rule_caption(
+                                _wd.get("acted_rule_version"))
+                            if _wd_rule_cap:
+                                st.caption(_wd_rule_cap)
                         st.markdown("")
 
             # Numbers behind the debrief just generated (flash slot, popped so it shows once).
@@ -46004,8 +46030,9 @@ The app's intelligence is computed live in your browser — so it can only reach
                 """,
                 width="stretch",
             )
+            from stock_analyzer.constants import ENTRY_CALL_ACTION_WINDOW_TRADING_DAYS as _UG_ENTRY_WINDOW_N
             st.markdown(
-                """
+                f"""
 DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **fast extraction track** (Haiku) runs per-request and handles scoring and structured data extraction. A **deep reflection track** (Claude) generates narrative intelligence about your decisions over time. The diagram above shows every data path.
 
 **One guarantee, precisely stated:** Gate thresholds — BUY ≥ 65, sector caps, stop rules — live in the app's rules-only configuration and are set by rules only. The AI never moves them. The **Sentiment pillar** (10% of composite) is the one place LLM scoring feeds back into the engine: Haiku re-scores news headlines with financial domain context that VADER alone cannot provide. Every other AI output is pure awareness — the engine never reads it back, and if the AI layer is offline every page and protection works exactly the same.
@@ -46032,7 +46059,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🎯 Post-earnings Thesis Checkpoint** — Within 14 days of a held position reporting earnings, a prompt surfaces on AI Insights → Positions. Claude compares the result (actual vs estimated EPS, beat/miss, surprise %) against your thesis and suggests INTACT / WEAKENING / BROKEN. Confirming the suggestion writes a timestamped review row tagged as an earnings checkpoint. Suggestion-only — never auto-saves or auto-changes a recommendation.
 
-- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Lives on the 📄 Reports page, and uses the same numbers as 📄 Reports → Performance Review → Last week when it is generated; your account's net-equity change vs SPY over the same dates. A saved debrief keeps the figures it was generated with, and the page says when they differ from Performance Review → Last week (for example after the account record was repaired, or when it is for an earlier week). Regenerating a week that was already emailed shows the new version as a preview and keeps the emailed one; only **Replace the emailed version** overwrites it.
+- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Lives on the 📄 Reports page, and uses the same numbers as 📄 Reports → Performance Review → Last week when it is generated; your account's net-equity change vs SPY over the same dates. A saved debrief keeps the figures it was generated with, and the page says when they differ from Performance Review → Last week (for example after the account record was repaired, or when it is for an earlier week). Regenerating a week that was already emailed shows the new version as a preview and keeps the emailed one; only **Replace the emailed version** overwrites it. **The entry-signal bullets at the top of "Decisions you made" are written by the app, not the AI.** A New position, Add to winner or Enter Now call counts as **acted on** only when you bought that name on the call day or within {_UG_ENTRY_WINDOW_N} trading day(s) after it; a sell, or a buy dated before the call, never counts. A call whose window runs past the week's end shows as **still open** and is judged in the next week's debrief under "Carried over from last week" (and counted in that week's follow-through share, which counts each name once and leaves out still-open and not-judged names). A debrief saved under the earlier rule (any trade in the name, a buy or a sell, from the week's start counted as acted, and Enter Now calls weren't listed) carries a caption saying so.
 
 - **🧭 Monthly Decision Review (AI) — "is the engine picking well, and am I acting well?"** Lives on the 📄 Reports page. A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. Two tiles open it: **Names you bought** and **Names you skipped**, each a count of distinct names with its average alpha vs SPY in percentage points (bought: over the matured surfacings you acted on; skipped: over every matured surfacing of the names you never bought). The skipped average is saved from the first report generated after this update (2026-11-14); an older report says it wasn't saved rather than recomputing it. The report is visual (funnel chart with each step's count, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing. Each report covers **one calendar month** (the email on the first Sunday of December covers 1–30 November), and each pick's result is measured up to the day the report was generated. **Generate** rebuilds the last completed month, or the month you picked in the picker; reports made before 2026-11-17 covered the 4 weeks ending on a Sunday and show their own dates. Regenerating a month that was already emailed shows a preview and keeps the emailed version; only **Replace the emailed version** overwrites it. If your trade journal or the recommendations can't be read, no report is built (it would otherwise read every name as skipped).
 
