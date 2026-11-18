@@ -1041,6 +1041,11 @@ _GATE_FILES = {
     # period cut-off, still open vs not acted, already_held exclusion) that the
     # weekly debrief and the monthly Decision Review read; added while still unwired.
     "stock_analyzer/entry_call_action.py",
+    # Added 2026-11-18 (acted rule C3a, docs/plans/acted-rule-c3-spec.md): which
+    # entry calls the weekly debrief lists as acted / not acted / still open /
+    # carried over, its follow-through share, the recs lookback and the
+    # Python-written bullets; added while still unwired.
+    "stock_analyzer/debrief_entry_calls.py",
     # Added 2026-10-30 (finding #13): whether a same-day macro release has passed,
     # i.e. whether the Brief macro card / Pre-Event Playbook still show a pre-release
     # hold / reduce instruction; imported by the gate file act_today_view.

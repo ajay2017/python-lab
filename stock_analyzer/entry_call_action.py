@@ -413,8 +413,14 @@ def apply_to_matched(matched: list[dict], recs_df, trades_df, *, cutoff: date,
     try:
         if "already_held" in recs_df.columns and "id" in recs_df.columns:
             for rid, h in zip(recs_df["id"], recs_df["already_held"]):
-                if rid is not None and rid == rid:
-                    held_by_id[rid] = h
+                # pd.isna, not `rid == rid`: a pd.NA (Int64) id makes the
+                # comparison raise; a missing id reads "not found" instead
+                try:
+                    if rid is None or pd.isna(rid):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                held_by_id[rid] = h
     except AttributeError:
         pass
 
@@ -426,9 +432,14 @@ def apply_to_matched(matched: list[dict], recs_df, trades_df, *, cutoff: date,
     for row in matched:
         new = dict(row)
         rec_type = str(row.get("rec_type", "") or "").strip()
-        call = {"id": row.get("id"), "ticker": row.get("ticker"),
+        row_id = row.get("id")
+        try:
+            held = None if pd.isna(row_id) else held_by_id.get(row_id)
+        except (TypeError, ValueError):
+            held = None
+        call = {"id": row_id, "ticker": row.get("ticker"),
                 "rec_date": row.get("rec_date"), "rec_type": rec_type,
-                "already_held": held_by_id.get(row.get("id"))}
+                "already_held": held}
         res = _classify(call, state, by_ticker, cutoff, n)
         if res["status"] == STATUS_EXCLUDED:
             new["entry_call_status"] = STATUS_EXCLUDED

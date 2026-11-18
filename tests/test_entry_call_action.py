@@ -456,6 +456,23 @@ def test_apply_to_matched_missing_already_held_column_is_judged():
     assert out[0]["entry_call_status"] == "not_acted"
 
 
+def test_apply_to_matched_na_id_reads_not_found_not_a_crash():
+    """An Int64 recs id of pd.NA used to raise inside the already_held lookup
+    (`rid == rid` is NA, and bool(NA) raises). It now reads "not found" = judged."""
+    recs = pd.DataFrame({
+        "id": pd.array([1, pd.NA], dtype="Int64"),
+        "already_held": [True, False],
+    })
+    matched = [
+        {"id": 1, "ticker": "NVDA", "rec_date": "2026-11-06", "rec_type": "enter_now"},
+        {"id": pd.NA, "ticker": "AMD", "rec_date": "2026-11-06", "rec_type": "enter_now"},
+    ]
+    out = eca.apply_to_matched(matched, recs, frame(), cutoff=D("2026-11-30"))
+    assert out[0]["entry_call_status"] == "excluded"      # id 1 found: already held
+    assert out[0]["entry_call_reason"] == "already_held"
+    assert out[1]["entry_call_status"] == "not_acted"     # NA id: not found, judged
+
+
 # ── L1-L3. live MRVL / NVDA cases ───────────────────────────────────────────
 
 def _mrvl_october():
