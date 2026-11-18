@@ -32,6 +32,7 @@ def _blank():
         "rate_limits":        0,
         "quotas":             0,
         "auth_errors":        0,
+        "unsupported":        0,    # per-symbol plan boundary (NOT a fault)
         "parse_errors":       0,
         "empty_returns":      0,
         "saves":              0,    # write-through saves (NOT calls / successes)
@@ -40,6 +41,7 @@ def _blank():
         "last_success_ts":    None,
         "last_error_ts":      None,
         "last_error_msg":     "",
+        "last_unsupported_msg": "",
         "session_start_ts":   _now(),
     }
 
@@ -63,7 +65,13 @@ def record(source: str, event: str, msg: str = "", key: str | None = None) -> No
     ----------
     source : "yahoo_finance" | "fmp" | "finnhub" | "fred" | "supabase" (or any string)
     event  : "success" | "save" | "error" | "rate_limit" | "empty" | "quota" | "auth" | "parse"
-             ("save" counts a write-through save only: not a call, success or error)
+             | "unsupported"
+             ("save" counts a write-through save only: not a call, success or error;
+             "unsupported" is a per-symbol plan boundary, e.g. Finnhub's free plan
+             refusing a non-US symbol: expected, not a fault, so it counts as a call
+             but never touches errors / consecutive_errors / auth_errors / last_error
+             and never raises the health level; a source whose only calls are
+             "unsupported" reads gray, see get_health)
     msg    : optional error message (truncated to 120 chars)
     key    : optional endpoint label (e.g. "quote"); when given, any event other
              than success/save is also counted in by_key as "<key> <event>"
@@ -118,6 +126,11 @@ def record(source: str, event: str, msg: str = "", key: str | None = None) -> No
         s["last_error_msg"]     = str(msg)[:120] if msg else "401/403 — Auth error (check API key)"
         s["consecutive_errors"] += 1
 
+    elif event == "unsupported":
+        s["calls"]              += 1
+        s["unsupported"]        += 1
+        s["last_unsupported_msg"] = str(msg)[:120]
+
     elif event == "parse":
         s["calls"]              += 1
         s["parse_errors"]       += 1
@@ -150,9 +163,15 @@ def get_health(source: str) -> dict:
             "rate_limits": 0, "empty": 0, "freshness": "—",
             "level": "gray", "icon": "⚪", "last_error": "", "consec_err": 0,
             "saves": 0, "by_key": [],
+            "unsupported": 0, "last_unsupported": "",
         }
 
     s = _stats[source]
+    # Plan-boundary "unsupported" calls are expected, not faults: leave them out
+    # of the error-rate denominator (a watchlist heavy in non-US names must not
+    # dilute a real error rate) and out of the "has this source been called"
+    # test (a session of only unsupported calls reads gray, not green).
+    real_calls = s["calls"] - s["unsupported"]
 
     # Health level logic
     if s["auth_errors"] >= 1 or s["rate_limits"] >= 3 or s["consecutive_errors"] >= 5:
@@ -162,10 +181,10 @@ def get_health(source: str) -> dict:
         s["rate_limits"] >= 1 or
         s["consecutive_errors"] >= 2 or
         s["parse_errors"] >= 3 or
-        (s["calls"] > 0 and (s["errors"] + s["parse_errors"]) / s["calls"] > 0.20)
+        (real_calls > 0 and (s["errors"] + s["parse_errors"]) / real_calls > 0.20)
     ):
         level, icon = "yellow", "🟡"
-    elif s["calls"] == 0:
+    elif real_calls <= 0:
         level, icon = "gray",   "⚪"
     else:
         level, icon = "green",  "🟢"
@@ -187,6 +206,8 @@ def get_health(source: str) -> dict:
         "last_success_ts": s["last_success_ts"],
         "saves":       s["saves"],
         "by_key":      sorted(s["by_key"].items()),
+        "unsupported": s["unsupported"],
+        "last_unsupported": s["last_unsupported_msg"],
     }
 
 

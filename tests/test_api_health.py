@@ -274,3 +274,63 @@ def test_age_str_transitions_to_hours_at_3600(monkeypatch):
     monkeypatch.setattr(api_health._t, "time", lambda: times[0])
     times[0] = 1000.0 + 3600
     assert api_health._age_str(1000.0) == "1h ago"
+
+
+# ─── "unsupported": a per-symbol plan boundary, never a fault ───────────────
+
+def test_unsupported_keeps_source_green_and_touches_no_error_counter():
+    api_health.record("test_src", "success")
+    api_health.record("test_src", "unsupported", msg="quote/000660.KS: not on plan", key="quote")
+    s = api_health._stats["test_src"]
+    h = api_health.get_health("test_src")
+    assert h["level"] == "green"
+    assert s["calls"] == 2
+    assert s["unsupported"] == 1
+    assert s["errors"] == 0
+    assert s["consecutive_errors"] == 0
+    assert s["auth_errors"] == 0
+    assert s["last_error_ts"] is None
+    assert s["last_error_msg"] == ""
+    assert h["last_error"] == ""
+    assert h["unsupported"] == 1
+    assert h["last_unsupported"] == "quote/000660.KS: not on plan"
+    assert dict(h["by_key"]) == {"quote unsupported": 1}
+
+
+def test_unsupported_does_not_reset_consecutive_errors_or_success_ts():
+    api_health.record("test_src", "success")
+    ts = api_health._stats["test_src"]["last_success_ts"]
+    api_health.record("test_src", "error", msg="boom")
+    api_health.record("test_src", "unsupported", msg="x")
+    s = api_health._stats["test_src"]
+    assert s["consecutive_errors"] == 1
+    assert s["last_success_ts"] == ts
+    assert s["last_error_msg"] == "boom"
+
+
+def test_unsupported_alone_never_raises_the_level():
+    # Only plan-boundary calls: never red/yellow, and gray (not green) because
+    # nothing has actually been served yet.
+    for _ in range(10):
+        api_health.record("test_src", "unsupported", msg="x")
+    assert api_health.get_health("test_src")["level"] == "gray"
+    assert api_health.in_cooldown("test_src", 600) is False
+
+
+def test_unsupported_msg_truncated_to_120():
+    api_health.record("test_src", "unsupported", msg="z" * 500)
+    assert len(api_health.get_health("test_src")["last_unsupported"]) == 120
+
+
+def test_reset_clears_unsupported():
+    api_health.record("test_src", "unsupported", msg="x", key="quote")
+    api_health.reset()
+    h = api_health.get_health("test_src")
+    assert h["unsupported"] == 0 and h["last_unsupported"] == ""
+    assert api_health.get_health("finnhub")["unsupported"] == 0
+
+
+def test_unknown_source_default_has_unsupported_keys():
+    h = api_health.get_health("never_seen")
+    assert h["unsupported"] == 0
+    assert h["last_unsupported"] == ""

@@ -13,6 +13,7 @@ Quote endpoint: GET /quote?symbol=AAPL&token=KEY
   Unknown symbols come back with c == 0, which we skip.
 """
 
+import re
 from datetime import datetime
 import pytz
 
@@ -24,6 +25,16 @@ from stock_analyzer.providers._util import get_secret, http_get_json, classify_e
 
 _ET = pytz.timezone("America/New_York")
 _BASE = "https://finnhub.io/api/v1"
+
+_PLAIN_US_RE = re.compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
+
+
+def _is_plain_us_symbol(t: str) -> bool:
+    """True for a plain US ticker in the app's Yahoo format (class shares use
+    "-", e.g. BRK-B). Finnhub's free plan answers 403 for symbols it does not
+    cover (000660.KS, SHOP.TO, ^VIX ...); a 403 on a plain US symbol is not that
+    boundary and stays an auth fault."""
+    return bool(_PLAIN_US_RE.match(t or ""))
 
 
 class FinnhubProvider(DataProvider):
@@ -50,6 +61,7 @@ class FinnhubProvider(DataProvider):
 
         results: dict[str, dict] = {}
         had_error = False
+        had_unsupported = False
         for t in tickers:
             try:
                 q = http_get_json(f"{_BASE}/quote",
@@ -76,6 +88,17 @@ class FinnhubProvider(DataProvider):
                     "source":     "finnhub",
                 }
             except Exception as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                if status == 403 and not _is_plain_us_symbol(t):
+                    # Plan boundary (free plan refuses non-US symbols), not a bad
+                    # key: Finnhub answers a bad key with 401. get_live_prices
+                    # gap-fills this symbol from the next price source; the
+                    # Finnhub price cross-checks simply have no reading for it.
+                    had_unsupported = True
+                    _ah.record("finnhub", "unsupported",
+                               msg=f"quote/{t}: not covered by the Finnhub plan (403); live prices fall back to the next source",
+                               key="quote")
+                    continue
                 had_error = True
                 ev = classify_error(exc)
                 _ah.record("finnhub", ev, msg=f"quote/{t}: {str(exc)[:100]}", key="quote")
@@ -88,7 +111,7 @@ class FinnhubProvider(DataProvider):
 
         if results:
             _ah.record("finnhub", "success")
-        elif not had_error:
+        elif not had_error and not had_unsupported:
             _ah.record("finnhub", "empty")
         return results
 

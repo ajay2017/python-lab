@@ -3796,6 +3796,8 @@ with st.sidebar:
                 _ah_parts.append(f"**{_ah_h['rate_limits']} rate-limited**")
             if _ah_h["empty"] > 0:
                 _ah_parts.append(f"{_ah_h['empty']} empty")
+            if _ah_h.get("unsupported", 0) > 0:
+                _ah_parts.append(f"{_ah_h['unsupported']} not on plan")
             if _ah_h.get("quotas", 0) > 0:
                 _ah_parts.append(f"**{_ah_h['quotas']} quota**")
             if _ah_h.get("auth_errors", 0) > 0:
@@ -3844,12 +3846,14 @@ with st.sidebar:
         for _ah_src2 in ("finnhub", "yahoo_finance", "fmp", "fred", "supabase",
                          "yahoo_news", "bundle_cache"):
             _ah_h2 = _ah.get_health(_ah_src2)
-            if not (_ah_h2["last_error"] or _ah_h2["by_key"]):
+            if not (_ah_h2["last_error"] or _ah_h2["by_key"] or _ah_h2.get("last_unsupported")):
                 continue
             _ah_any_err = True
             st.markdown(f"**{_provider_label(_ah_src2)}**")
             if _ah_h2["last_error"]:
                 st.text(f"Last error: {_ah_h2['last_error']}")
+            if _ah_h2.get("last_unsupported"):
+                st.text(f"Not on plan (live prices fall back to the next source): {_ah_h2['last_unsupported']}")
             for _ah_k, _ah_n in _ah_h2["by_key"]:
                 st.text(f"  {_ah_k}: {_ah_n}")
         if not _ah_any_err:
