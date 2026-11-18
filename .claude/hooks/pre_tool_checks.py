@@ -1036,6 +1036,11 @@ _GATE_FILES = {
     # changes and the regime's CPI input (with its bounded fallback) that the
     # Rate-Cut Optimism hard gate reads; added while still unwired.
     "stock_analyzer/fred_periods.py",
+    # Added 2026-11-18 (acted rule C2, docs/plans/acted-rule-and-report-periods.md):
+    # the one shared rule for whether the owner acted on an entry call (window,
+    # period cut-off, still open vs not acted, already_held exclusion) that the
+    # weekly debrief and the monthly Decision Review read; added while still unwired.
+    "stock_analyzer/entry_call_action.py",
     # Added 2026-10-30 (finding #13): whether a same-day macro release has passed,
     # i.e. whether the Brief macro card / Pre-Event Playbook still show a pre-release
     # hold / reduce instruction; imported by the gate file act_today_view.

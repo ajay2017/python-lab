@@ -1088,7 +1088,7 @@ def divergence_at_entry(rec: dict) -> float | None:
         return None
 
 
-def _advance_trading_days(start_d: date, n: int) -> date:
+def advance_trading_days(start_d: date, n: int) -> date:
     """Return the NYSE trading day that is `n` sessions after `start_d`.
 
     Reimplements data.is_trading_day's weekday+holiday check locally (reading
@@ -1106,6 +1106,11 @@ def _advance_trading_days(start_d: date, n: int) -> date:
         if d.weekday() < 5 and d.isoformat() not in NYSE_HOLIDAYS:
             count += 1
     return d
+
+
+# Public name above (shared with entry_call_action); the underscore alias is
+# kept so existing callers and tests keep resolving to the same object.
+_advance_trading_days = advance_trading_days
 
 
 def forward_alpha_at_horizon(

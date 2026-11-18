@@ -1723,6 +1723,13 @@ REC_OUTCOME_ACTION_WINDOW_TRADING_DAYS = 10    # trading days after a rec fires
                                                 # within which a matching trade
                                                 # still counts as "acted on"
 
+# ── Entry-call acted rule (weekly debrief + monthly report; MEASUREMENT-ONLY) ──
+# docs/plans/acted-rule-and-report-periods.md U4 (owner 2026-11-17). A BUY of the
+# called ticker counts as acting on a new_pick/add_winner/enter_now call when its
+# ET date is from rec_date through rec_date + this many NYSE sessions (inclusive).
+# Never gates, sizes or suppresses a recommendation. Read by entry_call_action.py.
+ENTRY_CALL_ACTION_WINDOW_TRADING_DAYS = 2
+
 # ── Self Track Record ("is my own instinct good?", MEASUREMENT-ONLY) ─────────
 # Answers a DIFFERENT question than the Engine Track Record card above ("is
 # the engine good?") — this measures the user's own self-initiated BUYs
