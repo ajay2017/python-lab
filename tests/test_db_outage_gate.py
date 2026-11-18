@@ -379,6 +379,15 @@ def test_wrong_key_turns_the_supabase_provider_row_down(monkeypatch):
     so the chip is red rather than the amber the live test showed."""
     from stock_analyzer import api_health
     monkeypatch.setattr(db, "has_db", lambda: True)
+
+    # compute_health() below reaches db._client() through the store / cron
+    # probes; with no credentials the real one first imports the whole supabase
+    # package (~5 s idle, far more under xdist) just to fail in create_client.
+    # Fail the same way without the import: the probes catch Exception.
+    def _no_client():
+        raise RuntimeError("no Supabase client in this test")
+
+    monkeypatch.setattr(db, "_client", _no_client)
     api_health._stats.pop("supabase", None)
     db._record_db_error("{'code': 401, 'message': 'Invalid API key'}")
     rows = {r["source"]: r for r in system_health.check_providers()}

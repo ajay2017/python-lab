@@ -1157,7 +1157,18 @@ def test_stamp_not_written_when_pytest_was_not_needed(monkeypatch, tmp_path):
 
 def test_stamp_file_is_trimmed_and_io_failure_is_swallowed(tmp_path, capsys):
     path = str(tmp_path / "stamps")
-    for i in range(adapter._TESTED_TREES_KEEP + 5):
+    # Appending KEEP + 5 trees one call at a time rewrites a ~2000-line file ~2000
+    # times: ~50 s on a Windows box with a file scanner (a separate open + write
+    # + close each, no CPU in it). Same end state, 8 calls instead of 2005: the
+    # first call creates the file (the FileNotFoundError path), the file is then
+    # topped up to exactly KEEP lines by hand (the only thing the skipped calls
+    # did), and the last five calls trim it.
+    keep = adapter._TESTED_TREES_KEEP
+    adapter._record_tested_tree(path, "t0")
+    with open(path, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write("".join(f"t{i}\n" for i in range(1, keep)))
+    assert len(open(path, encoding="utf-8").read().split()) == keep
+    for i in range(keep, keep + 5):
         adapter._record_tested_tree(path, f"t{i}")
     lines = open(path, encoding="utf-8").read().split()
     assert len(lines) == adapter._TESTED_TREES_KEEP

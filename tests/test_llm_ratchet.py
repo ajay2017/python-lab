@@ -13,6 +13,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 from tests._ast_cache import parse_file_cached
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +26,24 @@ _ID_ALLOWED_ASSIGNS = {
     ("stock_analyzer/investigator.py", "EVAL_PASSED_MODELS"),
     ("app.py", "_AI_PROVIDERS"),
 }
+
+
+# All four tests read the same ~234 trees (unpickling them is ~3 s per test) and
+# only READ them, so load each once per module and drop them at module teardown
+# (never held across modules: 9 xdist workers x every tree was a MemoryError risk).
+_TREES: dict = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _release_trees():
+    yield
+    _TREES.clear()
+
+
+def _tree(path: Path):
+    if path not in _TREES:
+        _TREES[path] = parse_file_cached(path)
+    return _TREES[path]
 
 
 def _files():
@@ -43,8 +63,9 @@ def _assign_names(node):
 def _model_id_literals(tree, rel: str) -> list:
     """Model-id string constants, skipping the allowed Assign nodes."""
     hits = []
-
-    def walk(node):
+    stack = [tree]
+    while stack:
+        node = stack.pop()
         for child in ast.iter_child_nodes(node):
             if (isinstance(child, (ast.Assign, ast.AnnAssign))
                     and child.value is not None
@@ -54,9 +75,8 @@ def _model_id_literals(tree, rel: str) -> list:
             if (isinstance(child, ast.Constant) and isinstance(child.value, str)
                     and _MODEL_ID.match(child.value)):
                 hits.append((child.lineno, child.value))
-            walk(child)
-
-    walk(tree)
+            stack.append(child)
+    hits.sort()
     return hits
 
 
@@ -66,7 +86,7 @@ def test_no_model_id_literals_outside_allowed_places():
         rel = _rel(p)
         if rel == "stock_analyzer/llm.py":
             continue
-        tree = parse_file_cached(p)
+        tree = _tree(p)
         bad += [f"{rel}:{ln} {v!r}" for ln, v in _model_id_literals(tree, rel)]
     assert not bad, "model id literal outside llm.py:\n" + "\n".join(bad)
 
@@ -80,7 +100,7 @@ def test_no_anthropic_client_or_messages_create_outside_llm():
         rel = _rel(p)
         if rel == "stock_analyzer/llm.py":
             continue
-        tree = parse_file_cached(p)
+        tree = _tree(p)
         for n in ast.walk(tree):
             if isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == "anthropic":
                 for a in n.names:
@@ -106,7 +126,7 @@ def test_llm_import_form():
     bad = []
     for p in _files():
         rel = _rel(p)
-        tree = parse_file_cached(p)
+        tree = _tree(p)
         for n in ast.walk(tree):
             if isinstance(n, ast.ImportFrom):
                 if n.module == "stock_analyzer.llm":
@@ -138,7 +158,7 @@ def test_resolve_model_only_called_inside_llm():
         rel = _rel(path)
         if rel in allowed:
             continue
-        for n in ast.walk(parse_file_cached(path)):
+        for n in ast.walk(_tree(path)):
             if not isinstance(n, ast.Call):
                 continue
             f = n.func

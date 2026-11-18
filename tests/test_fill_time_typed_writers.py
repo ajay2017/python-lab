@@ -162,7 +162,9 @@ def test_only_db_save_trade_inserts_trades_rows():
         src = path.read_text(encoding="utf-8")
         if "trades" not in src:
             continue
-        tree = parse_file_cached(path) if path.name == "app.py" else ast.parse(src)
+        # The tree is only read; the on-disk cache serves every file (a plain
+        # ast.parse of the ~100 modules containing "trades" was ~3 s per run).
+        tree = parse_file_cached(path)
         calls = _trades_write_calls(tree, {"insert", "upsert"})
         if path.name == "db.py":
             funcs = {f.name: f for f in ast.walk(tree) if isinstance(f, ast.FunctionDef)}

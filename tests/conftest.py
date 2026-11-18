@@ -58,6 +58,22 @@ ast.parse = _guarded_parse
 ast.get_source_segment = _guarded_get_source_segment
 
 
+# ── Guard: streamlit's one-time "run it with `streamlit run`" check ─────────
+# The first st.<element>() call in a bare-mode process runs
+# delta_generator._maybe_print_use_warning -> env_util.is_repl ->
+# inspect.stack(), which resolves a module for every frame and realpath()s a
+# big slice of sys.modules: ~1.3 s idle, minutes under 9 loaded xdist workers.
+# Whichever test happens to call st.error / st.warning first in each worker was
+# charged for it (e.g. test_db_asset_type_backfill's read-failure test, 84 s in
+# the 2026-11-17 run). The only output is one log line nothing asserts on, so
+# mark it already shown. Test-only; the headless-log test runs a subprocess.
+try:
+    import streamlit.delta_generator as _st_dg
+    _st_dg._use_warning_has_been_displayed = True
+except Exception:
+    pass
+
+
 @pytest.fixture(autouse=True)
 def _no_real_yfinance_network(monkeypatch):
     """No test may make a real Yahoo HTTP request (held-stop C3: the long-history

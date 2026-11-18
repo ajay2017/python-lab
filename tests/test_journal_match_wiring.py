@@ -21,12 +21,30 @@ PKG = ROOT / "stock_analyzer"
 KEY = "_journal_match_cache"
 
 
+# Five tests read the same app.py tree and its child -> parent map (~3 s to
+# unpickle + build, per test). They only READ them, so build once per module and
+# drop them at module teardown (never held across modules).
+_MEMO: dict = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _release_memo():
+    yield
+    _MEMO.clear()
+
+
 def _tree() -> ast.Module:
-    return parse_file_cached(APP_PY)
+    if "tree" not in _MEMO:
+        _MEMO["tree"] = parse_file_cached(APP_PY)
+    return _MEMO["tree"]
 
 
 def _parents(tree: ast.Module) -> dict:
-    return {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    if _MEMO.get("parents_of") is not tree:
+        _MEMO["parents"] = {child: node for node in ast.walk(tree)
+                            for child in ast.iter_child_nodes(node)}
+        _MEMO["parents_of"] = tree
+    return _MEMO["parents"]
 
 
 def _ancestors(node, parents):

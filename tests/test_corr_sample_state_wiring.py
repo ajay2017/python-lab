@@ -137,6 +137,11 @@ def test_floor_has_one_source_in_constants():
     assigners = []
     for path in sorted((_ROOT / "stock_analyzer").glob("*.py")) + [_ROOT / "app.py", _ROOT / "cron_runner.py"]:
         rel = str(path.relative_to(_ROOT)).replace("\\", "/")
+        # An assignment to this name must spell it in the source, so a file whose
+        # bytes lack it cannot be an assigner: skip unpickling its tree (this walk
+        # was ~4 s, nearly all of it loading 234 trees to find 3 spellings).
+        if b"CORR_MIN_OBS_TRUSTED" not in path.read_bytes():
+            continue
         for n in ast.walk(_tree(rel)):
             if isinstance(n, (ast.Assign, ast.AnnAssign)):
                 targets = n.targets if isinstance(n, ast.Assign) else [n.target]

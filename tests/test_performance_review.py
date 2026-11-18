@@ -166,7 +166,13 @@ def test_recs_inclusive_both_ends():
         {"rec_type": "diversify_add", "ticker": "DDD", "fired_date": "2026-02-01",
          "price_at_rec": 100.0, "candidates": ["DDD"]},  # just after end
     ]
-    kw = _base_kwargs(rec_events_rows=rec_rows, today=date(2026, 3, 1))
+    # historical_close_fn=None would send each matured row to the REAL Yahoo
+    # provider (yf.download in a worker thread, which the conftest network guard
+    # cannot fail): a multi-minute hang on a restricted network and a flaky
+    # dependency anywhere. Which rows fall inside the period does not depend on the
+    # close, so pin a flat one, as the sibling tests do.
+    kw = _base_kwargs(rec_events_rows=rec_rows, today=date(2026, 3, 1),
+                      historical_close_fn=_flat_forward_close(110.0))
     review = pr.build_review(period_start=date(2026, 1, 1), period_end=date(2026, 1, 31), **kw)
     tickers_in = {r["ticker"] for r in review["recs"]["enriched_rows"]}
     assert tickers_in == {"AAA", "BBB"}

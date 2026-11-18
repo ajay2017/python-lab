@@ -50,15 +50,26 @@ EXPECTED = {
 }
 
 
-def _collect(with_flag: bool = False) -> dict:
-    """(file stem, function) -> role arg; with ``with_flag`` -> the call's
-    ``expects_json`` keyword rendered with ast.unparse (None when absent)."""
-    found = {}
+_CALLS_MEMO: list = []
+
+
+def _llm_calls() -> list:
+    """Every ``<name ending in "llm">.complete(...)`` call, found in ONE pass
+    over the tree (memoised per process; the three tests below all read it):
+    ``(file stem, enclosing function, lineno, first positional arg or None,
+    {keyword: unparsed value}, has a ** keyword)``. A file whose bytes lack
+    the word ``complete`` cannot hold such a call, so it is never unpickled."""
+    if _CALLS_MEMO:
+        return _CALLS_MEMO[0]
+    out = []
     files = sorted((ROOT / "stock_analyzer").rglob("*.py")) + [ROOT / "app.py", ROOT / "cron_runner.py"]
     for path in files:
+        if b"complete" not in path.read_bytes():
+            continue
         tree = parse_file_cached(path)
-
-        def walk(node, fn):
+        stack = [(tree, None)]
+        while stack:
+            node, fn = stack.pop()
             for child in ast.iter_child_nodes(node):
                 nf = child.name if isinstance(
                     child, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
@@ -67,17 +78,26 @@ def _collect(with_flag: bool = False) -> dict:
                         and child.func.attr == "complete"
                         and isinstance(child.func.value, ast.Name)
                         and child.func.value.id.endswith("llm")):
-                    arg = ast.unparse(child.args[0]) if child.args else None
-                    key = (path.stem, nf)
-                    assert key not in found, f"two llm.complete calls in {key}"
-                    if with_flag:
-                        kw = {k.arg: ast.unparse(k.value) for k in child.keywords}
-                        found[key] = kw.get("expects_json")
-                    else:
-                        found[key] = arg
-                walk(child, nf)
+                    out.append((
+                        path.stem, nf, child.lineno,
+                        ast.unparse(child.args[0]) if child.args else None,
+                        {k.arg: ast.unparse(k.value) for k in child.keywords if k.arg},
+                        any(k.arg is None for k in child.keywords),
+                    ))
+                stack.append((child, nf))
+    out.sort(key=lambda r: (r[0], r[2]))
+    _CALLS_MEMO.append(out)
+    return out
 
-        walk(tree, None)
+
+def _collect(with_flag: bool = False) -> dict:
+    """(file stem, function) -> role arg; with ``with_flag`` -> the call's
+    ``expects_json`` keyword rendered with ast.unparse (None when absent)."""
+    found = {}
+    for stem, nf, _ln, arg, kw, _star in _llm_calls():
+        key = (stem, nf)
+        assert key not in found, f"two llm.complete calls in {key}"
+        found[key] = kw.get("expects_json") if with_flag else arg
     return found
 
 
@@ -130,18 +150,7 @@ def test_expects_json_opt_in_sites():
 
 def _collect_star_kwargs() -> list:
     """Every collected llm.complete call that has a ``**`` keyword."""
-    bad = []
-    files = sorted((ROOT / "stock_analyzer").rglob("*.py")) + [ROOT / "app.py", ROOT / "cron_runner.py"]
-    for path in files:
-        tree = parse_file_cached(path)
-        for n in ast.walk(tree):
-            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                    and n.func.attr == "complete"
-                    and isinstance(n.func.value, ast.Name)
-                    and n.func.value.id.endswith("llm")
-                    and any(k.arg is None for k in n.keywords)):
-                bad.append((path.stem, n.lineno))
-    return bad
+    return [(stem, ln) for stem, _nf, ln, _arg, _kw, star in _llm_calls() if star]
 
 
 def test_no_llm_complete_call_uses_star_kwargs():

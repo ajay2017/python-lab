@@ -35,9 +35,47 @@ _spec.loader.exec_module(ca)
 _REAL_SCAN_CACHE: dict = {}
 
 
+def _cached_parse_ast_module():
+    """A private copy of the ``ast`` module whose ``parse`` serves the 234 real
+    repo files from tests._ast_cache (unpickle ~1 s) instead of re-compiling them
+    (``compile`` was ~half of ca.scan()'s 50-65 s). Only used for the scan below.
+
+    Exactness: a cached tree is used only when the file's decoded bytes, with
+    newlines folded the way ``read_text`` folds them, equal the source ``scan()``
+    read (a file that changed in between falls through to the real parse). A copy, not a proxy object: the visitor does
+    millions of ``ast.X`` lookups and a Python ``__getattr__`` would eat the gain.
+    The real ``ast`` module and its ``parse`` are never touched."""
+    import types
+    real_parse = getattr(ast.parse, "__wrapped__", ast.parse)
+
+    def parse(source, filename="<unknown>", *args, **kwargs):
+        if not args and not kwargs and isinstance(source, str):
+            try:
+                path = Path(filename)
+                text = path.read_bytes().decode("utf-8-sig")
+                # read_text() folds CRLF / CR to LF; the parser does the same
+                # on its input, so the tree (line numbers, columns, string
+                # values) is identical either way.
+                if text.replace("\r\n", "\n").replace("\r", "\n") == source:
+                    return parse_file_cached(path)
+            except Exception:
+                pass
+        return real_parse(source, filename, *args, **kwargs)
+
+    shim = types.ModuleType("ast")
+    shim.__dict__.update(ast.__dict__)
+    shim.parse = parse
+    return shim
+
+
 def _real_scan():
     if "scan" not in _REAL_SCAN_CACHE:
-        _REAL_SCAN_CACHE["scan"] = ca.scan()
+        real_ast = ca.ast
+        ca.ast = _cached_parse_ast_module()
+        try:
+            _REAL_SCAN_CACHE["scan"] = ca.scan()
+        finally:
+            ca.ast = real_ast
     return _REAL_SCAN_CACHE["scan"]
 
 

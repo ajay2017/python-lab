@@ -6,6 +6,7 @@ Scenario used throughout: journal holds A 100 sh and B 50 sh, both priced $100
 reads net capital 10,000. Robinhood's truth is sum(broker shares x price) + cash.
 """
 import ast
+import copy
 import itertools
 from pathlib import Path
 
@@ -388,21 +389,28 @@ def test_budget_basis_unusable_inputs_unchecked():
 def test_tightening_only_over_a_grid():
     shares = (0, 0.5, 10, 50, 100, 150)
     nets = (-500.0, 0.0, 250.0, 10000.0, 1_000_000.0)
+    states = ("levered", "called", "unlevered")
     checked = 0
-    for ja, jb, ba, bb, net, st in itertools.product(
-            shares, shares, shares, shares, nets, ("levered", "called", "unlevered")):
+    # The frame depends only on the four share counts, so build it once per
+    # combination (1,296) instead of once per (combination, net, state) (19,440):
+    # building it was ~4 ms of pandas each, ~80 s of a ~0.1 s property check. The
+    # triples checked are the same; each check gets its own deep copy, so a
+    # reconcile that mutated its frame still could not leak into the next one.
+    for ja, jb, ba, bb in itertools.product(shares, shares, shares, shares):
         hold = _hold([("A", ja), ("B", jb)]) if (ja or jb) else _hold([])
-        f = _frame({k: v for k, v in (("A", ba), ("B", bb)) if v}, hold=hold)
-        r = bf.reconcile_net_capital(net, st, f)
-        assert r["net"] <= net
-        if r["source"] == "broker":
-            assert r["net"] < net
-        else:
-            assert r["net"] == net
-        b = {"state": "ok", "basis": net, "reason": None}
-        rb = bf.reconcile_budget_basis(b, GROSS, CASH, f)
-        assert rb["basis"] <= net
-        checked += 1
+        base = _frame({k: v for k, v in (("A", ba), ("B", bb)) if v}, hold=hold)
+        for net, st in itertools.product(nets, states):
+            f = copy.deepcopy(base)
+            r = bf.reconcile_net_capital(net, st, f)
+            assert r["net"] <= net
+            if r["source"] == "broker":
+                assert r["net"] < net
+            else:
+                assert r["net"] == net
+            b = {"state": "ok", "basis": net, "reason": None}
+            rb = bf.reconcile_budget_basis(b, GROSS, CASH, f)
+            assert rb["basis"] <= net
+            checked += 1
     assert checked == len(shares) ** 4 * len(nets) * 3
 
 
