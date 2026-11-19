@@ -45,6 +45,14 @@ JUDGE_TRADES_UNREADABLE = dec.JUDGE_TRADES_UNREADABLE
 
 PRICE_BASIS_CALL_DAY = "call_day"
 
+# Display wording of the call types in the monthly report: one capitalisation
+# ("New Position" / "Add to Winner" / "Enter Now") across the bullets, the rule
+# note and `scope_words`. Local on purpose: `debrief_entry_calls._TYPE_LABELS`
+# is shared with the weekly email, whose wording must not change.
+_MONTHLY_TYPE_LABELS = (("new_pick", "New Position"),
+                        ("add_winner", "Add to Winner"),
+                        ("enter_now", "Enter Now"))
+
 _REQUIRED_RECS_COLS = ("ticker", "rec_date", "rec_type")
 
 
@@ -84,6 +92,12 @@ def _int_of(v) -> int:
         return 0
 
 
+def _type_label(rec_types) -> str:
+    """The call types joined with " + ", in the monthly report's wording."""
+    have = set(rec_types or ())
+    return " + ".join(lbl for key, lbl in _MONTHLY_TYPE_LABELS if key in have)
+
+
 def _refused(state: str, n: int) -> dict:
     """A non-ok result: no counts and no viz, never "all missed"."""
     return {"judge_state": state, "counts": None, "names": [],
@@ -111,6 +125,10 @@ def build_month(recs_df, trades_df, *, period_start, period_end, as_of,
        window_trading_days: N}
     Any non-ok state carries no counts, empty row lists and viz None.
 
+    Raises ValueError when `as_of < period_end` (the outcomes would be measured
+    to a date before the period's own calls were judged) or when
+    `period_start > period_end`: both are caller bugs, never a data state.
+
     recs None -> recs_unavailable; a non-frame or a non-empty frame without
     ticker / rec_date / rec_type -> recs_unreadable; the journal state decides
     the trades_* states. An empty recs frame is ok with zero counts.
@@ -125,6 +143,10 @@ def build_month(recs_df, trades_df, *, period_start, period_end, as_of,
     ps = _need_date(period_start, "period_start")
     pe = _need_date(period_end, "period_end")
     ao = _need_date(as_of, "as_of")
+    if ao < pe:
+        raise ValueError(f"as_of {ao} is before period_end {pe}")
+    if ps > pe:
+        raise ValueError(f"period_start {ps} is after period_end {pe}")
     n = eca._window(window_trading_days)
 
     if recs_df is None:
@@ -148,6 +170,13 @@ def build_month(recs_df, trades_df, *, period_start, period_end, as_of,
             continue
         rd = _as_date(row.get("rec_date"))
         if rd is None:
+            # An already-held Enter Now is not an entry call at all (U8), so it
+            # is not an "undated entry call" either: let the shared rule say.
+            held = eca.apply_to_matched([row], recs_df, trades_df, cutoff=pe,
+                                        window_trading_days=n)
+            if held is not None and held[0].get(
+                    "entry_call_status") == eca.STATUS_EXCLUDED:
+                continue
             n_undated += 1
             continue
         if rd < ps or rd > pe:
@@ -283,7 +312,7 @@ def verdict_rows(engine: list[dict], judged: list[dict]) -> list[dict]:
 # ── the app-written lines ───────────────────────────────────────────────────
 
 def _name_line(item: Mapping, tail: str) -> str:
-    label = dec._type_label(item.get("rec_types")) or "Entry"
+    label = _type_label(item.get("rec_types")) or "Entry"
     k = _int_of(item.get("n_calls")) or 1
     last = item.get("last_call_date")
     if k <= 1:
@@ -343,9 +372,18 @@ def rule_note(viz) -> "str | None":
         f"The band chart prices every call from its call-day price; the bought "
         f"average uses your fill price, up to {days} after the call. "
         f"📜 Recommendations History and the other pages that count acted calls "
-        f"still use the older rule (a same-day buy tagged as a recommendation), "
+        f"still use the older rule (a same-day trade tagged as a recommendation), "
         f"so their counts can differ."
     )
+
+
+def band_price_note(viz) -> str:
+    """The sentence the band chart's caption adds under UD-1 B: every call is
+    measured from its call-day price. "" for a viz that doesn't say so (an older
+    report's bands were priced from the fill for a bought call)."""
+    if _entry_block(viz).get("price_basis") == PRICE_BASIS_CALL_DAY:
+        return " Each call is measured from its call-day price, whether or not you bought it."
+    return ""
 
 
 def acted_rule_caption(viz, *, live: bool) -> "str | None":
@@ -363,16 +401,20 @@ def acted_rule_caption(viz, *, live: bool) -> "str | None":
                 "under the older rule, so they can differ.")
     if _is_v2(viz):
         return None
-    return ("This report used the older acted rule: only a buy tagged as a "
-            "recommendation on the call day counted as acted, and only New "
-            "Position calls were counted. Newer reports count a buy on the call "
-            f"day or within {days}, and include Add to Winner and Enter Now calls.")
+    return ("This report used the older acted rule: only a same-day trade tagged "
+            "as a recommendation counted as acted, and only New Position calls "
+            "were counted. Newer reports count a buy on the call day or within "
+            f"{days}, and include Add to Winner and Enter Now calls.")
 
 
 def scope_words(viz) -> dict:
-    """Version-aware UI phrases: `names`, `flow_title`, `missed_scope`."""
+    """Version-aware UI phrases: `names`, `flow_title`, `missed_scope`, plus
+    `current_rule` (True when the viz was built under the current acted rule), so
+    the renderer can pick the matching caption wording without re-deciding the
+    version."""
     if _is_v2(viz):
         return {
+            "current_rule": True,
             "names": "distinct entry-call tickers "
                      "(New Position, Add to Winner, Enter Now)",
             "flow_title": "This month's signal flow — entry calls → bought / "
@@ -380,6 +422,7 @@ def scope_words(viz) -> dict:
             "missed_scope": "entry calls (New Position, Add to Winner, Enter Now)",
         }
     return {
+        "current_rule": False,
         "names": "distinct New-Position tickers",
         "flow_title": "This month's signal flow — New Positions → acted / "
                       "missed → outcome",

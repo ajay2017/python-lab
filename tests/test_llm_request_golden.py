@@ -239,8 +239,14 @@ def case_earnings_intel(rec, mp):
 def case_intelligence_report(rec, mp):
     from stock_analyzer import intelligence_report
     rec.canned = ("**Entry quality**\nQ.\n**Signal discipline**\nS.\n**Pattern & focus**\nP.")
-    package = {"period_start": "2026-09-22", "period_end": "2026-10-21", "as_of": "2026-10-28",
-               "has_data": True,
+    package = {"period_start": "2026-10-01", "period_end": "2026-10-31", "as_of": "2026-11-08",
+               "has_data": True, "judge_state": "ok", "window_trading_days": 2,
+               "n_surfaced": 6, "n_open": 1, "n_unknown": 1,
+               "open_names": [{"ticker": "AAA", "rec_types": ["new_pick"], "n_calls": 1,
+                               "last_call_date": "2026-10-30", "window_end": "2026-11-03"}],
+               "unknown_names": [{"ticker": "BBB", "rec_types": ["enter_now"], "n_calls": 1,
+                                  "last_call_date": "2026-10-12",
+                                  "reason": "trade_date_unreadable"}],
                "q0_ready": False, "min_graded": 5, "n_total": 4, "n_acted": 2, "n_missed": 2,
                "action_rate": 50.0, "avg_acted_pct": 3.0, "avg_missed_pct": 1.0,
                "avg_acted_alpha": 1.5, "avg_missed_alpha": -0.5, "missed_alpha": -2.0,

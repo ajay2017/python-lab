@@ -795,6 +795,55 @@ def test_render_intelligence_email_skipped_avg_present_but_none_reads_na():
     assert "N/A" in html
 
 
+# C4b: the acted-rule footnote under the metric strip (spec section 2E)
+
+def test_render_intelligence_email_footnote_present_for_a_current_rule_report():
+    from stock_analyzer import monthly_entry_calls as mec
+    viz = {"acted_rule_version": 2, "entry": {"n_open": 2, "n_unknown": 1}}
+    rep = _report()
+    rep["viz_json"] = viz
+    html = notify.render_intelligence_email(rep)
+    from stock_analyzer.util import safe_html
+    assert safe_html(mec.rule_note(viz)) in html
+    assert "2 still open at the month" in html
+    assert "older rule" in html
+    # under the metric strip, before the first section
+    assert html.index("Names you skipped") < html.index("Acted on =") < html.index("Entry text.")
+
+
+def test_render_intelligence_email_footnote_absent_for_older_rows():
+    for viz in (None, {"flow": {}}, {"acted_rule_version": 1}, "not-a-dict",
+                {"acted_rule_version": float("nan")}):
+        rep = _report()
+        rep["viz_json"] = viz
+        assert "Acted on =" not in notify.render_intelligence_email(rep)
+    assert "Acted on =" not in notify.render_intelligence_email(_report())
+
+
+def test_render_intelligence_email_footnote_is_escaped(monkeypatch):
+    from stock_analyzer import monthly_entry_calls as mec
+    monkeypatch.setattr(mec, "rule_note", lambda viz: "Note <b>bold</b> & \"quoted\"")
+    rep = _report()
+    rep["viz_json"] = {"acted_rule_version": 2}
+    html = notify.render_intelligence_email(rep)
+    assert "<b>bold</b>" not in html
+    assert "&lt;b&gt;bold&lt;/b&gt; &amp; &quot;quoted&quot;" in html
+
+
+def test_render_intelligence_email_still_open_bullets_come_through_signal_discipline():
+    from stock_analyzer import monthly_entry_calls as mec
+    viz = {"acted_rule_version": 2, "entry": {
+        "n_open": 1, "n_unknown": 0,
+        "open_names": [{"ticker": "NVDA", "rec_types": ["enter_now"], "n_calls": 1,
+                        "last_call_date": "2026-11-27", "window_end": "2026-12-01"}]}}
+    rep = _report()
+    rep["viz_json"] = viz
+    rep["section_signal_discipline"] = "Narrative.\n\n" + "\n".join(mec.signal_lines(viz))
+    html = notify.render_intelligence_email(rep)
+    assert html.count("<li ") == 1
+    assert "NVDA: Enter Now call on Fri Nov 27" in html
+
+
 # ─── send_email_resend ───────────────────────────────────────────────────────
 
 def test_send_email_resend_missing_api_key():

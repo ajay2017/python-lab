@@ -308,7 +308,7 @@ def test_unknown_trade_date_unreadable_is_listed_with_its_reason():
         "last_call_date": "2026-11-09", "reason": "trade_date_unreadable"}]
     assert mec.signal_lines(res["viz"]) == [
         "Not judged (not counted as bought or skipped):",
-        "• XYZ: New position call on Mon Nov 9. Not judged: a buy of this name "
+        "• XYZ: New Position call on Mon Nov 9. Not judged: a buy of this name "
         "has a date that couldn't be read."]
 
 
@@ -482,10 +482,10 @@ def test_signal_lines_exact_strings_and_plain_text():
     lines = mec.signal_lines(_rich_month()["viz"])
     assert lines == [
         "Still open at the month's end (not counted as bought or skipped):",
-        "• CCC: Add to winner + Enter Now call surfaced 2× this month, last on "
+        "• CCC: Add to Winner + Enter Now call surfaced 2× this month, last on "
         "Mon Nov 30. Decision window ends Wed Dec 2.",
         "Not judged (not counted as bought or skipped):",
-        "• XYZ: New position call on Mon Nov 9. Not judged: a buy of this name "
+        "• XYZ: New Position call on Mon Nov 9. Not judged: a buy of this name "
         "has a date that couldn't be read.",
         "• 1 entry call row(s) had no readable date and are not counted.",
     ]
@@ -528,7 +528,7 @@ def test_rule_note_exact_text_for_v2():
         "The band chart prices every call from its call-day price; the bought "
         "average uses your fill price, up to 2 trading days after the call. "
         "📜 Recommendations History and the other pages that count acted calls "
-        "still use the older rule (a same-day buy tagged as a recommendation), "
+        "still use the older rule (a same-day trade tagged as a recommendation), "
         "so their counts can differ.")
     note = mec.rule_note(_V2_ENTRY)
     assert not any(ch in note for ch in ("**", "*", "_", "$"))
@@ -546,10 +546,10 @@ def test_older_viz_reads_as_older_rule(viz):
     assert mec.rule_note(viz) is None
     cap = mec.acted_rule_caption(viz, live=False)
     assert cap == (
-        "This report used the older acted rule: only a buy tagged as a "
-        "recommendation on the call day counted as acted, and only New "
-        "Position calls were counted. Newer reports count a buy on the call "
-        "day or within 2 trading days, and include Add to Winner and Enter Now calls.")
+        "This report used the older acted rule: only a same-day trade tagged "
+        "as a recommendation counted as acted, and only New Position calls "
+        "were counted. Newer reports count a buy on the call day or within "
+        "2 trading days, and include Add to Winner and Enter Now calls.")
     assert mec.scope_words(viz)["names"] == "distinct New-Position tickers"
 
 
@@ -572,11 +572,13 @@ def test_acted_rule_caption_live_text():
 
 def test_scope_words_exact_strings():
     assert mec.scope_words(_V2_ENTRY) == {
+        "current_rule": True,
         "names": "distinct entry-call tickers (New Position, Add to Winner, Enter Now)",
         "flow_title": "This month's signal flow — entry calls → bought / skipped → outcome",
         "missed_scope": "entry calls (New Position, Add to Winner, Enter Now)",
     }
     assert mec.scope_words(None) == {
+        "current_rule": False,
         "names": "distinct New-Position tickers",
         "flow_title": "This month's signal flow — New Positions → acted / missed → outcome",
         "missed_scope": "New Positions to Initiate",
@@ -614,3 +616,77 @@ def test_lines_render_as_one_li_per_bullet_in_the_email_and_a_list_in_markdown()
     assert md.count("\n- ") == len(bullets)
     assert "**" not in md
     assert "$" not in md
+
+
+# ── C4b carry-forwards (1)-(4) ──────────────────────────────────────────────
+
+def test_cf1_as_of_before_period_end_raises():
+    with pytest.raises(ValueError):
+        month(recs_of(rec(1, "AAPL", "2026-11-03")), trades_of(), as_of=D("2026-11-29"))
+
+
+def test_cf1_period_start_after_period_end_raises():
+    with pytest.raises(ValueError):
+        mec.build_month(recs_of(rec(1, "AAPL", "2026-11-03")), trades_of(),
+                        period_start=D("2026-12-01"), period_end=D("2026-11-30"),
+                        as_of=D("2026-12-06"), current_prices={},
+                        spy_close_by_date=None, min_days=0)
+
+
+def test_cf1_as_of_equal_to_period_end_is_fine():
+    assert month(recs_of(rec(1, "AAPL", "2026-11-03")), trades_of(),
+                 as_of=NOV[1])["judge_state"] == "ok"
+
+
+def test_cf2_older_rule_wording_says_trade_tagged_as_a_recommendation():
+    cap = mec.acted_rule_caption(None, live=False)
+    assert "only a same-day trade tagged as a recommendation counted as acted" in cap
+    note = mec.rule_note(_V2_ENTRY)
+    assert "(a same-day trade tagged as a recommendation)" in note
+    assert "same-day buy" not in cap and "same-day buy" not in note
+
+
+def test_cf3_undated_already_held_enter_now_is_not_counted_as_undated():
+    r = recs_of(rec(1, "AAPL", "2026-11-03"),
+                rec(2, "AMD", None, "enter_now", already_held=True),
+                rec(3, "NVDA", None, "enter_now", already_held=False),
+                rec(4, "ZZZ", None, "new_pick"))
+    res = month(r, trades_of())
+    assert res["counts"]["n_undated"] == 2          # NVDA (not held) + ZZZ
+    assert res["counts"]["n_surfaced"] == 1
+
+
+def test_cf4_one_capitalisation_in_bullets_rule_note_and_scope_words():
+    for text in (mec.rule_note(_V2_ENTRY), mec.scope_words(_V2_ENTRY)["names"],
+                 mec.scope_words(_V2_ENTRY)["missed_scope"]):
+        assert "New position" not in text and "Add to winner" not in text
+        assert "New Position" in text and "Add to Winner" in text
+    res = month(recs_of(rec(1, "NVDA", "2026-11-27", "enter_now", already_held=False),
+                        rec(2, "NVDA", "2026-11-27", "new_pick"),
+                        rec(3, "NVDA", "2026-11-30", "add_winner")),
+                trades_of(), as_of=D("2026-12-06"))
+    line = mec.signal_lines(res["viz"])[1]
+    assert "New Position + Add to Winner + Enter Now call" in line
+
+
+def test_cf4_shared_weekly_labels_are_unchanged():
+    from stock_analyzer import debrief_entry_calls as dec
+    assert dec._TYPE_LABELS == (("new_pick", "New position"),
+                                ("add_winner", "Add to winner"),
+                                ("enter_now", "Enter Now"))
+
+
+def test_band_price_note_only_for_a_call_day_priced_viz():
+    note = mec.band_price_note({"acted_rule_version": 2,
+                                "entry": {"price_basis": "call_day"}})
+    assert note == " Each call is measured from its call-day price, whether or not you bought it."
+    for viz in (None, {}, {"entry": None}, {"entry": {"price_basis": "fill"}},
+                {"acted_rule_version": 1}, "viz"):
+        assert mec.band_price_note(viz) == ""
+    assert mec.band_price_note(_rich_month()["viz"]) == note
+
+
+def test_scope_words_current_rule_flag_follows_the_version():
+    assert mec.scope_words({"acted_rule_version": 2})["current_rule"] is True
+    for viz in (None, {}, {"acted_rule_version": 1}, {"acted_rule_version": float("nan")}):
+        assert mec.scope_words(viz)["current_rule"] is False

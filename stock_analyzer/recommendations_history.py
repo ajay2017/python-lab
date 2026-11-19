@@ -1024,6 +1024,13 @@ def report_viz_snapshot(enriched: list[dict], rec_types: tuple = ("new_pick",)) 
     bought on a buy-candidate day isn't mislabelled missed) and then scope the COUNTED
     names to `rec_types`. `by_composite_band` has no rec_type arg, so it is scoped here.
 
+    That "acted via ANY surfacing" safeguard (and the "matches Recommendations
+    History" promise) holds only for the older reports. The monthly report
+    (`monthly_entry_calls.build_month`, C4b) passes ONLY the judged rows
+    (acted / not acted by the shared entry-call rule, named in `rec_types` =
+    `entry_call_action.ENTRY_CALL_REC_TYPES`), and replaces `bands` with the
+    engine view; a bought call there is credited by a BUY in its own window only.
+
     The return is JSON-serialisable (ints, floats, strings, None) so it can be FROZEN
     alongside the saved report (db column `viz_json`) and re-rendered verbatim later —
     making a monthly report an immutable dated artifact rather than a live recompute

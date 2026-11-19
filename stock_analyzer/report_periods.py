@@ -112,6 +112,38 @@ def regenerate_action(existing_row, is_viewer: bool, rows_checked: bool = True) 
     return "save"
 
 
+def was_replaced(row) -> bool:
+    """True when a saved row's emailed version has been replaced: `email_sent` is
+    falsy but an `email_sent_at` stamp remains (see `_was_emailed`). The stored
+    text is then NOT what was emailed, and the preview banner must say so (U14,
+    C1 carry-forward (c)). A row that is still marked emailed, or never was, is
+    not replaced. None (no row) is not replaced."""
+    if row is None:
+        return False
+    return (not _truthy(row.get("email_sent"))) and _is_set(row.get("email_sent_at"))
+
+
+def preview_banner(kind: str, noun: str, period, when_text: str,
+                   replaced: bool) -> str:
+    """The warning above an UNSAVED regenerated preview.
+
+    `kind` is "preview_unchecked" (the saved rows couldn't be read) or any other
+    value (the "preview_emailed" case). `when_text` is interpolated as-is, so the
+    caller passes " (generated 2026-11-17 14:05 ET)" or "". `replaced` (see
+    `was_replaced`) changes the emailed wording: the saved text is not the emailed
+    version, so it must not claim "the emailed version is kept"."""
+    if kind == "preview_unchecked":
+        return (f"Couldn't check whether the {noun} for {period} was already "
+                f"emailed, so nothing was saved. The regenerated version is shown "
+                f"below as a preview{when_text}.")
+    if replaced:
+        return (f"Preview only{when_text}: an earlier version of the {noun} for "
+                f"{period} was emailed; the saved version is kept. The regenerated "
+                "version below is NOT saved.")
+    return (f"Preview only{when_text}: the {noun} for {period} was already emailed, "
+            "so the emailed version is kept. The regenerated version below is NOT saved.")
+
+
 def emailed_suffix(row) -> str:
     """The archive caption's email marker. A replaced report (`email_sent` false
     but `email_sent_at` set) says so, rather than claiming the stored text is what

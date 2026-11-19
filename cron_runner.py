@@ -3149,6 +3149,7 @@ def _run_monthly_report(now_et, force: bool) -> int:
     from stock_analyzer import notify as _notify
     from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED
     from stock_analyzer import report_periods as _rp
+    from stock_analyzer import entry_call_action as eca
 
     # The previous CALENDAR month (owner U12, 2026-11-17), also on `force`: the
     # first-Sunday run of month M covers the 1st..last day of M-1, so there is
@@ -3257,9 +3258,21 @@ def _run_monthly_report(now_et, force: bool) -> int:
         weekly_rows=weekly_rows, min_graded=MONTHLY_REPORT_MIN_GRADED,
         as_of=as_of,
     )
-    _log(f"monthly: {package['n_total']} rec(s) · acted={package['n_acted']} · "
-         f"graded={package['n_graded']} · q0_ready={package['q0_ready']} · "
-         f"engine_alpha={package.get('engine_alpha_pct')}")
+    # Fail closed: an input the judgement couldn't read is a failed lane, never a
+    # quiet "nothing to report" or an "all skipped" report. A package with no
+    # `judge_state` key reads as not-ok.
+    _judge_state = package.get("judge_state")
+    if _judge_state != "ok":
+        _LAST_LANE_FAILURE_DETAIL = f"monthly_unjudgeable: {_judge_state}"
+        _log(f"monthly: {_LAST_LANE_FAILURE_DETAIL} — no report written.")
+        _notify_failure("monthly", _LAST_LANE_FAILURE_DETAIL)
+        return 1
+    _log(f"monthly: {package['n_surfaced']} name(s) · acted={package['n_acted']} · "
+         f"skipped={package['n_missed']} · open={package['n_open']} · "
+         f"unknown={package['n_unknown']} · graded={package['n_graded']} · "
+         f"q0_ready={package['q0_ready']} · "
+         f"engine_alpha={package.get('engine_alpha_pct')} · "
+         f"rule=v{eca.ACTED_RULE_VERSION} cutoff={period_end}")
 
     result = _ir.generate_report(package, api_key)
     if result is None:

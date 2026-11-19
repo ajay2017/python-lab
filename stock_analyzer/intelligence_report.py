@@ -15,9 +15,12 @@ everything downstream is conditioned on that pick. v1 ships Q0 + Q1 + a pattern;
 thesis discipline (Q2) folds in once enough matured thesis reviews exist.
 
 Design (same contract as the rest of the AI layer):
-- The Python builder assembles every NUMBER from the existing rule-based scorecard
-  in `recommendations_history.py` (match → compute_outcomes → rollups). The LLM
-  NARRATES that package — it cannot invent recommendations, trades, or outcomes.
+- The Python builder assembles every NUMBER from the rule-based scorecard in
+  `recommendations_history.py` (compute_outcomes → rollups), with WHICH calls are
+  judged and whether each was acted on decided by `monthly_entry_calls` on the
+  shared entry-call rule (`entry_call_action`: a BUY on the call day or within
+  `ENTRY_CALL_ACTION_WINDOW_TRADING_DAYS` sessions). The LLM NARRATES that
+  package — it cannot invent recommendations, trades, or outcomes.
 - HARD BOUNDARY: the report may *surface* that a composite band underperforms, but
   it never states or changes a threshold/gate value — that stays an investment-policy
   decision with the user (CLAUDE.md hard rule #1). The system prompt enforces this.
@@ -41,16 +44,20 @@ from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
 def _system_prompt() -> str:
     """Build the system prompt. The entry-threshold value is interpolated from
     constants.COMPOSITE_BUY at call time (never a hand-transcribed literal) so the
-    prompt can never narrate a stale threshold if that policy value changes."""
+    prompt can never narrate a stale threshold if that policy value changes. The
+    acted-on window N (`ENTRY_CALL_ACTION_WINDOW_TRADING_DAYS`) is read the same way."""
     from stock_analyzer.constants import COMPOSITE_BUY
+    from stock_analyzer import entry_call_action as _eca
+    from stock_analyzer import debrief_entry_calls as _dec
+    _n_days = _dec._days_phrase(_eca._window(None))   # N, read from the constant now
     return f"""You are a disciplined portfolio analyst writing a MONTHLY intelligence report for an individual investor. You judge two things and surface one pattern — factually, in second person ("Your..."), neutral tone (observation, not praise or blame). Plain language, no jargon. Target 500–700 words.
 
 This report judges BEHAVIOUR and ENGINE QUALITY over roughly the past month. It does NOT recommend trades and does NOT set, suggest, or change any numeric threshold or gate.
 
 Background you must use correctly:
-- Every position the investor holds began as a recommendation that cleared the app's gates and scored above the entry threshold (composite ≥ {COMPOSITE_BUY}), surfacing as a high-conviction "New Position to Initiate." So the engine's pick quality is the foundation everything else sits on.
+- A "New Position to Initiate" call is a recommendation that cleared the app's gates and scored above the entry threshold (composite ≥ {COMPOSITE_BUY}), surfacing as a high-conviction pick; the positions the investor holds began that way. The entry calls this report judges are the app's New Position, Add to Winner and Enter Now calls. So the engine's pick quality is the foundation everything else sits on.
 - A recommendation's quality is judged on ALPHA — its return minus SPY over the same window. Beating the market in a down month is a win; trailing it in an up month is not. Lead with alpha, not raw return.
-- "Acted on" means the investor actually traded the name; "missed" means it surfaced but they did not. The "skipped-minus-acted average return gap" is the RAW-return gap (average missed return minus average acted return), not an alpha figure; positive means ignored names returned more than the ones acted on (money left on the table). Quote it as a raw-return gap, never as alpha.
+- "Acted on" means the investor BOUGHT the name on the call day or within {_n_days} after it (a sell never counts); "not acted on" (skipped) means no buy in that window. A call whose window runs past the period end is "still open"; a call the app couldn't judge is "not judged". Neither is ever counted as acted on or skipped, and you must never call them either. The "skipped-minus-acted average return gap" is the RAW-return gap (average missed return minus average acted return), not an alpha figure; positive means ignored names returned more than the ones acted on (money left on the table). Quote it as a raw-return gap, never as alpha.
 
 Write EXACTLY three sections with these bold headers and nothing before the first header:
 
@@ -140,43 +147,57 @@ def build_report_package(
     spy_close_by_date: dict | None = None,
     weekly_rows: list[dict] | None = None,
     min_graded: int = 5,
-    rec_types: tuple = ("new_pick",),
     as_of: date | None = None,
 ) -> dict:
     """
     Assemble the structured scorecard package for the monthly report.
 
-    Reuses the SAME rule-based pipeline as the Recommendations History page so the
-    monthly report and the on-page scorecard can never disagree:
-        match_recs_to_trades → compute_outcomes(min_days=REC_SCORE_MIN_DAYS)
-        → summary_stats / by_composite_band / by_verdict
+    Which calls are judged, and whether each was acted on, is decided by
+    `monthly_entry_calls.build_month` on the shared entry-call rule
+    (`entry_call_action`): an ENTRY CALL (New Position, Add to Winner, Enter
+    Now; an already-held Enter Now is left out) is acted on when the investor
+    BOUGHT the name on the call day or within `ENTRY_CALL_ACTION_WINDOW_TRADING_DAYS`
+    sessions after it. The awareness-only "More Buy Candidates" / overflow feed is
+    excluded: the report judges the engine's actual entry calls and whether the
+    investor acted on them. A call whose window runs past `period_end` is "still
+    open" and a call that can't be judged is "not judged"; neither is ever counted
+    as acted on or skipped, and both are listed by name (package `open_names` /
+    `unknown_names`).
 
-    `rec_types` scopes the report to ACTIONABLE recommendations. Default =
-    ("new_pick",): only names surfaced as "New Positions to Initiate" (they cleared
-    all gates). The awareness-only "More Buy Candidates" feed (Conflicted / Unverified
-    names the App steers you away from) is excluded — the report judges the engine's
-    actual entry picks and whether you acted on them, not the awareness feed. Pass
-    rec_types=None to include every surfacing.
+    The pipeline below `build_month` is unchanged: compute_outcomes(min_days=
+    REC_SCORE_MIN_DAYS) -> summary_stats / by_composite_band / by_verdict. TWO views
+    come back (UD-1 B): "judged" (the investor's own: bought calls priced from the
+    FILL; acted vs skipped, best / worst, the Bought average) and "engine" (every
+    call from its call-day price whether or not it was bought; the band / verdict
+    alpha, `n_graded`, `q0_ready`). `n_graded` / `q0_ready` therefore count
+    SURFACINGS (a name surfaced on several days counts once per day).
+
+    The judging cut-off is `period_end`, never `as_of`, so a regenerated report
+    reads the same; `as_of` only dates the outcome prices.
 
     recs_df:            recommendations surfaced in [period_start, period_end].
-    trades_df:          all trades (to detect acted-on signals).
+    trades_df:          all trades (to find the BUYs). None = unreadable journal.
     current_prices:     {ticker: price} for marking open positions (caller fetches).
     spy_close_by_date:  {date: close} SPY series for the regime/alpha benchmark.
     weekly_rows:        recent weekly_debriefs dicts (perf/spy/alpha) for trajectory.
-    min_graded:         matured graded recs required before Q0 is narrated.
+    min_graded:         matured graded surfacings required before Q0 is narrated.
     as_of:              the date outcomes are measured TO (None = period_end). Stock
                         outcomes use live prices from the run date, so SPY, `days_since`
                         and `outcome_maturing` must be measured to that same date, not
                         to period_end (a calendar-month report is built after its end).
-                        The caller's SPY series must reach it.
+                        The caller's SPY series must reach it. Must not be before
+                        `period_end` (`build_month` raises ValueError).
 
-    Returns a dict consumed by generate_report(). has_data=False when no actionable
-    recs surfaced in the window (caller surfaces "nothing to report yet").
+    Returns a dict consumed by generate_report(). `judge_state` is "ok" or the
+    refusal state of `build_month` (recs / trades unavailable or unreadable): a
+    non-ok state has_data=False and nothing else filled in, so the caller must read
+    `judge_state` before treating has_data=False as "nothing to report". With "ok",
+    has_data is True when at least one entry-call NAME surfaced (`n_surfaced > 0`),
+    even if none is judged yet (all still open).
     """
-    from stock_analyzer.recommendations_history import (
-        match_recs_to_trades, compute_outcomes, summary_stats,
-        by_composite_band, by_verdict, report_viz_snapshot, skipped_names_avg_alpha,
-    )
+    from stock_analyzer import entry_call_action as eca
+    from stock_analyzer import monthly_entry_calls as mec
+    from stock_analyzer.recommendations_history import summary_stats
     from stock_analyzer.constants import REC_SCORE_MIN_DAYS
 
     _as_of = as_of if as_of is not None else period_end
@@ -185,14 +206,21 @@ def build_report_package(
         "period_start":   str(period_start),
         "period_end":     str(period_end),
         "as_of":          str(_as_of),
-        "rec_scope":      ", ".join(rec_types) if rec_types else "all",
+        "rec_scope":      ", ".join(eca.ENTRY_CALL_REC_TYPES),
+        "judge_state":    None,
         "has_data":       False,
         "q0_ready":       False,
         "min_graded":     min_graded,
         "viz":            None,
+        "n_surfaced":     0,
         "n_total":        0,
         "n_acted":        0,
         "n_missed":       0,
+        "n_open":         0,
+        "n_unknown":      0,
+        "open_names":     [],
+        "unknown_names":  [],
+        "window_trading_days": eca._window(None),
         "n_graded":       0,
         "action_rate":    None,
         "engine_alpha_pct": None,
@@ -209,57 +237,46 @@ def build_report_package(
         "weekly_excluded_old_method": 0,
     }
 
-    if recs_df is None or (hasattr(recs_df, "empty") and recs_df.empty):
-        return package
-
-    # Compute outcomes over the FULL window (every rec_type) FIRST. The visual snapshot
-    # and the distinct acted/missed counts depend on "acted on via ANY surfacing"
-    # detection that SPANS rec_types — a name bought on a day it surfaced as a buy-
-    # candidate must not read as a missed New Position. (Pre-filtering to new_pick here,
-    # as an earlier version did, silently dropped that safeguard and made the saved
-    # counts disagree with the live Recommendations-History view.) The aggregate MEANS
-    # are scoped to actionable rec_types afterwards, so Q0/Q1 still judge only the
-    # engine's real entry picks, not the awareness feed.
-    matched      = match_recs_to_trades(recs_df, trades_df)
-    enriched_all = compute_outcomes(
-        matched, current_prices or {}, today=_as_of,
-        spy_close_by_date=spy_close_by_date or {}, min_days=REC_SCORE_MIN_DAYS,
+    month = mec.build_month(
+        recs_df, trades_df,
+        period_start=period_start, period_end=period_end, as_of=_as_of,
+        current_prices={} if current_prices is None else current_prices,
+        spy_close_by_date={} if spy_close_by_date is None else spy_close_by_date,
+        min_days=REC_SCORE_MIN_DAYS,
     )
-    if not enriched_all:
-        return package
+    package["judge_state"] = month["judge_state"]
+    package["window_trading_days"] = month["window_trading_days"]
+    if month["judge_state"] != mec.JUDGE_OK:
+        return package   # an unreadable input: never "nothing to report", never "all skipped"
 
-    # Visual snapshot (decision-flow Sankey + alpha-by-band bar + ranked missed bar).
-    # DISTINCT-by-ticker counts (a name recurring across days counts once — the basis
-    # the chart uses, never the misleadingly large surfacing count). FROZEN with the
-    # report (db viz_json) and re-rendered verbatim; the app shares this exact helper on
-    # its live-fallback path so a frozen report and a recompute can never diverge.
-    viz  = report_viz_snapshot(enriched_all, rec_types=rec_types)
-    viz["as_of"] = str(_as_of)   # frozen with the report: the date its outcomes are measured to
+    counts, viz = month["counts"], month["viz"]
     flow = viz["flow"]
     package["viz"]         = viz
-    package["has_data"]    = flow["n_total"] > 0
+    package["n_surfaced"]  = counts["n_surfaced"]
+    package["n_open"]      = counts["n_open"]
+    package["n_unknown"]   = counts["n_unknown"]
+    package["open_names"]    = viz["entry"]["open_names"]
+    package["unknown_names"] = viz["entry"]["unknown_names"]
+    # n_total = the JUDGED names (acted + skipped), the basis the flow chart uses.
     package["n_total"]     = flow["n_total"]
     package["n_acted"]     = flow["n_acted"]
     package["n_missed"]    = flow["n_missed"]
+    _decided = flow["n_acted"] + flow["n_missed"]
     package["action_rate"] = (
-        round(flow["n_acted"] / flow["n_total"] * 100.0, 1) if flow["n_total"] else None
+        round(flow["n_acted"] / _decided * 100.0, 1) if _decided else None
     )
+    package["has_data"]    = counts["n_surfaced"] > 0
     if not package["has_data"]:
-        return package   # no actionable (New Position) names surfaced in the window
+        return package   # no entry-call names in the window
 
-    # Aggregate means / bands / verdicts — scoped to actionable rec_types (the report's
-    # Q0/Q1 subject). summary_stats counts surfacings, used only for the graded-outcome
-    # aggregates (alpha, best/worst), never for the headline name counts above.
-    scoped = [r for r in enriched_all if rec_types is None or r.get("rec_type") in rec_types]
-    stats  = summary_stats(scoped)
-    # Frozen with the report so the "Names you skipped" tile never recomputes live. It is
-    # the average over the SAME names the tile counts (never acted on via any surfacing),
-    # NOT summary_stats' per-surfacing avg_missed_alpha (that one stays in the package for
-    # the LLM prompt). Absent on the early-return paths above and on reports saved before
-    # this key existed, which the app reads as "not saved" (never as 0).
-    viz["avg_skipped_names_alpha"] = skipped_names_avg_alpha(enriched_all, rec_types=rec_types)
-    package["n_graded"]  = stats["n_priced"]   # surfacings matured enough to grade (internal)
-    package["engine_alpha_pct"] = stats["avg_acted_alpha"]   # Q0 headline (mean over acted picks)
+    # Aggregate means (the investor's view: acted from the fill) and the graded
+    # count (the engine's view: every call from its call-day price). summary_stats
+    # counts surfacings, used only for the graded-outcome aggregates (alpha, best /
+    # worst), never for the headline name counts above.
+    stats        = summary_stats(month["judged"])
+    engine_stats = summary_stats(month["engine"])
+    package["n_graded"]  = engine_stats["n_priced"]   # surfacings matured enough to grade (internal)
+    package["engine_alpha_pct"] = stats["avg_acted_alpha"]   # the Bought tile (mean over acted calls, your fill)
     package["avg_acted_pct"]    = stats["avg_acted_pct"]
     package["avg_missed_pct"]   = stats["avg_missed_pct"]
     package["missed_alpha"]     = stats["missed_alpha"]
@@ -267,10 +284,10 @@ def build_report_package(
     package["avg_missed_alpha"] = stats["avg_missed_alpha"]
     package["best"]   = stats["best"]
     package["worst"]  = stats["worst"]
-    package["q0_ready"] = stats["n_priced"] >= min_graded
+    package["q0_ready"] = engine_stats["n_priced"] >= min_graded
 
-    package["band_rows"]    = by_composite_band(scoped)
-    package["verdict_rows"] = by_verdict(scoped)
+    package["band_rows"]    = mec.band_rows(month["engine"], month["judged"])
+    package["verdict_rows"] = mec.verdict_rows(month["engine"], month["judged"])
 
     if weekly_rows:
         # Only weeks measured the way the Weekly Debrief measures them today are
@@ -291,47 +308,115 @@ def build_report_package(
     return package
 
 
+def judge_state_error(package: dict, *, rebuilding: bool = False) -> "str | None":
+    """The visible error for a package whose entry calls couldn't be judged, or
+    None when `judge_state` is "ok". A missing key reads as not-ok (fail closed).
+    The interactive Generate button renders it and saves nothing; the cron lane
+    fails on the same condition. `rebuilding=True` words it for the live
+    fallback that re-draws a saved report's visuals (nothing is being generated)."""
+    state = package.get("judge_state")
+    if state == "ok":
+        return None
+    if state in ("trades_unavailable", "trades_unreadable"):
+        if rebuilding:
+            return ("Could not read your trade journal, so this report's signal-flow "
+                    "visuals can't be rebuilt right now. Try again in a moment.")
+        return ("Could not read your trade journal — the database may be "
+                "unreachable, so no report was generated. Try again in a moment.")
+    if state in ("recs_unavailable", "recs_unreadable"):
+        if rebuilding:
+            return ("Could not read recommendation history, so this report's visuals "
+                    "can't be rebuilt right now.")
+        return ("Could not read recommendation history, so no report was "
+                "generated. Try again in a moment.")
+    if rebuilding:
+        return ("This report's entry calls couldn't be judged, so its visuals can't "
+                "be rebuilt right now.")
+    return ("This period's entry calls couldn't be judged, so no report was "
+            "generated. Try again in a moment.")
+
+
+def _names_line(items, with_reason: bool) -> str:
+    """"NVDA (window ends 2026-12-01), AMD (window ends ...)" for the prompt."""
+    from stock_analyzer import debrief_entry_calls as dec
+    bits = []
+    for it in dec._rows_of(items):
+        if with_reason:
+            bits.append(f"{it.get('ticker')} ({dec.unknown_reason_text(it.get('reason'))})")
+        else:
+            wend = it.get("window_end")
+            bits.append(f"{it.get('ticker')} (window ends {wend})" if wend
+                        else f"{it.get('ticker')}")
+    return ", ".join(bits)
+
+
 def _format_prompt(package: dict) -> str:
+    from stock_analyzer import entry_call_action as eca
+    from stock_analyzer import debrief_entry_calls as dec
+    n_days = dec._days_phrase(eca._window(package.get("window_trading_days")))
+    # A package without the new keys reads as "every surfaced name was judged".
+    n_total = package["n_total"]
+    n_surf  = package.get("n_surfaced", n_total)
+    n_open  = package.get("n_open", 0)
+    n_unk   = package.get("n_unknown", 0)
     lines = [
         f"Period: {package['period_start']} to {package['period_end']}",
     ]
-    if package.get("as_of"):
-        lines.append(f"Outcomes are measured to {package['as_of']} (the run date), not to the period end.")
+    if package.get("as_of") and package["as_of"] != package["period_end"]:
+        lines.append(f"Outcomes are measured to {package['as_of']}, not to the period end.")
     lines += [
         "",
-        "SCOPE: these are the App's ACTIONABLE entry recommendations only — names "
-        "surfaced as \"New Positions to Initiate\" (they cleared all gates, composite "
-        "≥ the entry threshold). The awareness-only \"More Buy Candidates\" feed "
-        "(names the App surfaced but flagged to skip) is EXCLUDED. So a high miss "
-        "count is not awareness noise — every one is a name the App told you to "
-        "consider initiating. Do not reference the awareness feed.",
+        "SCOPE: these are the App's ACTIONABLE entry calls only — names surfaced as "
+        "\"New Positions to Initiate\" (they cleared all gates, composite ≥ the entry "
+        "threshold), Add to Winner calls and Enter Now calls (an Enter Now on a name "
+        "the investor already held is left out). The awareness-only \"More Buy "
+        "Candidates\" feed (names the App surfaced but flagged to skip) is EXCLUDED. So a "
+        "high skip count is not awareness noise — every one is a name the App told you to "
+        "act on. Do not reference the awareness feed.",
         "",
-        f"Distinct New-Position names surfaced this period: {package['n_total']}. "
-        f"You acted on {package['n_acted']} and did not act on {package['n_missed']}. "
+        f"Distinct entry-call names surfaced this period: {n_surf}. "
+        f"You acted on {package['n_acted']} and did not act on {package['n_missed']}; "
+        f"{n_open} still open at the period end (decision window runs past "
+        f"{package['period_end']}); {n_unk} not judged. "
         "Every count here is a DISTINCT ticker — a name that surfaced on many days counts "
         "once. These are the only name counts that exist for this report.",
         "",
         "COUNT DISCIPLINE — the reader sees these exact distinct counts in a header and a "
         "flow chart directly above your text, so your words must agree with them:",
-        f"  - surfaced = {package['n_total']}, acted on = {package['n_acted']}, "
-        f"not acted on = {package['n_missed']}.",
+        f"  - surfaced = {n_surf}, acted on = {package['n_acted']}, "
+        f"not acted on = {package['n_missed']}, still open = {n_open}, not judged = {n_unk}.",
         f"  - NEVER state a count of names, recommendations, or outcomes greater than "
-        f"{package['n_total']}. There is NO separate, larger 'graded outcomes' tally — do "
+        f"{n_surf}. There is NO separate, larger 'graded outcomes' tally — do "
         "not invent one. Refer to how many have matured in WORDS (e.g. 'most have matured', "
         "'only a few have matured'), never as a new number.",
+        "  - Action rate = acted ÷ (acted + not acted); still-open and not-judged names "
+        "are not in it.",
         "  - Percentages (alpha, outcome %, action rate) should be quoted as given; only "
         "raw NAME counts are constrained to the distinct figures above.",
     ]
+    if package.get("open_names"):
+        lines.append(
+            "Still open at the period end (already listed by the app under Signal "
+            "discipline; never call them skipped or acted on): "
+            + _names_line(package["open_names"], False))
+    if package.get("unknown_names"):
+        lines.append(
+            "Not judged (already listed by the app under Signal discipline; never "
+            "call them skipped or acted on): "
+            + _names_line(package["unknown_names"], True))
     if not package.get("q0_ready"):
         lines.append(
-            f"NOTE: too few of these names have matured enough to grade entry quality "
-            f"fairly (the engine needs at least {package['min_graded']} matured before its "
-            "pick quality can be judged). Keep the Entry quality section to one honest "
-            "sentence and do not over-read the band table."
+            f"NOTE: too few of these surfacings have matured enough to grade entry quality "
+            f"fairly (the engine needs at least {package['min_graded']} matured surfacings "
+            "before its pick quality can be judged). Keep the Entry quality section to one "
+            "honest sentence and do not over-read the band table."
         )
 
     lines += [
         "",
+        f"Band and verdict engine alpha price every call from its call-day price, "
+        f"whether or not you bought; the acted averages use your fill price, up to "
+        f"{n_days} after the call.",
         "Average outcomes across matured positions (alpha = return minus SPY, same window):",
         f"  Action rate: {package['action_rate']:.0f}%" if package.get("action_rate") is not None else "  Action rate: N/A",
         f"  Avg outcome — acted: {_pct(package.get('avg_acted_pct'))} · missed: {_pct(package.get('avg_missed_pct'))}",
@@ -440,6 +525,15 @@ def generate_report(
             return None
         text     = r.text
         sections = _parse_response(text)
+        # UD-3: the app-written still-open / not-judged bullets go at the END of
+        # Signal discipline, after the model's text (the model never writes them).
+        # Frozen with the row, so the app, the preview and the email all show them.
+        from stock_analyzer import monthly_entry_calls as _mec
+        _lines = _mec.signal_lines(package.get("viz"))
+        if _lines:
+            _ai = sections["section_signal_discipline"]
+            sections["section_signal_discipline"] = (
+                (_ai + "\n\n" if _ai else "") + "\n".join(_lines))
         return {
             "period_start":  package["period_start"],
             "period_end":    package["period_end"],

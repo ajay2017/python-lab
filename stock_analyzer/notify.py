@@ -1751,6 +1751,18 @@ def render_intelligence_email(report: dict) -> str:
         + "</tr></table>"
     )
 
+    # The one-paragraph "what acted means" footnote, from the viz frozen with the
+    # report (None for a report saved under the older acted rule). The still-open /
+    # not-judged bullets arrive inside the Signal discipline text.
+    from stock_analyzer.monthly_entry_calls import rule_note as _rule_note
+    from stock_analyzer.util import safe_html as _sh
+    _note = _rule_note(_viz)
+    if _note is not None:
+        perf_block += (
+            f"<div style='margin:-8px 0 16px;font-size:0.78em;line-height:1.5;"
+            f"color:#6b7280'>{_sh(_note)}</div>"
+        )
+
     _SECTION_COLOURS = {
         "Entry quality":     "#3b82f6",   # blue — the engine's half
         "Signal discipline": "#8b5cf6",   # purple — the user's half

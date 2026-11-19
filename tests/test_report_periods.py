@@ -341,3 +341,66 @@ def test_an_archived_row_with_unreadable_dates_refuses_rather_than_guessing():
     assert len(keys) == 2 and keys[0] == "2026-11-30" and keys[1].startswith("row-")
     with pytest.raises(ValueError):
         rp.monthly_generate_window(date(2026, 12, 6), rows, opts, keys[1])
+
+
+# ── C4b: was_replaced / preview_banner (spec 2F, C1 carry-forwards (b), (c)) ──
+
+def test_was_replaced_needs_a_stamp_and_no_email_sent_flag():
+    assert rp.was_replaced({"email_sent": False, "email_sent_at": "2026-12-06T18:05:00"}) is True
+    assert rp.was_replaced({"email_sent": None, "email_sent_at": "2026-12-06T18:05:00"}) is True
+    assert rp.was_replaced({"email_sent": float("nan"), "email_sent_at": "2026-12-06"}) is True
+
+
+def test_was_replaced_is_false_for_a_still_emailed_or_never_emailed_row():
+    assert rp.was_replaced({"email_sent": True, "email_sent_at": "2026-12-06T18:05:00"}) is False
+    assert rp.was_replaced({"email_sent": True}) is False
+    assert rp.was_replaced({"email_sent": False, "email_sent_at": None}) is False
+    assert rp.was_replaced({"email_sent": False, "email_sent_at": float("nan")}) is False
+    assert rp.was_replaced({"email_sent": False, "email_sent_at": "  "}) is False
+    assert rp.was_replaced({}) is False
+    assert rp.was_replaced(None) is False
+
+
+def test_was_replaced_matches_emailed_suffix_wording():
+    row = {"email_sent": False, "email_sent_at": "2026-12-06T18:05:00"}
+    assert rp.was_replaced(row) and "replaced" in rp.emailed_suffix(row)
+    row2 = {"email_sent": True, "email_sent_at": "2026-12-06T18:05:00"}
+    assert not rp.was_replaced(row2) and "replaced" not in rp.emailed_suffix(row2)
+
+
+WHEN = " (generated 2026-12-07 09:15 ET)"
+
+
+def test_preview_banner_unchecked():
+    assert rp.preview_banner("preview_unchecked", "monthly report", "2026-11-30",
+                             WHEN, False) == (
+        "Couldn't check whether the monthly report for 2026-11-30 was already emailed, "
+        "so nothing was saved. The regenerated version is shown below as a preview"
+        " (generated 2026-12-07 09:15 ET).")
+
+
+def test_preview_banner_unchecked_ignores_replaced():
+    a = rp.preview_banner("preview_unchecked", "debrief", "2026-11-29", "", False)
+    b = rp.preview_banner("preview_unchecked", "debrief", "2026-11-29", "", True)
+    assert a == b
+
+
+def test_preview_banner_emailed_is_todays_text():
+    assert rp.preview_banner("preview_emailed", "debrief", "2026-11-29", WHEN, False) == (
+        "Preview only (generated 2026-12-07 09:15 ET): the debrief for 2026-11-29 was "
+        "already emailed, so the emailed version is kept. The regenerated version below "
+        "is NOT saved.")
+
+
+def test_preview_banner_emailed_and_replaced_does_not_claim_the_emailed_version_is_kept():
+    text = rp.preview_banner("preview_emailed", "monthly report", "2026-11-30", WHEN, True)
+    assert text == (
+        "Preview only (generated 2026-12-07 09:15 ET): an earlier version of the monthly "
+        "report for 2026-11-30 was emailed; the saved version is kept. The regenerated "
+        "version below is NOT saved.")
+    assert "the emailed version is kept" not in text
+
+
+def test_preview_banner_blank_when_text():
+    assert rp.preview_banner("preview_emailed", "debrief", "2026-11-29", "", False).startswith(
+        "Preview only: the debrief")

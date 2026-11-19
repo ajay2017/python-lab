@@ -752,8 +752,9 @@ def _monthly_with_package(monkeypatch, has_data, notified):
     monkeypatch.setattr(yfinance, "download",
                         lambda *a, **k: pd.DataFrame())
     monkeypatch.setattr(ir, "build_report_package", lambda **kw: {
-        "n_total": 1, "n_acted": 0, "n_graded": 0, "q0_ready": False,
-        "has_data": has_data})
+        "judge_state": "ok", "n_surfaced": 1, "n_total": 1, "n_acted": 0,
+        "n_missed": 1, "n_open": 0, "n_unknown": 0, "n_graded": 0,
+        "q0_ready": False, "has_data": has_data})
     monkeypatch.setattr(ir, "generate_report", lambda package, api_key: None)
     monkeypatch.setattr(cr, "_notify_failure", lambda m, d: notified.append((m, d)))
     monkeypatch.setattr(cr, "_LAST_LANE_FAILURE_DETAIL", None)
@@ -797,8 +798,9 @@ def _monthly_capture_package_inputs(monkeypatch, now_et, weeks):
                         lambda *a, **k: seen.update(spy_end=k.get("end")) or pd.DataFrame())
     monkeypatch.setattr(ir, "build_report_package",
                         lambda **kw: seen.update(pkg=kw) or {
-                            "n_total": 1, "n_acted": 0, "n_graded": 0, "q0_ready": False,
-                            "has_data": False})
+                            "judge_state": "ok", "n_surfaced": 1, "n_total": 1,
+                            "n_acted": 0, "n_missed": 1, "n_open": 0, "n_unknown": 0,
+                            "n_graded": 0, "q0_ready": False, "has_data": False})
     monkeypatch.setattr(ir, "generate_report", lambda package, api_key: None)
     assert cr._run_monthly_report(now_et, force=False) == 0
     return seen
@@ -823,3 +825,103 @@ def test_run_monthly_report_trajectory_is_the_periods_own_weeks(monkeypatch):
     assert [w["week_ending"] for w in seen["pkg"]["weekly_rows"]] == [
         "2026-11-29", "2026-11-22", "2026-11-15", "2026-11-08"]
     assert seen["limit"] >= 52, "must reach back far enough for a forced run on an older month"
+
+
+# ── _run_monthly_report: C4b, the judgement must be readable ──────────────────
+
+def _monthly_judge_state_lane(monkeypatch, package):
+    """Run the lane with `build_report_package` returning `package`; capture what
+    the lane did afterwards."""
+    from stock_analyzer import intelligence_report as ir
+    import yfinance
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    calls = {"generate": 0, "saved": [], "notified": [], "emailed": []}
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none",
+                        lambda **kw: pd.DataFrame({"ticker": ["AAPL"]}))
+    monkeypatch.setattr(cr.db, "load_trades_or_none", lambda: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_weekly_debriefs", lambda limit=5: pd.DataFrame())
+    monkeypatch.setattr("stock_analyzer.data.fetch_live_prices", lambda *a, **k: {})
+    monkeypatch.setattr(yfinance, "download", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(ir, "build_report_package", lambda **kw: package)
+    monkeypatch.setattr(ir, "generate_report",
+                        lambda p, k: calls.__setitem__("generate", calls["generate"] + 1)
+                        or {"period_start": "2026-11-01", "period_end": "2026-11-30"})
+    monkeypatch.setattr(cr, "_notify_failure", lambda m, d: calls["notified"].append((m, d)))
+    monkeypatch.setattr(cr, "_send_email", lambda *a, **k: calls["emailed"].append(a))
+    monkeypatch.setattr(cr.db, "save_monthly_report", lambda r: calls["saved"].append(r) or True)
+    monkeypatch.setattr(cr, "_LAST_LANE_FAILURE_DETAIL", None)
+    rc = cr._run_monthly_report(cr._ET.localize(datetime.datetime(2026, 12, 6, 18, 0, 0)),
+                                force=False)
+    return rc, calls
+
+
+@pytest.mark.parametrize("state", ["recs_unavailable", "recs_unreadable",
+                                   "trades_unavailable", "trades_unreadable"])
+def test_run_monthly_report_non_ok_judge_state_fails_the_lane(monkeypatch, state):
+    rc, calls = _monthly_judge_state_lane(
+        monkeypatch, {"judge_state": state, "has_data": False})
+    assert rc == 1
+    assert cr._LAST_LANE_FAILURE_DETAIL == f"monthly_unjudgeable: {state}"
+    assert calls["notified"] == [("monthly", f"monthly_unjudgeable: {state}")]
+    assert calls["generate"] == 0 and calls["saved"] == [] and calls["emailed"] == []
+
+
+def test_run_monthly_report_a_package_without_judge_state_reads_as_not_ok(monkeypatch):
+    rc, calls = _monthly_judge_state_lane(monkeypatch, {"has_data": True})
+    assert rc == 1
+    assert cr._LAST_LANE_FAILURE_DETAIL == "monthly_unjudgeable: None"
+    assert calls["generate"] == 0 and calls["saved"] == [] and calls["emailed"] == []
+
+
+def test_run_monthly_report_logs_the_counts_and_the_rule_line(monkeypatch, capsys):
+    pkg = {"judge_state": "ok", "has_data": False, "n_surfaced": 7, "n_acted": 3,
+           "n_missed": 2, "n_open": 1, "n_unknown": 1, "n_graded": 5,
+           "q0_ready": True, "engine_alpha_pct": 1.5}
+    rc, _calls = _monthly_judge_state_lane(monkeypatch, pkg)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert ("monthly: 7 name(s) · acted=3 · skipped=2 · open=1 · unknown=1 · "
+            "graded=5 · q0_ready=True · engine_alpha=1.5 · rule=v2 "
+            "cutoff=2026-11-30") in out
+
+
+def test_run_monthly_report_judges_at_the_period_end_not_the_run_date(monkeypatch):
+    """The real pipeline: the cutoff passed to the judgement is `period_end`
+    (U6). A Fri 11-27 call (window ends Tue 12-01) bought on 12-01 reads still
+    open on the 12-06 run, and the outcomes are dated to the run date."""
+    from stock_analyzer import monthly_entry_calls as mec
+    import yfinance
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    recs = pd.DataFrame([{
+        "id": 1, "ticker": "NVDA", "rec_date": "2026-11-27", "rec_type": "enter_now",
+        "surfaced_at": "2026-11-27T15:00:00", "price_at_surface": 100.0,
+        "composite_score": 70, "verdict": "Engine-Confirmed", "already_held": False}])
+    trades = pd.DataFrame([{
+        "id": 1, "ticker": "NVDA", "action": "BUY", "traded_at": "2026-12-01T15:00:00+00:00",
+        "trigger_type": "MANUAL", "notes": "", "broker_txn_id": None,
+        "shares": 1, "price": 100.0}])
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none", lambda **kw: recs)
+    monkeypatch.setattr(cr.db, "load_trades_or_none", lambda: trades)
+    monkeypatch.setattr(cr.db, "load_weekly_debriefs", lambda limit=5: pd.DataFrame())
+    monkeypatch.setattr("stock_analyzer.data.fetch_live_prices", lambda *a, **k: {})
+    monkeypatch.setattr(yfinance, "download", lambda *a, **k: pd.DataFrame())
+    seen = {}
+    real = mec.build_month
+
+    def _wrap(*a, **k):
+        seen["kw"] = k
+        out = real(*a, **k)
+        seen["out"] = out
+        return out
+
+    monkeypatch.setattr(mec, "build_month", _wrap)
+    from stock_analyzer import intelligence_report as ir
+    monkeypatch.setattr(ir, "generate_report", lambda p, k: None)
+    monkeypatch.setattr(cr, "_notify_failure", lambda m, d: None)
+    monkeypatch.setattr(cr, "_LAST_LANE_FAILURE_DETAIL", None)
+    cr._run_monthly_report(cr._ET.localize(datetime.datetime(2026, 12, 6, 18, 0, 0)),
+                           force=False)
+    assert seen["kw"]["period_end"] == datetime.date(2026, 11, 30)
+    assert seen["kw"]["as_of"] == datetime.date(2026, 12, 6)
+    assert [n["status"] for n in seen["out"]["names"]] == ["still_open"]
+    assert seen["out"]["counts"]["n_open"] == 1
