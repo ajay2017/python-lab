@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home dock mockup</title>
+<style>
+:root{--bg:#0e1117;--side:#262730;--panel:#111827;--line:#1f2937;--line2:#31333f;--text:#fafafa;--muted:#9ca3af;
+  --red:#ef4444;--redbg:#3f1d24;--amber:#facc15;--amberbg:#3b3a1a;--green:#22c55e;--greenbg:#12301f;--blue:#60a5fa;--accent:#ff4b4b}
+*{box-sizing:border-box}
+body{margin:0;background:#05070b;color:var(--text);font:15px/1.5 "Source Sans 3","Source Sans Pro",system-ui,sans-serif}
+.wrap{max-width:1240px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:24px;margin:0 0 4px}
+.lead{color:var(--muted);margin:0 0 14px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:0 0 14px}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
+.seg button{background:transparent;color:var(--muted);border:0;padding:6px 14px;font:inherit;font-size:14px;cursor:pointer}
+.seg button.on{background:#1f2937;color:var(--text)}
+.lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-right:6px}
+/* the simulated app window */
+.screen{height:680px;border:1px solid var(--line2);border-radius:10px;overflow:hidden;display:flex;background:var(--bg);margin:0 auto;transition:width .2s}
+.screen.laptop{width:100%}.screen.phone{width:390px}
+.sidebar{width:210px;background:var(--side);padding:14px 12px;flex:none;font-size:13.5px;color:#d1d5db}
+.screen.phone .sidebar{display:none}
+.sidebar .nav div{padding:5px 8px;border-radius:6px}.sidebar .nav div.on{background:#3a3b46;color:#fff}
+.main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+.scroll{flex:1;overflow:auto;padding:16px 20px}
+.screen.phone .scroll{padding:12px}
+/* page bits */
+.bar{border-radius:8px;padding:11px 14px;margin-bottom:10px;font-size:14.5px}
+.bar.red{background:var(--redbg);color:#fca5a5}.bar.amber{background:var(--amberbg);color:#fde68a}
+.exp{border:1px solid var(--line2);border-radius:8px;padding:9px 14px;margin-bottom:10px;font-size:14.5px;color:#e5e7eb}
+.exp::before{content:"›  ";color:var(--muted)}
+.idx{display:flex;gap:10px;margin-bottom:10px}
+.idx div{flex:1;border-radius:6px;padding:6px 10px;text-align:center;line-height:1.3}
+.idx .dn{background:rgba(220,38,38,.10);border:1px solid #cc2222;border-left:3px solid #cc2222}
+.idx .up{background:rgba(0,180,70,.10);border:1px solid #00a040;border-left:3px solid #00a040}
+.idx b{display:block;font-size:10px;color:#aaa;letter-spacing:.09em}
+.idx .v{font-weight:700}.idx .dn .c{color:#f87171;font-size:12px}.idx .up .c{color:#4ade80;font-size:12px}
+.cc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:8px}
+.cc .t{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.cc .t span:first-child{font-size:18px;font-weight:700}
+.pill{background:var(--red);color:#000;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:800}
+.cc .when{margin-left:auto;color:#6b7280;font-size:12px}
+.cats{margin-top:10px;padding-top:10px;border-top:1px solid #374151;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px}
+.cats .k{color:#9ca3af;font-weight:600;letter-spacing:.05em}
+.cat{border:1px solid #b91c1c;border-radius:6px;padding:2px 8px;color:#fca5a5}.cat i{color:#9ca3af;font-style:normal}
+.metrics{display:grid;grid-template-columns:repeat(8,1fr);gap:10px;margin:8px 0 16px}
+.screen.phone .metrics{grid-template-columns:repeat(2,1fr)}
+.m .k{font-size:11px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m .v{font:600 20px/1.3 ui-monospace,Consolas,monospace}
+.chip{display:inline-block;font:12px ui-monospace,Consolas,monospace;padding:1px 7px;border-radius:10px}
+.chip.r{background:#3b1d22;color:#fca5a5}.chip.g{background:#16301f;color:#86efac}.chip.n{background:#1f2937;color:#cbd5e1}
+h2{font-size:24px;margin:22px 0 10px}
+.brief-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.brief-row .stamp{flex:2;min-width:240px;border:1px solid #b91c1c55;border-radius:8px;padding:8px 12px;font-size:14px}
+.brief-row .b{flex:1;min-width:120px;border:1px solid var(--line2);border-radius:8px;padding:8px 12px;font-size:14px;text-align:center}
+.cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.screen.phone .cards{grid-template-columns:1fr}
+.card{background:#141821;border:1px solid var(--line2);border-radius:10px;padding:14px;font-size:14px;min-height:130px}
+.card.act{background:#7f1d1d;border-color:#b91c1c}
+.card .h{font-weight:700;margin-bottom:6px}
+.sect{background:#141821;border:1px solid var(--line2);border-radius:10px;padding:14px;margin-top:14px;color:var(--muted);font-size:14px}
+.sect b{color:var(--text)}
+/* dock */
+.dock{flex:none;border-top:1px solid var(--line2);background:#0b0e14;display:none}
+.screen.withdock .dock{display:block}
+.tabs{display:flex;gap:2px;align-items:stretch;border-bottom:1px solid var(--line2);padding:0 10px;overflow-x:auto}
+.tab{background:none;border:0;color:var(--muted);font:inherit;font-size:13.5px;padding:8px 10px;cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent}
+.tab.on{color:var(--text);border-bottom-color:var(--accent)}
+.tab .n{display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;font-size:11.5px;margin-left:4px;background:#374151;color:#e5e7eb}
+.tab .n.r{background:#7f1d1d;color:#fecaca}.tab .n.a{background:#713f12;color:#fde68a}
+.tabs .sp{flex:1}
+.tabs .tog{background:none;border:0;color:var(--muted);cursor:pointer;font-size:14px;padding:0 6px}
+.tabs .tog:hover{color:var(--text)}
+.pane{height:var(--dockh,170px);overflow:auto;padding:10px 14px;font-size:14px}
+.dock.collapsed .pane{display:none}
+.dock.collapsed .tab:not(.on){}
+.pane .bar{margin-bottom:8px}
+.jump{color:var(--blue);cursor:pointer;text-decoration:underline;font-size:13.5px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+td,th{padding:4px 8px;border-bottom:1px solid #1f2937;text-align:right;white-space:nowrap}
+td:first-child,th:first-child{text-align:left}
+.up2{color:#4ade80}.dn2{color:#f87171}
+.cap{color:var(--muted);font-size:12.5px}
+/* notes below */
+.notes{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
+@media (max-width:860px){.notes{grid-template-columns:1fr}}
+.note{background:#0e1117;border:1px solid var(--line2);border-radius:10px;padding:14px 16px;font-size:14.5px}
+.note h3{margin:0 0 6px;font-size:15px}
+.note ul{margin:0;padding-left:18px}.note li{margin:4px 0}
+.q b{color:var(--blue)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>🏠 Home dock: mockup</h1>
+<p class="lead">For the owner to pick a version before anything is built (plan: <code>docs/plans/home-dock.md</code>). <b>Scroll inside the window</b>: the dock stays put. Click the tabs, and in version A the ▾ / ▴ button. Figures are taken from the 2026-11-18 Home screenshots. Ticker prices and the notice texts are <b>illustrative</b>.</p>
+
+<div class="controls">
+  <span><span class="lbl">Version</span><span class="seg" id="ver">
+    <button data-v="today">Today</button><button data-v="a" class="on">A · collapsible</button><button data-v="b">B · always open</button></span></span>
+  <span><span class="lbl">Width</span><span class="seg" id="wid">
+    <button data-w="laptop" class="on">Laptop</button><button data-w="phone">Phone</button></span></span>
+  <span><span class="lbl">Dock height</span><span class="seg" id="hgt">
+    <button data-h="170" class="on">~3 rows</button><button data-h="260">~5 rows</button></span></span>
+</div>
+
+<div class="screen laptop withdock" id="screen">
+  <div class="sidebar">
+    <div style="font-weight:700;margin-bottom:12px">DRISHTA</div>
+    <div class="nav"><div class="on">🏠 Home</div><div>🧾 Summary</div><div>📡 Signals &amp; Advice</div><div>📈 Analysis</div><div>📋 Watchlist</div><div>📒 Trade Journal</div><div>💰 Account</div><div>📄 Reports</div><div>…</div></div>
+  </div>
+  <div class="main">
+    <div class="scroll" id="scroll">
+      <!-- the four strips: shown only in "Today" -->
+      <div id="strips">
+        <div class="idx"><div class="dn"><b>DOW</b><span class="v">50,126.17</span><div class="c">▼ -0.23%</div></div><div class="dn"><b>S&amp;P 500</b><span class="v">7,233.63</span><div class="c">▼ -0.23%</div></div><div class="up"><b>NASDAQ</b><span class="v">24,429.88</span><div class="c">▲ +0.42%</div></div></div>
+        <div class="bar red">🔴 <b>3 Act Today</b> — 1 EXIT · 2 TRIM — see 📋 Today's Brief → Act Today below</div>
+        <div class="bar amber">⚠️ Needs a look: <b>Day Shock</b> · 3 more notes</div>
+        <div class="exp">⚠️ Alerts</div>
+        <div class="exp">💹 Live Prices (10 positions)</div>
+      </div>
+
+      <div class="cc">
+        <div class="t"><span>Portfolio Command Center</span><span class="pill">Action Required</span><span class="when">10 positions · Nov 18, 2026</span></div>
+        <div class="cats"><span class="k">UPCOMING CATALYSTS</span>
+          <span class="cat">👷 Non-Farm Payrolls · <i>in 16d · AAPL, AMZN, CRWD +4</i></span>
+          <span class="cat">🏛 FOMC Rate Decision · <i>in 21d · AAPL, AMZN, CRWD +6</i></span>
+          <span class="cat">📊 CPI Inflation · <i>in 22d · AAPL, AMZN, CRWD +5</i></span></div>
+      </div>
+      <div class="metrics">
+        <div class="m"><div class="k">Portfolio value</div><div class="v">••••••</div></div>
+        <div class="m"><div class="k">Unrealized P&amp;L</div><div class="v">••••••</div><span class="chip r">↓ -0.1%</span></div>
+        <div class="m"><div class="k">Today's P&amp;L</div><div class="v">••••••</div><span class="chip g">↑ +1.30%</span></div>
+        <div class="m"><div class="k">Alerts</div><div class="v">4🔴 3🟡</div></div>
+        <div class="m"><div class="k">Avg score</div><div class="v">60/100</div></div>
+        <div class="m"><div class="k">Diversification</div><div class="v">43/100</div><span class="chip n">↑ Well Diver…</span></div>
+        <div class="m"><div class="k">Best: CRWD</div><div class="v">••••••</div><span class="chip g">↑ +10.2%</span></div>
+        <div class="m"><div class="k">Worst: DASH</div><div class="v">••••••</div><span class="chip r">↓ -6.9%</span></div>
+      </div>
+
+      <h2>📋 Today's Brief 🔴</h2>
+      <div class="brief-row"><div class="stamp">📌 Built at 5:31 PM ET <span class="cap">(36 min ago)</span> · stale · click Refresh Signals to update</div>
+        <div class="b">🔄 Refresh macro</div><div class="b">🔄 Refresh Signals</div><div class="b">🔒 Lock Setup</div></div>
+      <div class="cards">
+        <div class="card"><div class="h">📊 Hold Steady — Mixed Market</div><div class="cap">Wednesday, November 18 2026</div>S&amp;P 500 -0.23% · Nasdaq +0.42% · Leading: Cybersecurity (-0.2% 1W), Utilities (-0.6% 1W)</div>
+        <div class="card"><div class="h">1.4× · your book is more volatile than the market</div>A 10% pullback → ~-14% · most exposed: MRVL, SNOW<br><span class="cap">53% in high-beta (β ≥ 1.3) names — moderate.</span></div>
+        <div class="card act"><div class="h" style="font-size:12px;letter-spacing:.06em">TODAY'S ACTIONS</div>🔴 3 Act Today<br>📈 1 Grow Today<br>🟡 4 monitoring · 0 resolved breaches<br>🔧 2 Portfolio Tune-up</div>
+      </div>
+      <div class="sect" id="act-today"><b>🔴 Act Today</b> (unchanged): 1 EXIT · 2 TRIM cards, as today.</div>
+      <div class="sect"><b>📈 Grow Today</b> (unchanged): picks, adds, the funnel, …</div>
+      <div class="sect"><b>🟡 Monitoring</b> (unchanged)</div>
+      <div class="sect"><b>🔧 Portfolio Tune-up</b> (unchanged)</div>
+      <div class="sect"><b>🌙 Evening Debrief · 🤖 AI Snapshot</b> (unchanged)</div>
+      <div style="height:40px"></div>
+    </div>
+
+    <!-- the dock -->
+    <div class="dock" id="dock">
+      <div class="tabs" id="tabs">
+        <button class="tab on" data-t="act">🔴 Act Today <span class="n r">3</span></button>
+        <button class="tab" data-t="notices">⚠️ Notices <span class="n a">1 + 3</span></button>
+        <button class="tab" data-t="prices">💹 Live Prices <span class="n">10</span></button>
+        <button class="tab" data-t="markets">📈 Markets <span class="n" style="background:#3b1d22;color:#fca5a5">S&amp;P -0.23%</span></button>
+        <span class="sp"></span>
+        <button class="tog" id="tog" title="Hide / show the panel">▾</button>
+      </div>
+      <div class="pane" id="pane-act">
+        <div class="bar red">🔴 <b>3 Act Today</b> — 1 EXIT · 2 TRIM — see 📋 Today's Brief → Act Today</div>
+        <span class="jump" id="jump">Jump to Act Today ↑</span>
+        <p class="cap">Other states read "✅ Nothing to act on today" or "⚠️ Today's Brief couldn't be built this run — Act Today was NOT checked", the same texts as today's pointer and from the same count.</p>
+      </div>
+      <div class="pane" id="pane-notices" hidden>
+        <div class="bar amber">⚠️ Needs a look: <b>Day Shock</b> · 3 more notes</div>
+        <div class="bar amber">⚠️ Day Shock: one held name moved 5% or more today <span class="cap">(illustrative text)</span></div>
+        <div class="cap">ℹ️ Note 1 · ℹ️ Note 2 · ℹ️ Note 3 <i>(every Alerts placeholder renders here unchanged, buttons included)</i></div>
+      </div>
+      <div class="pane" id="pane-prices" hidden>
+        <table><tr><th>Ticker</th><th>Price</th><th>Today</th><th>Ticker</th><th>Price</th><th>Today</th></tr>
+        <tr><td>AAPL</td><td>…</td><td class="up2">+0.4%</td><td>GD</td><td>…</td><td class="dn2">-0.3%</td></tr>
+        <tr><td>ABBV</td><td>…</td><td class="up2">+0.2%</td><td>MRVL</td><td>…</td><td class="up2">+3.7%</td></tr>
+        <tr><td>AMZN</td><td>…</td><td class="dn2">-0.6%</td><td>MSFT</td><td>…</td><td class="up2">+0.1%</td></tr>
+        <tr><td>CRWD</td><td>…</td><td class="up2">+1.2%</td><td>SNOW</td><td>…</td><td class="dn2">-1.4%</td></tr>
+        <tr><td>DASH</td><td>…</td><td class="dn2">-5.2%</td><td>SPCX</td><td>…</td><td class="up2">+0.8%</td></tr></table>
+        <p class="cap">Prices: Finnhub (real-time) · refreshes every 60 s. <i>(Layout only: today's price strip renders here unchanged.)</i></p>
+      </div>
+      <div class="pane" id="pane-markets" hidden>
+        <div class="idx"><div class="dn"><b>DOW</b><span class="v">50,126.17</span><div class="c">▼ -0.23%</div></div><div class="dn"><b>S&amp;P 500</b><span class="v">7,233.63</span><div class="c">▼ -0.23%</div></div><div class="up"><b>NASDAQ</b><span class="v">24,429.88</span><div class="c">▲ +0.42%</div></div></div>
+        <p class="cap">📡 auto-refreshes every 60 s. On other pages the strip stays at the top, as today.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <div class="note"><h3>What changes</h3><ul>
+    <li>The index strip, the Act Today bar, Needs a look, ⚠️ Alerts and 💹 Live Prices leave the top of Home and become the dock's four tabs.</li>
+    <li>The Portfolio Command Center is the first thing on Home. On a bad day the protective banners (manual stops unreadable, held-stop basis, data outage) still sit above it and are never folded away.</li>
+    <li>Every tab label carries its count, so "🔴 Act Today 3" is on screen wherever you've scrolled, even with the dock collapsed.</li>
+    <li>From the Command Center down, nothing changes.</li></ul></div>
+  <div class="note q"><h3>Your picks</h3><ul>
+    <li><b>Q1</b> Version A (collapsible to the tab strip) or B (always open)? <i>Lead: A, open by default.</i></li>
+    <li><b>Q2</b> Rename the dock's "Alerts" to "Notices", so it isn't confused with the Command Center's risk Alerts tile (4🔴 3🟡)? <i>Lead: yes.</i></li>
+    <li><b>Q3</b> Default tab: Act Today when there's something to act on (or it wasn't checked), else Notices when a warning is showing, else Live Prices? <i>Lead: yes.</i></li>
+    <li><b>Q4</b> Markets in the dock on Home only; other pages keep the strip at the top? <i>Lead: yes.</i></li>
+    <li><b>Q5</b> A "Jump to Act Today" link in the Act Today tab? <i>Lead: yes, if Streamlit's anchor works there.</i></li>
+    <li><b>Q6</b> Dock height ~3 rows or ~5 rows (the toggle above)?</li></ul></div>
+</div>
+</div>
+
+<script>
+const screen = document.getElementById('screen'), dock = document.getElementById('dock'), strips = document.getElementById('strips');
+let ver = 'a';
+function setVer(v){
+  ver = v;
+  document.querySelectorAll('#ver button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  screen.classList.toggle('withdock', v !== 'today');
+  strips.style.display = v === 'today' ? '' : 'none';
+  document.getElementById('tog').style.display = v === 'a' ? '' : 'none';
+  if (v !== 'a') dock.classList.remove('collapsed');
+}
+document.querySelectorAll('#ver button').forEach(b => b.onclick = () => setVer(b.dataset.v));
+document.querySelectorAll('#wid button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#wid button').forEach(x => x.classList.toggle('on', x === b));
+  screen.classList.remove('laptop', 'phone'); screen.classList.add(b.dataset.w);
+});
+document.querySelectorAll('#hgt button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#hgt button').forEach(x => x.classList.toggle('on', x === b));
+  dock.style.setProperty('--dockh', b.dataset.h + 'px');
+});
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
+  document.querySelectorAll('.pane').forEach(p => p.hidden = p.id !== 'pane-' + t.dataset.t);
+  dock.classList.remove('collapsed'); document.getElementById('tog').textContent = '▾';
+});
+document.getElementById('tog').onclick = () => {
+  const c = dock.classList.toggle('collapsed');
+  document.getElementById('tog').textContent = c ? '▴' : '▾';
+};
+document.getElementById('jump').onclick = () => {
+  const s = document.getElementById('scroll'), t = document.getElementById('act-today');
+  s.scrollTo({top: t.offsetTop - 12, behavior: 'smooth'});
+};
+setVer('a');
+</script>
+</body>
+</html>

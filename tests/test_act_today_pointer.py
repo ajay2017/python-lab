@@ -266,6 +266,8 @@ def _home_if_node(tree: ast.Module) -> ast.If | None:
             and isinstance(node.test, ast.Compare)
             and isinstance(node.test.left, ast.Name)
             and node.test.left.id == "page"
+            and len(node.test.ops) == 1
+            and isinstance(node.test.ops[0], ast.Eq)  # not the `page != "🏠 Home"` index-strip guard
             and node.test.comparators
             and isinstance(node.test.comparators[0], ast.Constant)
             and node.test.comparators[0].value == "🏠 Home"

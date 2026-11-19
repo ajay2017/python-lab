@@ -117,6 +117,7 @@ from stock_analyzer import journal_match_view
 from stock_analyzer import report_display as _rdisp   # not `_rd`: app.py reuses `_rd` as a local (regime rows)
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer import broker_frame_view as _broker_frame_view
+from stock_analyzer import home_dock
 from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
@@ -4671,8 +4672,10 @@ def _index_strip():
         unsafe_allow_html=True,
     )
 
-_index_strip()
-st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+# 🏠 Home shows the strip in its bottom dock instead (docs/plans/home-dock.md, C0).
+if page != "🏠 Home":
+    _index_strip()
+    st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — MY PORTFOLIO
@@ -5111,6 +5114,19 @@ if page == "🏠 Home":
     # (Phase 0) persists the same opinions separately for Phase 2's future
     # grading harness.
     st.session_state["_judgment_opinions_today"] = []
+
+    # ── Home dock (docs/plans/home-dock.md, C0 probe) ──
+    # The CSS pins this container to the bottom, so where it is declared does not
+    # decide where it shows; it is declared first so later chunks can fill tabs
+    # from fill sites further down (same mechanism as the Alerts placeholders).
+    _dock_mode = home_dock.dock_mode(st.query_params.get("dock"))
+    st.markdown(home_dock.dock_css(_dock_mode), unsafe_allow_html=True)
+    with st.container(key=home_dock.DOCK_KEY):
+        with st.expander("📈 Markets", expanded=True, key=home_dock.DOCK_EXPANDER_KEY):
+            (_dock_tab_markets,) = st.tabs(["📈 Markets"], key=home_dock.DOCK_TABS_KEY)
+            with _dock_tab_markets:
+                with st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False):
+                    _index_strip()
 
     # ── Act Today pointer (Home redesign P2, docs/plans/home-redesign.md's
     # 2026-10-06 "P1 + P2 designed" section) — a one-line pointer at the very
