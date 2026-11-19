@@ -523,3 +523,48 @@ def test_live_nvda_friday_call_monday_buy():
     assert judge(c, t, D("2026-11-15"))["status"] == "acted"
     assert judge(c, t, D("2026-11-15"), window_trading_days=0)["status"] == "not_acted"
     assert judge(c, t, D("2026-11-15"), window_trading_days=1)["status"] == "acted"
+
+
+# ── arm(): the C4 caller contract as one function ───────────────────────────
+
+@pytest.mark.parametrize("row,expected", [
+    ({"entry_call_status": "acted", "credit_deduped": False}, "acted"),
+    ({"entry_call_status": "acted"}, "acted"),                 # flag absent = not deduped
+    ({"entry_call_status": "acted", "credit_deduped": True}, None),
+    ({"entry_call_status": "not_acted", "credit_deduped": False}, "passed"),
+    ({"entry_call_status": "not_acted"}, "passed"),
+    ({"entry_call_status": "still_open"}, None),
+    ({"entry_call_status": "unknown"}, None),
+    ({"entry_call_status": "excluded"}, None),
+    ({}, None),
+    ({"entry_call_status": None}, None),
+])
+def test_arm_by_status(row, expected):
+    assert eca.arm(row) == expected
+
+
+def test_arm_never_splits_on_acted_on_or_rec_type():
+    # acted_on False on a still-open row, and an excluded row that kept the OLD
+    # same-day credit (acted_on True): neither is an arm.
+    assert eca.arm({"entry_call_status": "still_open", "acted_on": False,
+                    "rec_type": "new_pick"}) is None
+    assert eca.arm({"entry_call_status": "excluded", "acted_on": True,
+                    "rec_type": "enter_now"}) is None
+    # a not_acted row with acted_on True would still be an arm by status
+    assert eca.arm({"entry_call_status": "not_acted", "acted_on": True}) == "passed"
+
+
+def test_arm_on_real_apply_to_matched_output():
+    recs = _recs(
+        {"id": 1, "ticker": "MRVL", "rec_date": "2026-11-06", "rec_type": "enter_now",
+         "already_held": False, "surfaced_at": "2026-11-06T13:00:00"},
+        {"id": 2, "ticker": "MRVL", "rec_date": "2026-11-06", "rec_type": "new_pick",
+         "surfaced_at": "2026-11-06T13:00:00"},
+        {"id": 3, "ticker": "AAPL", "rec_date": "2026-11-06", "rec_type": "buy_candidate"},
+        {"id": 4, "ticker": "AMD", "rec_date": "2026-11-06", "rec_type": "new_pick"},
+        {"id": 5, "ticker": "TSLA", "rec_date": "2026-11-30", "rec_type": "new_pick"},
+    )
+    trades = frame(trade(7, "MRVL", "BUY", "2026-11-09T15:00:00+00:00"))
+    out = eca.apply_to_matched(match_recs_to_trades(recs, trades), recs, trades,
+                               cutoff=D("2026-11-30"))
+    assert [eca.arm(r) for r in out] == [None, "acted", None, "passed", None]

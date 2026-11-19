@@ -460,3 +460,22 @@ def apply_to_matched(matched: list[dict], recs_df, trades_df, *, cutoff: date,
         if r["entry_call_status"] == STATUS_ACTED and not r["acted_on"]:
             r["credit_deduped"] = True
     return new_rows
+
+
+def arm(row: Mapping) -> "str | None":
+    """Which arm of a bought-vs-skipped split a row of `apply_to_matched` output
+    belongs to: "acted", "passed", or None (out of both arms).
+
+    The C4 caller contract of `apply_to_matched` as one implementation:
+      entry_call_status == "acted" and not credit_deduped -> "acted"
+      entry_call_status == "not_acted"                    -> "passed"
+      anything else (still_open, unknown, excluded, a credit-deduped acted
+      row, no status at all)                              -> None
+    Never split on `acted_on` or `rec_type` (see `apply_to_matched`).
+    """
+    status = row.get("entry_call_status")
+    if status == STATUS_ACTED and not row.get("credit_deduped"):
+        return "acted"
+    if status == STATUS_NOT_ACTED:
+        return "passed"
+    return None

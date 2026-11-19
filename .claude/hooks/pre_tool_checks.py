@@ -1046,6 +1046,11 @@ _GATE_FILES = {
     # carried over, its follow-through share, the recs lookback and the
     # Python-written bullets; added while still unwired.
     "stock_analyzer/debrief_entry_calls.py",
+    # Added 2026-11-18 (acted rule C4a, docs/plans/acted-rule-c4-spec.md): which
+    # entry calls the monthly Decision Review counts as bought / skipped / still
+    # open / not judged, and which price grades the engine vs the owner's figures;
+    # added while still unwired.
+    "stock_analyzer/monthly_entry_calls.py",
     # Added 2026-10-30 (finding #13): whether a same-day macro release has passed,
     # i.e. whether the Brief macro card / Pre-Event Playbook still show a pre-release
     # hold / reduce instruction; imported by the gate file act_today_view.

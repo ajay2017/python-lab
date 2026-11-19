@@ -527,16 +527,12 @@ def behavioural_rows(hist_df, trades_df, *, cutoff) -> "list[dict] | None":
         return None
     out: list[dict] = []
     for r in matched:
-        status = r.get("entry_call_status")
-        if status == eca.STATUS_ACTED and not r.get("credit_deduped"):
-            acted = True
-        elif status == eca.STATUS_NOT_ACTED:
-            acted = False
-        else:
+        side = eca.arm(r)
+        if side is None:
             continue
         out.append({"momentum_score": r.get("momentum_score"),
                     "composite_score": r.get("composite_score"),
-                    "acted_on": acted})
+                    "acted_on": side == "acted"})
     return out
 
 
