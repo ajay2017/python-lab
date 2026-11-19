@@ -267,15 +267,87 @@ def test_call_before_period_start_is_not_in_the_month():
     assert res["names"] == [] and res["counts"]["n_surfaced"] == 0
 
 
-def test_ud5_not_acted_plus_still_open_reads_still_open_and_is_in_neither_count():
+def test_not_acted_plus_still_open_reads_skipped_on_its_closed_call():
+    # Owner 2026-11-18 (replaces spec UD-5): a name is judged on its CLOSED calls.
     r = recs_of(rec(1, "AAPL", "2026-11-04"), rec(2, "AAPL", "2026-11-30"))
+    res = month(r, trades_of(), as_of=D("2026-12-06"))
+    assert status_of(res, "AAPL") == "not_acted"
+    c = res["counts"]
+    assert (c["n_open"], c["n_acted"], c["n_not_acted"]) == (0, 0, 1)
+    assert [row["rec_date"] for row in res["judged"]] == [D("2026-11-04")]   # closed call only
+    assert len(res["engine"]) == 2                   # both stay in the engine view
+    assert res["viz"]["flow"]["n_total"] == 1 and res["viz"]["flow"]["n_missed"] == 1
+    cell = _cell(res, "AAPL")
+    assert cell["n_calls"] == 2 and cell["last_call_date"] == "2026-11-30"
+    assert cell["window_end"] == "2026-11-06"        # the closed call's, not the open one's
+    assert res["viz"]["entry"]["open_names"] == []
+    assert mec.signal_lines(res["viz"]) == []        # not listed as still open
+
+
+def test_acted_plus_still_open_reads_acted():
+    r = recs_of(rec(1, "AAPL", "2026-11-03"), rec(2, "AAPL", "2026-11-30"))
+    t = trades_of(trade(1, "AAPL", "BUY", "2026-11-04T15:00:00+00:00"))
+    res = month(r, t, as_of=D("2026-12-06"))
+    assert status_of(res, "AAPL") == "acted"
+    assert res["counts"]["n_acted"] == 1 and res["counts"]["n_open"] == 0
+    assert res["viz"]["flow"]["n_acted"] == 1
+
+
+def test_all_calls_still_open_reads_still_open_and_is_in_neither_count():
+    r = recs_of(rec(1, "AAPL", "2026-11-27"), rec(2, "AAPL", "2026-11-30"))
     res = month(r, trades_of(), as_of=D("2026-12-06"))
     assert status_of(res, "AAPL") == "still_open"
     c = res["counts"]
     assert (c["n_open"], c["n_acted"], c["n_not_acted"]) == (1, 0, 0)
-    assert res["judged"] == []                       # neither call is in your view
-    assert len(res["engine"]) == 2                   # both stay in the engine view
+    assert res["judged"] == [] and len(res["engine"]) == 2
     assert res["viz"]["flow"]["n_total"] == 0
+    assert _cell(res, "AAPL")["window_end"] == "2026-12-02"   # the latest open call's
+    assert [x["ticker"] for x in res["viz"]["entry"]["open_names"]] == ["AAPL"]
+
+
+def _adapter(status, rec_date, id_=1, rec_type="new_pick", wend=None, tk="XYZ"):
+    return {"ticker": tk, "status": status, "rec_date": D(rec_date),
+            "window_end": D(wend) if wend else None, "rec_type": rec_type, "id": id_}
+
+
+def test_roll_up_unknown_plus_not_acted_reads_unknown():
+    # An unreadable buy date might have credited the name (C2 decision (d)), so an
+    # unknown call outranks a closed not-acted call. (The shared journal state makes
+    # the two statuses unreachable together through `build_month`; pin the rule.)
+    out = mec._roll_up([_adapter("not_acted", "2026-11-03", 1, wend="2026-11-05"),
+                        _adapter("unknown", "2026-11-09", 2, wend="2026-11-11")])
+    assert [(x["ticker"], x["status"], x["n_calls"]) for x in out] == [("XYZ", "unknown", 2)]
+    assert out[0]["window_end"] == D("2026-11-11")
+
+
+def test_roll_up_precedence_acted_unknown_not_acted_still_open():
+    order = ["acted", "unknown", "not_acted", "still_open"]
+    # each status wins over every status below it
+    for i, top in enumerate(order):
+        rows = [_adapter(st, f"2026-11-{3 + j:02d}", j + 1) for j, st in enumerate(order[i:])]
+        assert mec._roll_up(rows)[0]["status"] == top
+
+
+def test_october_like_enter_now_name_surfaced_many_days_last_open_is_skipped():
+    # 21 Enter Now names looked like this live: surfaced on many October days, the
+    # last call Thu 10-29 still open at 10-31, never bought.
+    days = ["2026-10-06", "2026-10-08", "2026-10-13", "2026-10-15",
+            "2026-10-20", "2026-10-22", "2026-10-29"]
+    r = recs_of(*[rec(i + 1, "NVDA", d, "enter_now", already_held=False)
+                  for i, d in enumerate(days)])
+    res = month(r, trades_of(), period=OCT, as_of=D("2026-11-08"))
+    assert status_of(res, "NVDA") == "not_acted"
+    cell = _cell(res, "NVDA")
+    assert cell["n_calls"] == 7 and cell["last_call_date"] == "2026-10-29"
+    assert cell["window_end"] == "2026-10-26"                 # the last CLOSED call's
+    c = res["counts"]
+    assert (c["n_surfaced"], c["n_acted"], c["n_not_acted"], c["n_open"]) == (1, 0, 1, 0)
+    assert [row["rec_date"].isoformat() for row in res["judged"]] == days[:-1]
+    assert all(eca.arm(row) == "passed" for row in res["judged"])
+    assert len(res["engine"]) == 7                            # the engine view is unchanged
+    assert res["viz"]["flow"]["n_missed"] == 1 and res["viz"]["flow"]["n_acted"] == 0
+    assert res["viz"]["entry"]["open_names"] == []
+    assert mec.signal_lines(res["viz"]) == []
 
 
 def test_flow_n_acted_equals_counts_n_acted():
@@ -523,8 +595,9 @@ def test_rule_note_exact_text_for_v2():
     assert mec.rule_note(_V2_ENTRY) == (
         "Acted on = a buy of that name on the call day or within 2 trading days "
         "after it (New Position, Add to Winner and Enter Now calls; an Enter Now "
-        "on a name you already held is left out). 3 still open at the month's "
-        "end and 1 not judged are in neither count. "
+        "on a name you already held is left out). 3 name(s) whose every call was "
+        "still open at the month's end and 1 not judged are in neither count; a "
+        "name with any closed call is judged on its closed calls. "
         "The band chart prices every call from its call-day price; the bought "
         "average uses your fill price, up to 2 trading days after the call. "
         "📜 Recommendations History and the other pages that count acted calls "
@@ -535,8 +608,8 @@ def test_rule_note_exact_text_for_v2():
 
 
 def test_rule_note_defaults_counts_to_zero_without_entry():
-    assert "0 still open at the month's end and 0 not judged" in mec.rule_note(
-        {"acted_rule_version": 2})
+    assert ("0 name(s) whose every call was still open at the month's end and 0 not "
+            "judged are in neither count") in mec.rule_note({"acted_rule_version": 2})
 
 
 @pytest.mark.parametrize("viz", [None, {}, {"acted_rule_version": None},
@@ -570,15 +643,43 @@ def test_acted_rule_caption_live_text():
     assert mec.acted_rule_caption(_V2_ENTRY, live=True) == expected
 
 
+def test_rule_note_live_drops_the_bought_average_clause():
+    live = mec.rule_note(_V2_ENTRY, live=True)
+    assert live == (
+        "Acted on = a buy of that name on the call day or within 2 trading days "
+        "after it (New Position, Add to Winner and Enter Now calls; an Enter Now "
+        "on a name you already held is left out). 3 name(s) whose every call was "
+        "still open at the month's end and 1 not judged are in neither count; a "
+        "name with any closed call is judged on its closed calls. "
+        "The band chart prices every call from its call-day price. "
+        "📜 Recommendations History and the other pages that count acted calls "
+        "still use the older rule (a same-day trade tagged as a recommendation), "
+        "so their counts can differ.")
+    assert "bought average" not in live and "fill price" not in live
+    assert mec.rule_note(_V2_ENTRY, live=False) == mec.rule_note(_V2_ENTRY)
+    assert "bought average uses your fill price" in mec.rule_note(_V2_ENTRY)
+    assert mec.rule_note(None, live=True) is None and mec.rule_note({}, live=True) is None
+
+
 def test_scope_words_exact_strings():
     assert mec.scope_words(_V2_ENTRY) == {
         "current_rule": True,
+        "sankey_labels": ("Entry calls judged", "Bought", "Skipped",
+                          "Win (bought)", "Loss (bought)", "Flat / Open (bought)",
+                          "Rose (skipped)", "Fell (skipped)", "Flat / Open (skipped)"),
+        "skipped_avg_scope": "the names you didn't buy within a call's decision window",
+        "rose_phrase": "rose (skipped)", "fell_phrase": "fell (skipped)",
         "names": "distinct entry-call tickers (New Position, Add to Winner, Enter Now)",
         "flow_title": "This month's signal flow — entry calls → bought / skipped → outcome",
         "missed_scope": "entry calls (New Position, Add to Winner, Enter Now)",
     }
     assert mec.scope_words(None) == {
         "current_rule": False,
+        "sankey_labels": ("New Positions Surfaced", "Acted", "Not acted",
+                          "Win (acted)", "Loss (acted)", "Flat / Open (acted)",
+                          "Rose (missed)", "Fell — dodged", "Flat / Open (missed)"),
+        "skipped_avg_scope": "the names you never bought",
+        "rose_phrase": "rose (missed)", "fell_phrase": "fell (dodged)",
         "names": "distinct New-Position tickers",
         "flow_title": "This month's signal flow — New Positions → acted / missed → outcome",
         "missed_scope": "New Positions to Initiate",
@@ -690,3 +791,215 @@ def test_scope_words_current_rule_flag_follows_the_version():
     assert mec.scope_words({"acted_rule_version": 2})["current_rule"] is True
     for viz in (None, {}, {"acted_rule_version": 1}, {"acted_rule_version": float("nan")}):
         assert mec.scope_words(viz)["current_rule"] is False
+
+
+# ── bought outside the decision window (owner 2026-11-18: keep it skipped, label it) ──
+
+def _mrvl_october():
+    r = recs_of(rec(1, "MRVL", "2026-10-06"), rec(2, "MRVL", "2026-10-07"))
+    t = trades_of(
+        trade(424, "MRVL", "BUY", "2026-10-13T15:00:00+00:00"),
+        trade(419, "MRVL", "BUY", "2026-10-14T15:00:00+00:00", "DIVERSIFY_ADD"),
+        trade(495, "MRVL", "BUY", "2026-10-15T15:00:00+00:00", "DIVERSIFY_ADD"),
+        trade(500, "MRVL", "BUY", "2026-10-30T15:00:00+00:00"),
+        trade(435, "MRVL", "SELL", "2026-10-20T15:00:00+00:00", "RECOMMENDATION"))
+    return month(r, t, period=OCT, as_of=D("2026-11-08"))
+
+
+def test_live_mrvl_october_is_skipped_and_marked_bought_outside_the_window():
+    res = _mrvl_october()
+    assert status_of(res, "MRVL") == "not_acted"          # counts and rule unchanged
+    assert res["counts"]["n_not_acted"] == 1 and res["counts"]["n_acted"] == 0
+    assert _cell(res, "MRVL")["bought_outside"] == [
+        "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-30"]
+    assert res["viz"]["entry"]["bought_outside_names"] == [{
+        "ticker": "MRVL",
+        "buy_dates": ["2026-10-13", "2026-10-14", "2026-10-15", "2026-10-30"],
+        "rec_types": ["new_pick"], "last_call_date": "2026-10-07"}]
+    assert json.loads(json.dumps(res["viz"])) == res["viz"]
+
+
+def test_bought_outside_bullet_exact_string():
+    lines = mec.signal_lines(_mrvl_october()["viz"])
+    assert lines == [
+        "Bought this month, but not within a call's decision window "
+        "(counted as skipped):",
+        "• MRVL: bought Tue Oct 13, Wed Oct 14, Thu Oct 15 and Fri Oct 30; its "
+        "last call was Wed Oct 7."]
+    for ln in lines:
+        assert not any(ch in ln for ch in ("**", "*", "_", "$"))
+
+
+def test_bought_outside_a_sell_never_counts():
+    r = recs_of(rec(1, "MRVL", "2026-10-06"))
+    t = trades_of(trade(1, "MRVL", "SELL", "2026-10-20T15:00:00+00:00"))
+    res = month(r, t, period=OCT, as_of=D("2026-11-08"))
+    assert status_of(res, "MRVL") == "not_acted"
+    assert _cell(res, "MRVL")["bought_outside"] == []
+    assert res["viz"]["entry"]["bought_outside_names"] == []
+    assert mec.signal_lines(res["viz"]) == []
+
+
+def test_bought_outside_a_buy_outside_the_period_never_counts():
+    r = recs_of(rec(1, "MRVL", "2026-10-06"))
+    t = trades_of(trade(1, "MRVL", "BUY", "2026-09-30T15:00:00+00:00"),
+                  trade(2, "MRVL", "BUY", "2026-11-02T15:00:00+00:00"))
+    res = month(r, t, period=OCT, as_of=D("2026-11-08"))
+    assert status_of(res, "MRVL") == "not_acted"
+    assert _cell(res, "MRVL")["bought_outside"] == []
+    assert res["viz"]["entry"]["bought_outside_names"] == []
+
+
+def test_bought_outside_an_acted_name_never_gets_the_mark():
+    r = recs_of(rec(1, "MRVL", "2026-10-06"))
+    t = trades_of(trade(1, "MRVL", "BUY", "2026-10-07T15:00:00+00:00"),
+                  trade(2, "MRVL", "BUY", "2026-10-20T15:00:00+00:00"))
+    res = month(r, t, period=OCT, as_of=D("2026-11-08"))
+    assert status_of(res, "MRVL") == "acted"
+    assert _cell(res, "MRVL")["bought_outside"] == []
+    assert res["viz"]["entry"]["bought_outside_names"] == []
+
+
+def test_bought_outside_only_marks_names_that_were_bought():
+    r = recs_of(rec(1, "MRVL", "2026-10-06"), rec(2, "AMD", "2026-10-06"))
+    t = trades_of(trade(1, "MRVL", "BUY", "2026-10-20T15:00:00+00:00"))
+    res = month(r, t, period=OCT, as_of=D("2026-11-08"))
+    assert _cell(res, "AMD")["bought_outside"] == []
+    assert [x["ticker"] for x in res["viz"]["entry"]["bought_outside_names"]] == ["MRVL"]
+
+
+def test_bought_outside_dates_are_et_days_sorted_and_unique():
+    r = recs_of(rec(1, "MRVL", "2026-10-06"))
+    t = trades_of(trade(1, "MRVL", "BUY", "2026-10-21T15:00:00+00:00"),
+                  trade(2, "MRVL", "BUY", "2026-10-21T18:00:00+00:00"),
+                  # 20:30 ET Wed 10-14 = 00:30Z Thu 10-15: dated on its ET day
+                  trade(3, "MRVL", "BUY", "2026-10-15T00:30:00+00:00"))
+    res = month(r, t, period=OCT, as_of=D("2026-11-08"))
+    assert _cell(res, "MRVL")["bought_outside"] == ["2026-10-14", "2026-10-21"]
+
+
+def test_buy_dates_text_shapes_and_the_four_date_cap():
+    f = mec._buy_dates_text
+    assert f(["2026-10-13"]) == "Tue Oct 13"
+    assert f(["2026-10-13", "2026-10-14"]) == "Tue Oct 13 and Wed Oct 14"
+    assert f(["2026-10-13", "2026-10-14", "2026-10-15"]) == (
+        "Tue Oct 13, Wed Oct 14 and Thu Oct 15")
+    four = ["2026-10-13", "2026-10-14", "2026-10-15", "2026-10-30"]
+    assert f(four) == "Tue Oct 13, Wed Oct 14, Thu Oct 15 and Fri Oct 30"
+    assert f(four + ["2026-10-31"]) == (
+        "Tue Oct 13, Wed Oct 14, Thu Oct 15, Fri Oct 30 and 1 more")
+    assert f(four + ["2026-10-19", "2026-10-20", "2026-10-21"]).endswith("Fri Oct 30 and 3 more")
+
+
+def test_bought_outside_bullet_without_a_last_call_date_and_for_an_older_viz():
+    v = {"acted_rule_version": 2, "entry": {"bought_outside_names": [
+        {"ticker": "MRVL", "buy_dates": ["2026-10-13"], "rec_types": ["new_pick"]}]}}
+    assert mec.signal_lines(v)[-1] == "• MRVL: bought Tue Oct 13."
+    assert mec.signal_lines({"acted_rule_version": 2, "entry": {}}) == []   # a C4-era row
+    assert mec.signal_lines({"entry": v["entry"]}) == []                    # v1 viz
+
+
+def test_bought_outside_block_sits_after_still_open_and_not_judged_before_undated():
+    viz = {"acted_rule_version": 2, "entry": {
+        "open_names": [{"ticker": "AAA", "rec_types": ["new_pick"], "n_calls": 1,
+                        "last_call_date": "2026-10-30", "window_end": "2026-11-03"}],
+        "unknown_names": [{"ticker": "BBB", "rec_types": ["new_pick"], "n_calls": 1,
+                           "last_call_date": "2026-10-12", "reason": "trade_date_unreadable"}],
+        "bought_outside_names": [{"ticker": "CCC", "buy_dates": ["2026-10-13"],
+                                  "rec_types": ["new_pick"], "last_call_date": "2026-10-07"}],
+        "n_undated": 2}}
+    heads = [ln for ln in mec.signal_lines(viz) if not ln.startswith("•")]
+    assert heads == ["Still open at the month's end (not counted as bought or skipped):",
+                     "Not judged (not counted as bought or skipped):",
+                     "Bought this month, but not within a call's decision window "
+                     "(counted as skipped):"]
+    assert mec.signal_lines(viz)[-1].startswith("• 2 entry call row(s)")
+
+
+# ── the monthly branch wiring (app.py has no tests; grep the source) ────────
+
+def test_the_monthly_branch_reads_labels_and_live_flag_from_the_pure_module():
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parent.parent.joinpath("app.py").read_text(
+        encoding="utf-8")
+    a = src.index('elif _rpt_kind == "🧭 Monthly Decision Review (AI)":')
+    branch = src[a:src.index('elif _rpt_kind == "🧾 Tax Report":', a)]
+    assert '_signal_flow_sankey(_mr_flow, _mr_scope["flow_title"],' in branch
+    assert '_mr_scope["sankey_labels"]' in branch
+    assert "_mr_mec.rule_note(_mr_viz, live=_mr_live)" in branch
+    assert '_mr_scope["skipped_avg_scope"]' in branch
+    assert "except ValueError:" in branch
+    assert "The report couldn't be built (an internal " in branch
+    assert "error), so nothing was generated or saved." in branch
+    # both reads reach back to the earliest call whose window still reaches the period
+    assert branch.count("_mr_dec.recs_load_start(") == 2
+    assert "classify_recommendations_read(_mr_recs, _mr_start, _mr_end)" in branch
+    # the shared Sankey builder keeps the older wording as its default (📜 Recommendations History)
+    sk = src[src.index("def _signal_flow_sankey("):src.index("def _cached_price_xcheck")]
+    for old in ("New Positions Surfaced", "Fell — dodged", "Win (acted)"):
+        assert old in sk
+    rh_call = src[src.index("_rh_sk_fig"):src.index("_rh_sk_fig") + 300]
+    assert "_signal_flow_sankey(" in rh_call and "sankey_labels" not in rh_call
+
+
+# ── a buy an EARLIER month's call already credited is not "outside the window" ──
+
+def test_bought_outside_earlier_months_call_window_covers_the_buy():
+    # Wed 09-30 call (window ends Fri 10-02), BUY Thu 10-01 (that call's credit), and
+    # a later October call nobody bought.
+    r_all = recs_of(rec(1, "MRVL", "2026-09-30"), rec(2, "MRVL", "2026-10-20"))
+    t = trades_of(trade(1, "MRVL", "BUY", "2026-10-01T15:00:00+00:00"))
+    res = month(r_all, t, period=OCT, as_of=D("2026-11-08"))
+    assert status_of(res, "MRVL") == "not_acted"           # only the Oct-20 call is judged
+    assert _cell(res, "MRVL")["n_calls"] == 1
+    assert _cell(res, "MRVL")["bought_outside"] == []
+    assert res["viz"]["entry"]["bought_outside_names"] == []
+    assert mec.signal_lines(res["viz"]) == []
+    # without the earlier call loaded, the same buy WOULD read outside (why the load reaches back)
+    only_oct = month(recs_of(rec(2, "MRVL", "2026-10-20")), t, period=OCT, as_of=D("2026-11-08"))
+    assert _cell(only_oct, "MRVL")["bought_outside"] == ["2026-10-01"]
+
+
+def test_bought_outside_an_earlier_already_held_enter_now_does_not_cover_the_buy():
+    r = recs_of(rec(1, "MRVL", "2026-09-30", "enter_now", already_held=True),
+                rec(2, "MRVL", "2026-10-20"))
+    t = trades_of(trade(1, "MRVL", "BUY", "2026-10-01T15:00:00+00:00"))
+    res = month(r, t, period=OCT, as_of=D("2026-11-08"))
+    assert _cell(res, "MRVL")["bought_outside"] == ["2026-10-01"]
+
+
+def test_bought_outside_a_buy_past_an_earlier_calls_window_is_still_outside():
+    # Wed 09-30 call: window ends Fri 10-02. BUY Tue 10-06 is past it.
+    r = recs_of(rec(1, "MRVL", "2026-09-30"), rec(2, "MRVL", "2026-10-20"))
+    t = trades_of(trade(1, "MRVL", "BUY", "2026-09-28T15:00:00+00:00"),
+                  trade(2, "MRVL", "BUY", "2026-10-06T15:00:00+00:00"))
+    res = month(r, t, period=OCT, as_of=D("2026-11-08"))
+    assert _cell(res, "MRVL")["bought_outside"] == ["2026-10-06"]
+
+
+def test_extra_earlier_rows_change_no_count_view_or_surfaced_name():
+    in_period = [rec(1, "AAA", "2026-10-06"), rec(2, "AAA", "2026-10-29"),
+                 rec(3, "BBB", "2026-10-07", "enter_now", already_held=False),
+                 rec(4, "CCC", "2026-10-13", "add_winner")]
+    earlier = [rec(10, "AAA", "2026-09-28"), rec(11, "ZZZ", "2026-09-29"),
+               rec(12, "CCC", "2026-10-01", "enter_now", already_held=True),
+               rec(13, "QQQ", "2026-09-30", "buy_candidate")]
+    t = trades_of(trade(1, "CCC", "BUY", "2026-10-14T15:00:00+00:00"))
+    kw = dict(period=OCT, as_of=D("2026-11-08"),
+              prices={"AAA": 110.0, "BBB": 90.0, "CCC": 105.0, "ZZZ": 50.0},
+              spy={D("2026-10-01"): 100.0, D("2026-11-08"): 101.0})
+    a = month(recs_of(*in_period), t, **kw)
+    b = month(recs_of(*(earlier + in_period)), t, **kw)
+    assert a["counts"] == b["counts"] and b["counts"]["n_surfaced"] == 3
+
+    def strip(res):
+        return [{k: v for k, v in n.items() if k != "bought_outside"} for n in res["names"]]
+
+    assert strip(a) == strip(b)
+    assert a["engine"] == b["engine"] and a["judged"] == b["judged"]
+    for k in ("flow", "bands", "missed", "missed_split", "avg_skipped_names_alpha"):
+        assert a["viz"][k] == b["viz"][k], k
+    ea, eb = dict(a["viz"]["entry"]), dict(b["viz"]["entry"])
+    ea.pop("bought_outside_names")
+    eb.pop("bought_outside_names")
+    assert ea == eb

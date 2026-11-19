@@ -805,7 +805,7 @@ def test_render_intelligence_email_footnote_present_for_a_current_rule_report():
     html = notify.render_intelligence_email(rep)
     from stock_analyzer.util import safe_html
     assert safe_html(mec.rule_note(viz)) in html
-    assert "2 still open at the month" in html
+    assert "2 name(s) whose every call was still open at the month" in html
     assert "older rule" in html
     # under the metric strip, before the first section
     assert html.index("Names you skipped") < html.index("Acted on =") < html.index("Entry text.")

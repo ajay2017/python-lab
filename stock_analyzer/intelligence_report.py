@@ -73,6 +73,7 @@ One systematic behavioural pattern grounded only in this data (examples: "you ac
 Rules:
 - Only use facts from the data package. Never invent recommendations, trades, prices, tickers, or events.
 - Counts of names, recommendations, or outcomes are DISTINCT tickers and must match the figures in the data package exactly. NEVER state a count larger than the total names surfaced, and NEVER invent a separate "graded outcomes" tally — the reader sees the exact counts in a header and chart above your text, and your words must agree with them.
+- A name listed in the data as bought outside the decision window was held by the investor: never say skipping it avoided a loss or missed a gain, and never call it ignored.
 - Never recommend buying or selling a specific name. Never state, suggest, or change a threshold/gate value.
 - No disclaimers, no preamble. End after the third section."""
 
@@ -90,7 +91,7 @@ def _pct(v) -> str:
         return "—"
 
 
-def classify_recommendations_read(recs_or_none) -> str:
+def classify_recommendations_read(recs_or_none, period_start=None, period_end=None) -> str:
     """Classify a recommendations read for the monthly-report generation gate.
 
     Returns one of:
@@ -111,6 +112,16 @@ def classify_recommendations_read(recs_or_none) -> str:
         return "outage"
     if recs_or_none.empty:
         return "empty"
+    if (period_start is not None and period_end is not None
+            and "rec_date" in recs_or_none.columns):
+        # The load reaches back before `period_start` (an earlier call's window can
+        # cover a buy in the period), so "empty" means no call DATED in the period.
+        from stock_analyzer import entry_call_action as _eca
+        ps, pe = _eca._call_date(period_start), _eca._call_date(period_end)
+        if ps is not None and pe is not None:
+            dated = (_eca._call_date(v) for v in recs_or_none["rec_date"])
+            if not any(d is not None and ps <= d <= pe for d in dated):
+                return "empty"
     return "ready"
 
 
@@ -220,6 +231,7 @@ def build_report_package(
         "n_unknown":      0,
         "open_names":     [],
         "unknown_names":  [],
+        "bought_outside_names": [],
         "window_trading_days": eca._window(None),
         "n_graded":       0,
         "action_rate":    None,
@@ -257,6 +269,7 @@ def build_report_package(
     package["n_unknown"]   = counts["n_unknown"]
     package["open_names"]    = viz["entry"]["open_names"]
     package["unknown_names"] = viz["entry"]["unknown_names"]
+    package["bought_outside_names"] = viz["entry"].get("bought_outside_names", [])
     # n_total = the JUDGED names (acted + skipped), the basis the flow chart uses.
     package["n_total"]     = flow["n_total"]
     package["n_acted"]     = flow["n_acted"]
@@ -350,6 +363,18 @@ def _names_line(items, with_reason: bool) -> str:
     return ", ".join(bits)
 
 
+def _bought_outside_line(items) -> str:
+    """"MRVL (bought 2026-10-13, 2026-10-14; last call 2026-10-07), ..." for the prompt."""
+    from stock_analyzer import debrief_entry_calls as dec
+    bits = []
+    for it in dec._rows_of(items):
+        dates = ", ".join(str(d) for d in dec._rows_of(it.get("buy_dates")))
+        last = it.get("last_call_date")
+        bits.append(f"{it.get('ticker')} (bought {dates}"
+                    + (f"; last call {last})" if last else ")"))
+    return ", ".join(bits)
+
+
 def _format_prompt(package: dict) -> str:
     from stock_analyzer import entry_call_action as eca
     from stock_analyzer import debrief_entry_calls as dec
@@ -404,6 +429,13 @@ def _format_prompt(package: dict) -> str:
             "Not judged (already listed by the app under Signal discipline; never "
             "call them skipped or acted on): "
             + _names_line(package["unknown_names"], True))
+    if package.get("bought_outside_names"):
+        lines.append(
+            "Bought this month but not within a call's decision window (counted as "
+            "skipped; the investor HELD these names, so never say skipping them avoided "
+            "a loss or missed a gain, and never call them ignored; already listed by the "
+            "app under Signal discipline): "
+            + _bought_outside_line(package["bought_outside_names"]))
     if not package.get("q0_ready"):
         lines.append(
             f"NOTE: too few of these surfacings have matured enough to grade entry quality "
@@ -423,12 +455,24 @@ def _format_prompt(package: dict) -> str:
         f"  Avg ALPHA vs SPY — acted: {_pct(package.get('avg_acted_alpha'))} · missed: {_pct(package.get('avg_missed_alpha'))}",
         f"  Skipped-minus-acted average return gap (raw return, NOT alpha; skipped minus acted; positive = the skipped names did better): {_pct(package.get('missed_alpha'))}",
     ]
+    # A skipped name the investor bought outside the decision window was HELD:
+    # "missed" there is the cue that made a report say skipping it avoided a loss.
+    held_outside = {str(it.get("ticker")) for it in
+                    dec._rows_of(package.get("bought_outside_names"))}
+
+    def _tag(row) -> str:
+        if row["acted_on"]:
+            return "acted"
+        if str(row.get("ticker")) in held_outside:
+            return "skipped — bought outside the window, held"
+        return "missed"
+
     if package.get("best"):
         b = package["best"]
-        lines.append(f"  Best outcome: {b['ticker']} {_pct(b['outcome_pct'])} (alpha {_pct(b.get('alpha_pct'))}, {'acted' if b['acted_on'] else 'missed'})")
+        lines.append(f"  Best outcome: {b['ticker']} {_pct(b['outcome_pct'])} (alpha {_pct(b.get('alpha_pct'))}, {_tag(b)})")
     if package.get("worst"):
         w = package["worst"]
-        lines.append(f"  Worst outcome: {w['ticker']} {_pct(w['outcome_pct'])} (alpha {_pct(w.get('alpha_pct'))}, {'acted' if w['acted_on'] else 'missed'})")
+        lines.append(f"  Worst outcome: {w['ticker']} {_pct(w['outcome_pct'])} (alpha {_pct(w.get('alpha_pct'))}, {_tag(w)})")
 
     if package.get("band_rows"):
         lines.append("")

@@ -591,6 +591,9 @@ def test_run_debrief_both_signal_reads_failing_names_both_failures(monkeypatch):
 
 # ── _run_monthly_report: the previous CALENDAR month (U12) ────────────────────
 
+from stock_analyzer import debrief_entry_calls as _MONTHLY_DEC
+
+
 def _capture_load_recommendations(monkeypatch, captured):
     """Empty (not None) recs frame + a healthy DB probe -> _run_monthly_report
     logs 'nothing to report yet' and returns right after the call whose kwargs
@@ -617,7 +620,7 @@ def _monthly_window(monkeypatch, when, force=True):
 def test_run_monthly_report_covers_the_previous_calendar_month(monkeypatch):
     rc, cap = _monthly_window(monkeypatch, datetime.datetime(2026, 8, 16, 18, 0, 0))  # a Sunday
     assert rc == 0
-    assert cap["start_date"] == datetime.date(2026, 7, 1)
+    assert cap["start_date"] == _MONTHLY_DEC.recs_load_start(datetime.date(2026, 7, 1))
     assert cap["end_date"] == datetime.date(2026, 7, 31)
 
 
@@ -625,16 +628,16 @@ def test_run_monthly_report_first_sunday_of_december_covers_november(monkeypatch
     """The owner's 12-06 email: November 1-30, no 28-day rolling window."""
     rc, cap = _monthly_window(monkeypatch, datetime.datetime(2026, 12, 6, 18, 0, 0), force=False)
     assert rc == 0
-    assert (cap["start_date"], cap["end_date"]) == (datetime.date(2026, 11, 1),
-                                                    datetime.date(2026, 11, 30))
+    assert (cap["start_date"], cap["end_date"]) == (
+        _MONTHLY_DEC.recs_load_start(datetime.date(2026, 11, 1)), datetime.date(2026, 11, 30))
 
 
 def test_run_monthly_report_first_sunday_on_a_dst_change_day(monkeypatch):
     """2026-11-01 is both a first Sunday and the fall-back day."""
     rc, cap = _monthly_window(monkeypatch, datetime.datetime(2026, 11, 1, 18, 0, 0), force=False)
     assert rc == 0
-    assert (cap["start_date"], cap["end_date"]) == (datetime.date(2026, 10, 1),
-                                                    datetime.date(2026, 10, 31))
+    assert (cap["start_date"], cap["end_date"]) == (
+        _MONTHLY_DEC.recs_load_start(datetime.date(2026, 10, 1)), datetime.date(2026, 10, 31))
 
 
 @pytest.mark.parametrize("when", [
@@ -664,15 +667,16 @@ def test_run_monthly_report_forced_retry_later_in_the_month_lands_on_the_same_pe
     rc, retry = _monthly_window(monkeypatch, when)
     assert rc == 0
     assert retry["end_date"] == original["end_date"] == datetime.date(2026, 7, 31)
-    assert retry["start_date"] == original["start_date"] == datetime.date(2026, 7, 1)
+    assert retry["start_date"] == original["start_date"] == _MONTHLY_DEC.recs_load_start(
+        datetime.date(2026, 7, 1))
     assert retry["end_date"] != when.date(), "must not regress to raw now_et.date()"
 
 
 def test_run_monthly_report_in_january_covers_the_previous_decembers_calendar_month(monkeypatch):
     rc, cap = _monthly_window(monkeypatch, datetime.datetime(2027, 1, 3, 18, 0, 0), force=False)
     assert rc == 0
-    assert (cap["start_date"], cap["end_date"]) == (datetime.date(2026, 12, 1),
-                                                    datetime.date(2026, 12, 31))
+    assert (cap["start_date"], cap["end_date"]) == (
+        _MONTHLY_DEC.recs_load_start(datetime.date(2026, 12, 1)), datetime.date(2026, 12, 31))
 
 
 # ── _run_monthly_report: offline contract (an unreadable read is a FAILURE) ───
@@ -925,3 +929,36 @@ def test_run_monthly_report_judges_at_the_period_end_not_the_run_date(monkeypatc
     assert seen["kw"]["as_of"] == datetime.date(2026, 12, 6)
     assert [n["status"] for n in seen["out"]["names"]] == ["still_open"]
     assert seen["out"]["counts"]["n_open"] == 1
+
+
+def test_run_monthly_report_loads_recs_back_to_recs_load_start_of_the_period(monkeypatch):
+    """A buy an earlier month's call already credited must not read "bought outside
+    the window": the load reaches back to the earliest call whose window still reaches
+    period_start; the judgement still covers only period_start..period_end."""
+    from stock_analyzer import debrief_entry_calls as dec
+    seen = {}
+
+    def _load(**kw):
+        seen.update(kw)
+        return pd.DataFrame({"ticker": ["AAPL"]})
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(cr.db, "load_recommendations_or_none", _load)
+    monkeypatch.setattr(cr.db, "load_trades_or_none", lambda: pd.DataFrame())
+    monkeypatch.setattr(cr.db, "load_weekly_debriefs", lambda limit=5: pd.DataFrame())
+    monkeypatch.setattr("stock_analyzer.data.fetch_live_prices", lambda *a, **k: {})
+    import yfinance
+    monkeypatch.setattr(yfinance, "download", lambda *a, **k: pd.DataFrame())
+    from stock_analyzer import intelligence_report as ir
+    monkeypatch.setattr(ir, "build_report_package",
+                        lambda **kw: {"judge_state": "ok", "has_data": False,
+                                      "n_surfaced": 0, "n_acted": 0, "n_missed": 0,
+                                      "n_open": 0, "n_unknown": 0, "n_graded": 0,
+                                      "q0_ready": False})
+    monkeypatch.setattr(cr, "_notify_failure", lambda m, d: None)
+    monkeypatch.setattr(cr, "_LAST_LANE_FAILURE_DETAIL", None)
+    cr._run_monthly_report(cr._ET.localize(datetime.datetime(2026, 12, 6, 18, 0, 0)),
+                           force=False)
+    assert seen["start_date"] == dec.recs_load_start(datetime.date(2026, 11, 1))
+    assert seen["start_date"] < datetime.date(2026, 11, 1)
+    assert seen["end_date"] == datetime.date(2026, 11, 30)

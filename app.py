@@ -4198,8 +4198,10 @@ def _cached_analyst_coverage_recent() -> dict:
 # recommendations_history.signal_flow() dict. Shared by the Recommendations
 # History page and the 📄 Reports monthly decision review so the two can never drift.
 # Returns a go.Figure, or None when there's nothing to draw.
-def _signal_flow_sankey(flow: dict, title: str):
-    _base_labels = [
+def _signal_flow_sankey(flow: dict, title: str, labels=None):
+    # `labels`: the nine node labels in this order (a current-rule monthly passes
+    # monthly_entry_calls.scope_words(viz)["sankey_labels"]); None = the older wording.
+    _base_labels = list(labels) if labels else [
         "New Positions Surfaced",
         "Acted",        "Not acted",
         "Win (acted)",  "Loss (acted)",  "Flat / Open (acted)",
@@ -42624,9 +42626,10 @@ elif page == "📄 Reports":
             "- **🧭 Monthly Decision Review (AI)**: is the engine picking well, and do you act "
             "on what it surfaces. Its entry-call counts follow the same rule: a New Position, "
             "Add to Winner or Enter Now call counts as acted on when you bought that name on the "
-            f"call day or within {_RPT_ENTRY_WINDOW_N} trading day(s) after it; a call still "
-            "inside that window at the month's end is listed by name as still open and counted "
-            "as neither bought nor skipped. Frozen once generated; it is not a returns report "
+            f"call day or within {_RPT_ENTRY_WINDOW_N} trading day(s) after it; a name is judged "
+            "on its closed calls, and only a name whose every call was still inside that window "
+            "at the month's end is listed by name as still open and counted as neither bought "
+            "nor skipped. Frozen once generated; it is not a returns report "
             "(for the month's result, use Performance Review → Last month).\n"
             "- **🧾 Tax Report**: realized short- and long-term gains by tax year, "
             "with wash-sale flags."
@@ -43895,6 +43898,7 @@ elif page == "📄 Reports":
             from stock_analyzer import db as _ai_db
             from stock_analyzer import intelligence_report as _ir
             from stock_analyzer import monthly_entry_calls as _mr_mec
+            from stock_analyzer import debrief_entry_calls as _mr_dec
             from stock_analyzer import report_periods as _rp
             from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED as _MR_MIN_GRADED
             from stock_analyzer.market_time import today_et as _mr_today_et
@@ -43954,8 +43958,13 @@ elif page == "📄 Reports":
                     # actually returns None) so classify_recommendations_read can
                     # tell a DB outage apart from a genuine "nothing recorded
                     # yet" — same class as the Weekly Debrief fix above.
-                    _mr_recs  = _ai_db.load_recommendations_or_none(start_date=_mr_start, end_date=_mr_end)
-                    _mr_status = _ir.classify_recommendations_read(_mr_recs)
+                    # The load reaches back to recs_load_start(period_start) (the earliest
+                    # call whose decision window still reaches the period) so a buy an
+                    # earlier month's call already credited is never labelled "bought
+                    # outside the window"; build_month still judges only the period's calls.
+                    _mr_recs  = _ai_db.load_recommendations_or_none(
+                        start_date=_mr_dec.recs_load_start(_mr_start), end_date=_mr_end)
+                    _mr_status = _ir.classify_recommendations_read(_mr_recs, _mr_start, _mr_end)
                     # The journal too: a failed read must never grade every name "missed".
                     _mr_trades = _ai_db.load_trades_or_none()
                     if _mr_status == "outage":
@@ -44020,14 +44029,22 @@ elif page == "📄 Reports":
                         except Exception:
                             _mr_weekly = []
 
-                        _mr_pkg = _ir.build_report_package(
-                            period_start=_mr_start, period_end=_mr_end,
-                            recs_df=_mr_recs, trades_df=_mr_trades,
-                            current_prices=_mr_prices, spy_close_by_date=_mr_spy_by_date,
-                            weekly_rows=_mr_weekly, min_graded=_MR_MIN_GRADED,
-                            as_of=_mr_today_et(),   # outcomes use live prices: measure SPY to the same day
-                        )
-                        _mr_refusal = _ir.judge_state_error(_mr_pkg)
+                        try:
+                            _mr_pkg = _ir.build_report_package(
+                                period_start=_mr_start, period_end=_mr_end,
+                                recs_df=_mr_recs, trades_df=_mr_trades,
+                                current_prices=_mr_prices, spy_close_by_date=_mr_spy_by_date,
+                                weekly_rows=_mr_weekly, min_graded=_MR_MIN_GRADED,
+                                as_of=_mr_today_et(),   # outcomes use live prices: measure SPY to the same day
+                            )
+                            _mr_refusal = _ir.judge_state_error(_mr_pkg)
+                        except ValueError:
+                            # build_month raises ValueError on inconsistent dates (a caller
+                            # bug, not a data state); any ValueError here ends the build
+                            # the same way: shown, nothing generated or saved.
+                            _mr_pkg = None
+                            _mr_refusal = ("The report couldn't be built (an internal "
+                                           "error), so nothing was generated or saved.")
                         _mr_result = (None if _mr_refusal is not None
                                       else _ir.generate_report(_mr_pkg, _ai_api_key))
                         if _mr_refusal is not None:
@@ -44142,7 +44159,9 @@ elif page == "📄 Reports":
                     try:
                         _mr_ps_d = pd.to_datetime(_mr.get("period_start")).date() if _mr.get("period_start") else None
                         _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else _mr_today_et()
-                        _mr_recs2 = _ai_db.load_recommendations_or_none(start_date=_mr_ps_d, end_date=_mr_pe_d)
+                        _mr_recs2 = _ai_db.load_recommendations_or_none(
+                            start_date=_mr_dec.recs_load_start(_mr_ps_d) if _mr_ps_d else None,
+                            end_date=_mr_pe_d)
                         if _mr_recs2 is None:
                             st.error(
                                 "Could not read recommendation history, so this report's visuals "
@@ -44231,14 +44250,16 @@ elif page == "📄 Reports":
                     str(_mr_missed_n) if _mr_missed_n is not None else "—",
                     delta=_rdisp.avg_delta_text(_mr_skip_avg),
                 )
-                _mr_note = _mr_mec.rule_note(_mr_viz)
+                _mr_note = _mr_mec.rule_note(_mr_viz, live=_mr_live)
                 st.caption(
                     f"Counts are **{_mr_scope['names']}** this period — a name surfaced "
                     "across many days counts once (not daily surfacings). "
                     + ("Frozen as generated, so the report reads the same whenever you open it."
                        if _mr_frozen
                        else "Recomputed live (saved before report-freezing was added).")
-                    + _rdisp.monthly_tiles_caption_suffix(_mr_alpha, _mr_skip_avg, _mr_skip_saved)
+                    + _rdisp.monthly_tiles_caption_suffix(
+                        _mr_alpha, _mr_skip_avg, _mr_skip_saved,
+                        _mr_scope["skipped_avg_scope"])
                     # A report saved before as_of existed has no date: say nothing, never guess.
                     + (f" Outcomes measured to {_mr_viz['as_of']}."
                        if _mr_viz and _mr_viz.get("as_of") else "")
@@ -44249,7 +44270,8 @@ elif page == "📄 Reports":
                 # Decision-flow Sankey (Q1 anchor) — the surfaced → acted/missed → outcome
                 # loop the whole report is built on. Same flow that drives the counts above.
                 if _mr_flow and _mr_flow["n_total"] > 0:
-                    _mr_sk = _signal_flow_sankey(_mr_flow, _mr_scope["flow_title"])
+                    _mr_sk = _signal_flow_sankey(_mr_flow, _mr_scope["flow_title"],
+                                                 _mr_scope["sankey_labels"])
                     if _mr_sk is not None:
                         st.plotly_chart(_mr_sk, width="stretch")
                         if _mr_scope["current_rule"]:
@@ -44337,8 +44359,8 @@ elif page == "📄 Reports":
                         f"Of **{_mr_sp.get('n_distinct', len(_mr_miss))}** name(s) surfaced as **{_mr_scope['missed_scope']}** "
                         + ("but not bought within the decision window this period: "
                            if _mr_scope["current_rule"] else "but never acted on this period: ")
-                        + f"**{_mr_sp.get('n_winners', 0)}** rose (missed), "
-                        f"**{_mr_sp.get('n_dodged', 0)}** fell (dodged). Green = rose after surfacing; red = fell. "
+                        + f"**{_mr_sp.get('n_winners', 0)}** {_mr_scope['rose_phrase']}, "
+                        f"**{_mr_sp.get('n_dodged', 0)}** {_mr_scope['fell_phrase']}. Green = rose after surfacing; red = fell. "
                         "Awareness-only buy-candidates are excluded. Full ranked table + per-$1k "
                         "detail on the **📜 Recommendations History** page → 🎯 Missed Opportunity."
                         + (" That page still uses the older acted rule, so its counts can differ."
@@ -46096,7 +46118,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. Lives on the 📄 Reports page, and uses the same numbers as 📄 Reports → Performance Review → Last week when it is generated; your account's net-equity change vs SPY over the same dates. A saved debrief keeps the figures it was generated with, and the page says when they differ from Performance Review → Last week (for example after the account record was repaired, or when it is for an earlier week). Regenerating a week that was already emailed shows the new version as a preview and keeps the emailed one; only **Replace the emailed version** overwrites it. **The entry-signal bullets at the top of "Decisions you made" are written by the app, not the AI.** A New position, Add to winner or Enter Now call counts as **acted on** only when you bought that name on the call day or within {_UG_ENTRY_WINDOW_N} trading day(s) after it; a sell, or a buy dated before the call, never counts. A call whose window runs past the week's end shows as **still open** and is judged in the next week's debrief under "Carried over from last week" (and counted in that week's follow-through share, which counts each name once and leaves out still-open and not-judged names). A debrief saved under the earlier rule (any trade in the name, a buy or a sell, from the week's start counted as acted, and Enter Now calls weren't listed) carries a caption saying so.
 
-- **🧭 Monthly Decision Review (AI) — "is the engine picking well, and am I acting well?"** Lives on the 📄 Reports page. A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of the app's **entry calls** (New Position, Add to Winner and Enter Now; an Enter Now on a name you already held is left out), which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. A call counts as **acted on** only when you bought that name on the call day or within {_UG_ENTRY_WINDOW_N} trading day(s) after it; a sell, or a buy dated before the call, never counts. A call whose window runs past the month's end shows as **still open**: it is listed by name at the end of Signal discipline, is not counted as bought or skipped, and is not revisited in next month's report; a call the app couldn't judge is listed as **not judged** the same way. Two tiles open it: **Names you bought** and **Names you skipped**, each a count of distinct names with its average alpha vs SPY in percentage points (bought: over the matured surfacings you acted on, from your fill price; skipped: over every matured surfacing of the names you never bought). The conviction-tier bar prices every call from its **call-day price**, whether or not you bought it. 📜 Recommendations History and the other pages that count acted calls still use the older rule (a same-day trade tagged as a recommendation), so their counts can differ; a report saved under the older rule (only that same-day trade counted, and only New Position calls were listed) carries a caption saying so. The skipped average is saved from the first report generated after this update (2026-11-14); an older report says it wasn't saved rather than recomputing it. The report is visual (funnel chart with each step's count, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing. Each report covers **one calendar month** (the email on the first Sunday of December covers 1–30 November), and each pick's result is measured up to the day the report was generated. **Generate** rebuilds the last completed month, or the month you picked in the picker; reports made before 2026-11-17 covered the 4 weeks ending on a Sunday and show their own dates. Regenerating a month that was already emailed shows a preview and keeps the emailed version; only **Replace the emailed version** overwrites it. If your trade journal or the recommendations can't be read, no report is built (it would otherwise read every name as skipped).
+- **🧭 Monthly Decision Review (AI) — "is the engine picking well, and am I acting well?"** Lives on the 📄 Reports page. A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of the app's **entry calls** (New Position, Add to Winner and Enter Now; an Enter Now on a name you already held is left out), which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. A call counts as **acted on** only when you bought that name on the call day or within {_UG_ENTRY_WINDOW_N} trading day(s) after it; a sell, or a buy dated before the call, never counts. A name is judged on its closed calls; only a name whose every call's window runs past the month's end shows as **still open**: it is listed by name at the end of Signal discipline, is not counted as bought or skipped, and is not revisited in next month's report; a name the app couldn't judge is listed as **not judged** the same way. A skipped name you bought during the month, but not within any of its calls' windows (earlier calls whose windows reach into the month included), stays skipped and is listed as **bought outside the window** with its buy dates. Two tiles open it: **Names you bought** and **Names you skipped**, each a count of distinct names with its average alpha vs SPY in percentage points (bought: over the matured surfacings you acted on, from your fill price; skipped: over every matured surfacing of the names you didn't buy within a call's decision window). The conviction-tier bar prices every call from its **call-day price**, whether or not you bought it. 📜 Recommendations History and the other pages that count acted calls still use the older rule (a same-day trade tagged as a recommendation), so their counts can differ; a report saved under the older rule (only that same-day trade counted, and only New Position calls were listed) carries a caption saying so. The skipped average is saved from the first report generated after this update (2026-11-14); an older report says it wasn't saved rather than recomputing it. The report is visual (funnel chart with each step's count, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing. Each report covers **one calendar month** (the email on the first Sunday of December covers 1–30 November), and each pick's result is measured up to the day the report was generated. **Generate** rebuilds the last completed month, or the month you picked in the picker; reports made before 2026-11-17 covered the 4 weeks ending on a Sunday and show their own dates. Regenerating a month that was already emailed shows a preview and keeps the emailed version; only **Replace the emailed version** overwrites it. If your trade journal or the recommendations can't be read, no report is built (it would otherwise read every name as skipped).
 
 - **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A position whose label changed since the last day it was scored auto-expands with a **"🆕 Changed since your last visit"** badge, so a real tier shift can't get missed just because this tab only recomputes once per trading day. Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears in the "⚠️ Alerts" group near the top of 🏠 Home (alongside Day Shock, price cross-check, and the other awareness banners) when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
 

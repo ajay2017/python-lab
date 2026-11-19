@@ -839,3 +839,81 @@ def test_the_monthly_branch_has_no_new_policy_comparison_and_no_signal_lines_cal
         assert banned not in branch, banned
     assert "📊 Recommendations History" not in branch
     assert "📜 Recommendations History" in branch
+
+
+# ─── bought outside the decision window (owner 2026-11-18) ────────────────────
+
+_MRVL_OUTSIDE = [{"ticker": "MRVL",
+                  "buy_dates": ["2026-10-13", "2026-10-14", "2026-10-15", "2026-10-30"],
+                  "rec_types": ["new_pick"], "last_call_date": "2026-10-07"}]
+
+
+def test_package_carries_the_bought_outside_names_from_the_viz():
+    recs = _recs(_rec(1, "MRVL", "2026-11-03"))
+    trades = _trades(_trade(1, "MRVL", "BUY", "2026-11-12T15:00:00+00:00"))
+    pkg = _pkg(recs, trades)
+    assert pkg["bought_outside_names"] == [{
+        "ticker": "MRVL", "buy_dates": ["2026-11-12"], "rec_types": ["new_pick"],
+        "last_call_date": "2026-11-03"}]
+    assert pkg["n_missed"] == 1 and pkg["n_acted"] == 0          # still counted as skipped
+    assert _pkg(_recs(_rec(1, "MRVL", "2026-11-03")), _trades())["bought_outside_names"] == []
+    # a refused package carries the empty default
+    assert ir.build_report_package(NOV_S, NOV_E, None, pd.DataFrame())["bought_outside_names"] == []
+
+
+def test_format_prompt_lists_names_bought_outside_the_window_with_their_dates():
+    text = ir._format_prompt(_base_package(bought_outside_names=_MRVL_OUTSIDE))
+    line = next(ln for ln in text.splitlines() if ln.startswith("Bought this month but not"))
+    assert line == (
+        "Bought this month but not within a call's decision window (counted as "
+        "skipped; the investor HELD these names, so never say skipping them avoided "
+        "a loss or missed a gain, and never call them ignored; already listed by the "
+        "app under Signal discipline): MRVL (bought 2026-10-13, 2026-10-14, "
+        "2026-10-15, 2026-10-30; last call 2026-10-07)")
+
+
+def test_format_prompt_without_bought_outside_names_has_no_such_line():
+    assert "Bought this month but not" not in ir._format_prompt(_base_package())
+    assert "Bought this month but not" not in ir._format_prompt(
+        _base_package(bought_outside_names=[]))
+
+
+def test_system_prompt_says_a_name_bought_outside_the_window_was_held():
+    text = ir._system_prompt()
+    assert ("- A name listed in the data as bought outside the decision window was held "
+            "by the investor: never say skipping it avoided a loss or missed a gain, and "
+            "never call it ignored.") in text
+
+
+def test_format_prompt_best_worst_tag_a_bought_outside_name_as_held_not_missed():
+    worst = {"ticker": "MRVL", "outcome_pct": -50.1, "alpha_pct": -48.0, "acted_on": False}
+    text = ir._format_prompt(_base_package(
+        worst=worst, best={"ticker": "AMD", "outcome_pct": 12.0, "alpha_pct": 10.0,
+                           "acted_on": False},
+        bought_outside_names=_MRVL_OUTSIDE))
+    w = next(ln for ln in text.splitlines() if ln.startswith("  Worst outcome"))
+    b = next(ln for ln in text.splitlines() if ln.startswith("  Best outcome"))
+    assert ", missed)" not in w
+    assert w.endswith("(alpha -48.0%, skipped — bought outside the window, held)")
+    assert b.endswith(", missed)")                      # an ordinary skipped name is unchanged
+    # without the list the same row still reads missed
+    assert next(ln for ln in ir._format_prompt(_base_package(worst=worst)).splitlines()
+                if ln.startswith("  Worst outcome")).endswith(", missed)")
+    # an acted row is never retagged
+    acted = dict(worst, acted_on=True)
+    assert next(ln for ln in ir._format_prompt(_base_package(
+        worst=acted, bought_outside_names=_MRVL_OUTSIDE)).splitlines()
+        if ln.startswith("  Worst outcome")).endswith(", acted)")
+
+
+def test_classify_recommendations_read_with_a_period_ignores_earlier_rows():
+    ps, pe = date(2026, 11, 1), date(2026, 11, 30)
+    d = pd.DataFrame([{"ticker": "AAA", "rec_date": "2026-10-29"}])
+    assert ir.classify_recommendations_read(d) == "ready"                    # no period: as before
+    assert ir.classify_recommendations_read(d, ps, pe) == "empty"
+    d2 = pd.DataFrame([{"ticker": "AAA", "rec_date": "2026-10-29"},
+                       {"ticker": "BBB", "rec_date": "2026-11-03"}])
+    assert ir.classify_recommendations_read(d2, ps, pe) == "ready"
+    assert ir.classify_recommendations_read(None, ps, pe) == "outage"
+    assert ir.classify_recommendations_read(pd.DataFrame(), ps, pe) == "empty"
+    assert ir.classify_recommendations_read(pd.DataFrame({"ticker": ["A"]}), ps, pe) == "ready"

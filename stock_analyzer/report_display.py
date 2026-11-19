@@ -111,13 +111,15 @@ def skipped_avg_state(viz, frozen) -> "tuple[float | None, bool]":
     return (float(v) if _finite(v) else None), True
 
 
-def monthly_tiles_caption_suffix(bought_avg, skipped_avg, skipped_saved) -> str:
+def monthly_tiles_caption_suffix(bought_avg, skipped_avg, skipped_saved,
+                                 skipped_scope="the names you never bought") -> str:
     """Sentence(s) appended to the monthly tiles' caption: what each average
     covers, plus why a tile shows no average (skipped figure not saved with an
-    older report; no matured bought / skipped names yet)."""
+    older report; no matured bought / skipped names yet). `skipped_scope`
+    describes the skipped names; a current-rule report passes
+    `monthly_entry_calls.scope_words(viz)["skipped_avg_scope"]`."""
     out = (" Bought average: vs SPY in percentage points over the matured surfacings "
-           "you acted on. Skipped average: over every matured surfacing of the names "
-           "you never bought.")
+           f"you acted on. Skipped average: over every matured surfacing of {skipped_scope}.")
     if not skipped_saved:
         out += " Skipped names' average vs SPY wasn't saved with this month's report."
     if not _finite(bought_avg):

@@ -338,3 +338,14 @@ def test_tax_total_row_empty():
     assert rd.tax_total_row([]) == {"proceeds": 0.0, "cost": 0.0, "gain": 0.0,
                                     "n_unknown_gain": 0, "n_wash": 0}
     assert rd.tax_total_row(None)["n_wash"] == 0
+
+
+def test_monthly_caption_suffix_skipped_scope_is_overridable_and_defaults_to_the_older_wording():
+    older = rd.monthly_tiles_caption_suffix(2.1, -0.8, True)
+    assert older == rd.monthly_tiles_caption_suffix(
+        2.1, -0.8, True, "the names you never bought")
+    cur = rd.monthly_tiles_caption_suffix(
+        2.1, -0.8, True, "the names you didn't buy within a call's decision window")
+    assert ("Skipped average: over every matured surfacing of the names you didn't buy "
+            "within a call's decision window.") in cur
+    assert "never bought" not in cur

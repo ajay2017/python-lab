@@ -3167,7 +3167,13 @@ def _run_monthly_report(now_et, force: bool) -> int:
     # _or_none loaders (offline contract): a failed read is None, never an
     # empty frame -- an unreadable journal would otherwise grade every name
     # "missed", and an unreadable rec log would read as "nothing to report".
-    recs_df   = db.load_recommendations_or_none(start_date=period_start, end_date=period_end)
+    # The load reaches back to `recs_load_start(period_start)` (the earliest call whose
+    # decision window still reaches the period), so a buy an earlier month's call
+    # already credited is never labelled "bought outside the window"; `build_month`
+    # still judges only the calls dated period_start..period_end.
+    from stock_analyzer import debrief_entry_calls as _dec_m
+    recs_df   = db.load_recommendations_or_none(
+        start_date=_dec_m.recs_load_start(period_start), end_date=period_end)
     trades_df = db.load_trades_or_none()
 
     _offline = [n for n, d in (("recommendations", recs_df), ("trades", trades_df))
