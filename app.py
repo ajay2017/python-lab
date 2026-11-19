@@ -4667,7 +4667,7 @@ def _index_strip():
     ts = indices[0]["fetched_at"] if indices else ""
     st.markdown(
         f"<div style='display:flex;gap:10px;align-items:stretch;margin-top:8px;margin-bottom:2px'>{tiles}</div>"
-        f"<div style='font-size:0.62em;color:#444;text-align:right;margin-top:2px'>"
+        f"<div style='font-size:0.68em;color:#9ca3af;text-align:right;margin-top:2px'>"
         f"📡 {ts} · auto-refreshes every 60s</div>",
         unsafe_allow_html=True,
     )

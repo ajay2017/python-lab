@@ -44,6 +44,10 @@ _STICKY_CSS = (
     "<style>"
     f"{_DOCK_CHILD} {{ order: 9999; position: sticky; bottom: 0; z-index: 990; "
     f"background: {_BG}; border-top: {_BORDER}; padding-top: 4px; }} "
+    # At the end of the page a sticky element rests at its own place in the flow,
+    # so Streamlit's bottom padding (~10rem) showed as a blank band under the dock
+    # (C0 probe, owner 2026-11-19). The CSS is only emitted on Home.
+    '[data-testid="stMainBlockContainer"] { padding-bottom: 0; } '
     f"{_CAP_RULE}"
     "</style>"
 )

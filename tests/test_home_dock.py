@@ -52,7 +52,8 @@ def test_sticky_css():
     assert "position: sticky" in css
     assert "order: 9999" in css
     assert "position: fixed" not in css
-    assert "stMainBlockContainer" not in css
+    # no blank band under the dock at the end of the page (C0 probe finding)
+    assert '[data-testid="stMainBlockContainer"] { padding-bottom: 0; }' in css
 
 
 def test_fixed_css():
