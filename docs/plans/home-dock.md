@@ -1,6 +1,6 @@
 # 🏠 Home dock: a VS Code-style bottom panel, and the Command Center first
 
-**Status:** DESIGN AGREED 2026-11-19. The owner took every lead leaning on Q1 to Q5 (A collapsible, open by default; "Notices"; the default-tab rule; Markets on Home only; a jump link if the anchor works) and Q6 = about 3 rows (~170 px). Mockup: `docs/mockups/2026-11-19-home-dock-mockup.html`. C0 probe PUSHED 2026-11-19 (`05d6ae4`). Owner probe the same day: sticky pinning works while scrolling, collapse / reopen and the 60 s refresh work, other pages keep the strip on top; two findings fixed in a follow-up (a blank band under the dock at the end of the page = Streamlit's bottom padding, now 0 on Home; the faint "auto-refreshes" line, `#444` → `#9ca3af`). Still to see: the phone width and `?dock=fixed`. Then C1. This is the first Home step of InteractiveDetail (CLAUDE.md "Open now"), and it revives HomeLayout (bug register, on hold since 2026-11-07) on a fresh owner ask.
+**Status:** DESIGN AGREED 2026-11-19. The owner took every lead leaning on Q1 to Q5 (A collapsible, open by default; "Notices"; the default-tab rule; Markets on Home only; a jump link if the anchor works) and Q6 = about 3 rows (~170 px). Mockup: `docs/mockups/2026-11-19-home-dock-mockup.html`. C0 probe PUSHED 2026-11-19 (`05d6ae4`). Owner probe the same day: sticky pinning works while scrolling, collapse / reopen and the 60 s refresh work, other pages keep the strip on top; two findings fixed in a follow-up (a blank band under the dock at the end of the page = Streamlit's bottom padding, now 0 on Home; the faint "auto-refreshes" line, `#444` → `#9ca3af`). Owner re-checked after C0b: flush with the bottom, readable timestamp, all good on the laptop browser. **Phone width NOT tested** (the owner doesn't use the app on a phone at present); the 45vh cap is the only phone safeguard, unverified. `?dock=fixed` not tried; sticky works, so C0c removes the switch. C0c BUILT 2026-11-19 (Markets dock on every page, declared at module level; the switch and fixed CSS removed; F-218d added). Next: push C0c, live check on a few pages (Home, Signals, 📒 Trade Journal for AlertsGhost, 📖 User Guide for a long page), then C1. This is the first Home step of InteractiveDetail (CLAUDE.md "Open now"), and it revives HomeLayout (bug register, on hold since 2026-11-07) on a fresh owner ask.
 
 ## 1. Owner's ask (2026-11-19)
 
@@ -42,7 +42,7 @@ Render order, top to bottom:
 - **Tab labels carry the counts**, like VS Code's "Problems 3": "🔴 Act Today 3", "✅ Act Today 0", "⚠️ Act Today: not checked"; "⚠️ Notices 1 + 3" or "Notices"; "💹 Live Prices 10"; "📈 Markets".
 - **Default tab** (`st.tabs(default=…)`): Act Today when something is to act on or Act Today was not checked; otherwise Notices when a warning or error is showing; otherwise Live Prices.
 - **Protective in-flow banners stay where they are**, so on a bad day they sit above the Command Center. "Command Center first" means first on a normal day.
-- **Other pages are unchanged**, including their index strip at the top.
+- **Every page gets the dock** (owner changed Q4, 2026-11-19). Markets is on every page from C0c; Act Today, Notices and Live Prices reach the other pages only in C1b, labelled with the time of the Home build they come from.
 
 ## 4. Verified facts (Streamlit 1.57.0, the installed library, `inspect.signature`)
 
@@ -74,14 +74,17 @@ Render order, top to bottom:
 - **Q1** Collapsible (one click hides the dock down to a one-line bar with the counts, client-side, like VS Code) or always open at a fixed small height? Lead leans collapsible, open by default.
 - **Q2** Rename the dock's "⚠️ Alerts" to "⚠️ Notices", so it isn't confused with the Command Center's risk "Alerts" tile? Lead leans yes.
 - **Q3** The default-tab rule in §3? Lead leans yes.
-- **Q4** Markets (index tiles) inside the dock on Home only, with other pages unchanged? Lead leans yes; an app-wide dock is a later, separate ask.
+- **Q4** ~~Markets inside the dock on Home only~~ **Changed by the owner 2026-11-19: the dock is on every page, always.** Staged: Markets everywhere first (C0c); the Home-computed tabs off Home only in C1b, because off Home they show Home's last result, which can be stale or missing (never a guessed 0).
 - **Q5** Should the Act Today tab include a "Jump to Act Today ↓" link (an in-page anchor)? It needs a check that Streamlit's header anchor works there.
 - **Q6** Dock height when open: about 3 rows of content (~170 px) or about 5 (~260 px)?
 
 ## 8. Build chunks (one deploy each, implementer builds, screenshot is the check)
 
 - **C0 probe:** the dock shell on Home with only the Markets tab, plus the CSS; nothing else moves. Proves pinning, the sidebar edge, phone width, the 60-second fragment inside the dock, and tab memory across reruns. If P-fixed and P-sticky both fail, stop and re-plan; never ship a half-pinned panel.
+- **C0b (pushed 2026-11-19):** no blank band under the dock at the end of the page (main container padding-bottom 0); the strip's timestamp line readable (`#444` → `#9ca3af`).
+- **C0c:** the Markets dock on every page: declare it at module level where `_index_strip()` runs today (before page dispatch, so pages that `st.stop()` early still get it), drop the Home-only special case and the top strip on every page, and remove the `?dock=` switch once the owner has seen `?dock=fixed` (or skips that check, since sticky works). Watch: pages whose own content ends at the bottom (forms, the User Guide) under a sticky dock, and AlertsGhost (seen on 📒 Trade Journal too).
 - **C1:** move Act Today, Notices and Live Prices into the dock; Command Center becomes first. Docs in the same commit: requirements F-218b / F-218c, the User Guide Home bullet, the bug register HomeLayout + AlertsGhost rows. Reviewer: one Opus pass, because it moves where protective notices and the Act Today count appear (display only; no gate or count logic changes).
+- **C1b:** Act Today, Notices and Live Prices in the dock on the other pages, read from what Home published (`get_or_offline`; registered in `coord_freshness.py` if a new key is needed), each labelled "as of <Home build time> · open 🏠 Home to refresh" or "not checked yet", never a false all-clear. Live Prices off Home only after checking provider load (Finnhub 429s seen 2026-11-17), since it adds a 60-second price refresh on every page. Cross-page coordination → planner-light + Opus reviewer.
 - **C2 onward:** the Home popover / dialog spots from `docs/mockups/2026-11-19-interactive-detail-mockup.html` (the Grow Today funnel → dialog, the Debate result → dialog, the greedy-trim caption → popover), one per deploy; then Reports and Analysis.
 
 Provenance for the feat commits: `Design = lead — layout-only, no policy content (owner-agreed mockup)`, `Build = implementer (claude-sonnet-5-5)`.

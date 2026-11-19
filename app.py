@@ -4672,10 +4672,17 @@ def _index_strip():
         unsafe_allow_html=True,
     )
 
-# 🏠 Home shows the strip in its bottom dock instead (docs/plans/home-dock.md, C0).
-if page != "🏠 Home":
-    _index_strip()
-    st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+# ── Bottom dock, every page (docs/plans/home-dock.md, C0c) ──
+# Declared here, before page dispatch, so a page that stops early still gets
+# it; the CSS pins it to the bottom of the screen, so where it is declared does
+# not decide where it shows. Markets is its only tab until C1 / C1b.
+st.markdown(home_dock.dock_css(), unsafe_allow_html=True)
+with st.container(key=home_dock.DOCK_KEY):
+    with st.expander("📈 Markets", expanded=True, key=home_dock.DOCK_EXPANDER_KEY):
+        (_dock_tab_markets,) = st.tabs(["📈 Markets"], key=home_dock.DOCK_TABS_KEY)
+        with _dock_tab_markets:
+            with st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False):
+                _index_strip()
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — MY PORTFOLIO
@@ -5114,19 +5121,6 @@ if page == "🏠 Home":
     # (Phase 0) persists the same opinions separately for Phase 2's future
     # grading harness.
     st.session_state["_judgment_opinions_today"] = []
-
-    # ── Home dock (docs/plans/home-dock.md, C0 probe) ──
-    # The CSS pins this container to the bottom, so where it is declared does not
-    # decide where it shows; it is declared first so later chunks can fill tabs
-    # from fill sites further down (same mechanism as the Alerts placeholders).
-    _dock_mode = home_dock.dock_mode(st.query_params.get("dock"))
-    st.markdown(home_dock.dock_css(_dock_mode), unsafe_allow_html=True)
-    with st.container(key=home_dock.DOCK_KEY):
-        with st.expander("📈 Markets", expanded=True, key=home_dock.DOCK_EXPANDER_KEY):
-            (_dock_tab_markets,) = st.tabs(["📈 Markets"], key=home_dock.DOCK_TABS_KEY)
-            with _dock_tab_markets:
-                with st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False):
-                    _index_strip()
 
     # ── Act Today pointer (Home redesign P2, docs/plans/home-redesign.md's
     # 2026-10-06 "P1 + P2 designed" section) — a one-line pointer at the very

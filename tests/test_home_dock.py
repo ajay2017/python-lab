@@ -1,54 +1,31 @@
-"""Home dock (docs/plans/home-dock.md, C0 probe): the pure mode / CSS helpers and a
-light source pin on app.py's wiring (app.py is never imported by a test).
+"""Bottom dock (docs/plans/home-dock.md, C0c): the pure CSS helper and AST pins on
+app.py's wiring (app.py is never imported by a test).
 
-Checked in streamlit 1.57.0: ``st.query_params.get(key)`` returns a str (the LAST
-item of a repeated key, "" for an empty list) or None; it never returns a list.
-``dock_mode`` still tolerates a list, falling back to the default.
+C0c made the dock app-wide: one module-level ``with st.container(key=DOCK_KEY)``
+in app.py, before page dispatch, holding the only ``_index_strip()`` call.
 """
+import ast
 from pathlib import Path
 
-import pytest
-
 from stock_analyzer import home_dock as hd
+from tests._ast_cache import parse_file_cached
 
-_SRC = (Path(__file__).parent.parent / "app.py").read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize("raw, expected", [
-    (None, "sticky"),
-    ("", "sticky"),
-    ("  STICKY ", "sticky"),
-    ("sticky", "sticky"),
-    ("fixed", "fixed"),
-    ("Fixed", "fixed"),
-    (" FIXED\n", "fixed"),
-    (["fixed"], "sticky"),
-    (3, "sticky"),
-    ("<script>", "sticky"),
-    ("fixed;color:red", "sticky"),
-])
-def test_dock_mode(raw, expected):
-    assert hd.dock_mode(raw) == expected
-
-
-def test_dock_mode_defaults_are_consistent():
-    assert hd.DEFAULT_DOCK_MODE in hd.DOCK_MODES
-    assert hd.DOCK_MODES == ("sticky", "fixed")
+_APP = Path(__file__).parent.parent / "app.py"
+_SRC = _APP.read_text(encoding="utf-8")
 
 
 def test_dock_css_shape_and_key():
     assert hd.DOCK_KEY == "home_dock"
-    for mode in hd.DOCK_MODES:
-        css = hd.dock_css(mode)
-        assert isinstance(css, str)
-        assert css.startswith("<style>") and css.endswith("</style>")
-        assert f".st-key-{hd.DOCK_KEY}" in css
-        assert "#131722" in css and "1px solid #31333f" in css
-        assert "max-height: 45vh" in css and "overflow: auto" in css
+    css = hd.dock_css()
+    assert isinstance(css, str)
+    assert css.startswith("<style>") and css.endswith("</style>")
+    assert f".st-key-{hd.DOCK_KEY}" in css
+    assert "#131722" in css and "1px solid #31333f" in css
+    assert "max-height: 45vh" in css and "overflow: auto" in css
 
 
 def test_sticky_css():
-    css = hd.dock_css("sticky")
+    css = hd.dock_css()
     assert "position: sticky" in css
     assert "order: 9999" in css
     assert "position: fixed" not in css
@@ -56,33 +33,68 @@ def test_sticky_css():
     assert '[data-testid="stMainBlockContainer"] { padding-bottom: 0; }' in css
 
 
-def test_fixed_css():
-    css = hd.dock_css("fixed")
-    assert "position: fixed" in css
-    assert "stMainBlockContainer" in css
-    assert "position: sticky" not in css
-    assert "order: 9999" not in css
+def test_probe_switch_is_gone():
+    for name in ("DOCK_MODES", "DEFAULT_DOCK_MODE", "dock_mode", "_FIXED_CSS"):
+        assert not hasattr(hd, name), name
 
 
-def test_unknown_mode_is_sticky_exactly():
-    sticky = hd.dock_css("sticky")
-    for odd in ("", None, "FIXED", "bogus", 3, ["fixed"]):
-        assert hd.dock_css(odd) == sticky
+def _is_dock_container_call(node) -> bool:
+    """`st.container(key=home_dock.DOCK_KEY)`."""
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "container"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "st"
+    ):
+        return False
+    for kw in node.keywords:
+        if (
+            kw.arg == "key"
+            and isinstance(kw.value, ast.Attribute)
+            and kw.value.attr == "DOCK_KEY"
+            and isinstance(kw.value.value, ast.Name)
+            and kw.value.value.id == "home_dock"
+        ):
+            return True
+    return False
 
 
-def test_css_never_contains_the_input():
-    hostile = "}</style><script>alert(1)</script>{"
-    css = hd.dock_css(hostile)
-    assert hostile not in css and "<script>" not in css
-    assert css == hd.dock_css("sticky")
+def _is_index_strip_call(node) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_index_strip"
+    )
 
 
-def test_app_wires_the_dock_and_guards_the_index_strip():
-    assert "st.container(key=home_dock.DOCK_KEY)" in _SRC
-    assert "home_dock.dock_css(_dock_mode)" in _SRC
-    # The module-level strip call is skipped on Home (the dock shows it there).
-    guarded = 'if page != "🏠 Home":\n    _index_strip()\n'
-    assert guarded in _SRC
-    # No other column-0 (module-level) call of the strip remains.
-    top_level = [ln for ln in _SRC.splitlines() if ln.startswith("_index_strip()")]
-    assert top_level == []
+def test_app_has_one_module_level_dock_container():
+    tree = parse_file_cached(_APP)
+    all_dock = [n for n in ast.walk(tree) if _is_dock_container_call(n)]
+    assert len(all_dock) == 1, f"expected one dock container in app.py, found {len(all_dock)}"
+    top_level = [
+        stmt for stmt in tree.body
+        if isinstance(stmt, ast.With)
+        and any(_is_dock_container_call(item.context_expr) for item in stmt.items)
+    ]
+    assert len(top_level) == 1, (
+        "the dock container must be a module-level `with`, not nested in a page branch"
+    )
+
+
+def test_app_has_one_index_strip_call_inside_the_dock():
+    tree = parse_file_cached(_APP)
+    calls = [n for n in ast.walk(tree) if _is_index_strip_call(n)]
+    assert len(calls) == 1, f"expected exactly one _index_strip() call, found {len(calls)}"
+    dock_with = next(
+        stmt for stmt in tree.body
+        if isinstance(stmt, ast.With)
+        and any(_is_dock_container_call(item.context_expr) for item in stmt.items)
+    )
+    inside = [n for n in ast.walk(dock_with) if _is_index_strip_call(n)]
+    assert inside == [calls[0]]
+
+
+def test_app_has_no_dock_query_switch():
+    assert 'st.query_params.get("dock")' not in _SRC
+    assert "dock_mode" not in _SRC
