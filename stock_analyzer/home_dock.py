@@ -6,16 +6,32 @@ dispatch, so a page that stops early still gets it; the CSS built here pins it
 to the bottom of the screen, so where it is declared does not decide where it
 shows. Sticky pinning (which keeps the main column's width) was proven on
 Railway in the C0 probe, so the probe's fixed-position fallback and its URL
-switch are gone. Markets is the only tab until C1 (Home) / C1b (other pages);
-see docs/plans/home-dock.md. ``.st-key-home_dock`` keeps its old name, because
-renaming the key would only churn. Display only: no gate, no threshold, no
-count logic.
+switch are gone. C1: on 🏠 Home the dock has four fixed-label tabs (Act Today,
+Notices, Live Prices, Markets; no counts in a label, because Streamlit fixes
+the labels when ``st.tabs`` is called, before Home computes anything); every
+other page keeps the one-tab Markets dock until C1b. Home and the other pages
+use separate widget keys so a tab picked on Home cannot carry onto the one-tab
+dock. See docs/plans/home-dock.md. ``.st-key-home_dock`` keeps its old name,
+because renaming the key would only churn. Display only: no gate, no
+threshold, no count logic.
 """
 from __future__ import annotations
 
 DOCK_KEY = "home_dock"
+# Keys for the one-tab dock on every page except Home.
 DOCK_EXPANDER_KEY = "_home_dock_exp"
 DOCK_TABS_KEY = "_home_dock_tabs"
+# Separate keys on Home, so a tab index picked there can't carry onto a 1-tab dock.
+HOME_DOCK_EXPANDER_KEY = "_home_dock_exp_home"
+HOME_DOCK_TABS_KEY = "_home_dock_tabs_home"
+
+# Tab labels are fixed (no counts): Streamlit sets them, and the starting tab, when
+# st.tabs is called at module level, before Home has computed anything. The first
+# tab is the default.
+HOME_DOCK_TABS = ("🔴 Act Today", "⚠️ Notices", "💹 Live Prices", "📈 Markets")
+OTHER_DOCK_TABS = ("📈 Markets",)
+HOME_DOCK_TITLE = "🏠 Act Today · Notices · Live Prices · Markets"
+OTHER_DOCK_TITLE = "📈 Markets"
 
 # Owner Q6 (2026-11-19): about 3 rows of content. A display size, not a decision
 # threshold, so it lives here and not in constants.py.
@@ -65,3 +81,40 @@ _STICKY_CSS = (
 def dock_css() -> str:
     """The complete ``<style>`` block for the dock: a constant, no input."""
     return _STICKY_CSS
+
+
+def dock_tabs(on_home: bool) -> tuple[str, ...]:
+    """The tab labels, in order: four on Home, Markets alone elsewhere."""
+    return HOME_DOCK_TABS if on_home else OTHER_DOCK_TABS
+
+
+def dock_title(on_home: bool) -> str:
+    """The dock's collapsible title bar."""
+    return HOME_DOCK_TITLE if on_home else OTHER_DOCK_TITLE
+
+
+def home_tabs_key(run_n: int) -> str:
+    """Home's ``st.tabs`` key for full script run number ``run_n``.
+
+    Streamlit's frontend keeps the picked tab as element state under the block
+    id, which is built from the key alone, and restores it on every run while
+    the labels are unchanged. A fixed key would therefore leave Home on a tab
+    the owner picked earlier (say Live Prices), hiding the Act Today pointer and
+    the Needs-a-look line. A fresh key per FULL script run resets the dock to
+    its first tab (Act Today); a fragment rerun (the 60 s Live Prices and
+    Markets refresh) does not execute module code, so the counter, and with it
+    the key, does not change and a tab picked between full runs survives it.
+    """
+    return f"{HOME_DOCK_TABS_KEY}_{run_n}"
+
+
+def dock_tabs_key(on_home: bool, run_n: int = 0) -> str:
+    """The ``st.tabs`` widget key: per-run on Home (see ``home_tabs_key``), the
+    constant ``DOCK_TABS_KEY`` on every other page (separate from Home's, see the
+    module docstring)."""
+    return home_tabs_key(run_n) if on_home else DOCK_TABS_KEY
+
+
+def dock_expander_key(on_home: bool) -> str:
+    """The dock expander's widget key (separate on Home)."""
+    return HOME_DOCK_EXPANDER_KEY if on_home else DOCK_EXPANDER_KEY

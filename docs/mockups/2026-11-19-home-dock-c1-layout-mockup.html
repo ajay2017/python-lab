@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home dock C1 layout</title>
+<style>
+:root{--bg:#0e1117;--side:#262730;--panel:#111827;--line:#1f2937;--line2:#31333f;--text:#fafafa;--muted:#9ca3af;
+  --red:#ef4444;--redbg:#3f1d24;--amberbg:#3b3a1a;--greenbg:#12301f;--accent:#ff4b4b}
+*{box-sizing:border-box}
+body{margin:0;background:#05070b;color:var(--text);font:15px/1.5 "Source Sans 3","Source Sans Pro",system-ui,sans-serif}
+.wrap{max-width:1500px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:24px;margin:0 0 4px}
+.lead{color:var(--muted);margin:0 0 14px;max-width:1100px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:0 0 16px}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
+.seg button{background:transparent;color:var(--muted);border:0;padding:6px 14px;font:inherit;font-size:14px;cursor:pointer}
+.seg button.on{background:#1f2937;color:var(--text)}
+.lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-right:6px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:1100px){.grid{grid-template-columns:1fr}}
+.opt h3{margin:0 0 4px;font-size:17px}
+.opt .why{color:var(--muted);font-size:13.5px;margin:0 0 10px;min-height:60px}
+.opt .why b{color:var(--text)}
+.rec{display:inline-block;background:#14532d;color:#bbf7d0;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;margin-left:6px;vertical-align:2px}
+/* app window */
+.screen{height:640px;border:1px solid var(--line2);border-radius:10px;overflow:hidden;display:flex;background:var(--bg)}
+.sidebar{width:150px;background:var(--side);padding:12px 10px;flex:none;font-size:12.5px;color:#d1d5db}
+.sidebar div{padding:4px 7px;border-radius:6px}.sidebar div.on{background:#3a3b46;color:#fff}
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.scroll{flex:1;overflow:auto;padding:14px 16px}
+.bar{border-radius:8px;padding:9px 12px;margin-bottom:8px;font-size:13.5px;line-height:1.4}
+.bar.red{background:var(--redbg);color:#fca5a5}.bar.amber{background:var(--amberbg);color:#fde68a}.bar.green{background:var(--greenbg);color:#86efac}
+.cap{color:var(--muted);font-size:13px;margin:0 0 8px}
+.cc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.cc .t{font-size:16px;font-weight:700}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+.m .k{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.m .v{font:600 16px/1.3 ui-monospace,Consolas,monospace}
+h2{font-size:19px;margin:16px 0 8px}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.card{background:#141821;border:1px solid var(--line2);border-radius:10px;padding:10px;font-size:13px;min-height:90px}
+.card.act{background:#7f1d1d;border-color:#b91c1c}
+.sect{background:#141821;border:1px solid var(--line2);border-radius:10px;padding:10px;margin-top:10px;color:var(--muted);font-size:13px;height:120px}
+/* dock */
+.dock{flex:none;border-top:1px solid var(--line2);background:#131722;max-height:45%;overflow:auto}
+.dhead{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--line2);font-size:13.5px;color:#e5e7eb;cursor:pointer}
+.dhead .car{color:var(--muted);width:12px}
+.dbody{padding:6px 12px 8px}
+.dock.collapsed .dbody{display:none}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line2);margin-bottom:6px;overflow-x:auto}
+.tab{background:none;border:0;color:var(--muted);font:inherit;font-size:13px;padding:6px 9px;cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent}
+.tab.on{color:var(--text);border-bottom-color:var(--accent)}
+.pane{height:120px;overflow:auto;font-size:13px}
+.pane .bar{margin-bottom:6px}
+.px{display:flex;gap:6px;flex-wrap:wrap}
+.px div{border:1px solid #333;border-radius:6px;padding:4px 8px;text-align:center;font-size:12px;min-width:70px}
+.up{color:#00C851}.dn{color:#ff4444}
+.idx{display:flex;gap:8px}
+.idx div{flex:1;border-radius:6px;padding:5px 8px;text-align:center;font-size:12px}
+.idx .i-dn{background:rgba(220,38,38,.10);border:1px solid #cc2222}
+.idx .i-up{background:rgba(0,180,70,.10);border:1px solid #00a040}
+.note{margin-top:10px;font-size:13px;color:var(--muted)}
+.note li{margin-bottom:3px}
+.foot{margin-top:22px;color:var(--muted);font-size:13.5px;max-width:1100px}
+.foot b{color:var(--text)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏠 Home dock C1: two layouts</h1>
+  <p class="lead">C1 moves the Act Today line, the Needs-a-look line and the ⚠️ Alerts contents (renamed ⚠️ Notices) and 💹 Live Prices into the bottom dock, so the Portfolio Command Center comes first on Home. Streamlit fixes each tab label and the starting tab when the dock is created, at the top of the page run, before Home has worked out today's counts. So a label like "Act Today 3" can't show this run's number. Switch between the three days below and click the tabs to compare.</p>
+
+  <div class="controls">
+    <span><span class="lbl">Day</span>
+      <span class="seg" id="day">
+        <button data-v="busy" class="on">Busy day (3 to act, a red notice)</button>
+        <button data-v="calm">Calm day</button>
+        <button data-v="outage">Data outage</button>
+      </span></span>
+  </div>
+
+  <div class="grid">
+    <div class="opt">
+      <h3>A · Summary lines above the tabs <span class="rec">lead recommends</span></h3>
+      <p class="why">The two lines Home shows at the top today stay <b>always visible</b> while the dock is open, with this run's counts, whichever tab you're on. Tabs below: Notices, Live Prices and Markets. There's no Act Today tab, because its only content is that line. The dock <b>starts on Live Prices</b> (a fixed choice); anything urgent is already in the lines above.</p>
+      <div class="screen"><div class="sidebar"><div class="on">🏠 Home</div><div>📡 Signals</div><div>🌱 Grow Today</div><div>📋 Watchlist</div><div>💰 Account</div></div>
+        <div class="main"><div class="scroll" data-page></div>
+          <div class="dock" id="dockA"></div></div></div>
+    </div>
+
+    <div class="opt">
+      <h3>B · Four tabs, the count inside each tab</h3>
+      <p class="why">As agreed in the first mockup, but with <b>fixed labels</b> (no numbers on the tabs). Each tab's count is its first line. The dock <b>always starts on Act Today</b>. The Needs-a-look line sits inside Notices, so a red notice <b>shows only after you click Notices</b>.</p>
+      <div class="screen"><div class="sidebar"><div class="on">🏠 Home</div><div>📡 Signals</div><div>🌱 Grow Today</div><div>📋 Watchlist</div><div>💰 Account</div></div>
+        <div class="main"><div class="scroll" data-page></div>
+          <div class="dock" id="dockB"></div></div></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <p><b>The same in both:</b> the protective banners (manual stops unreadable, held-stop basis, a data outage's main error) stay in the page above the Command Center, as today; only the notices that today sit in the collapsed ⚠️ Alerts box move into the dock. Click the dock's title bar to fold it to one line, as in C0. Every other page keeps the Markets-only dock until C1b. Pointer wording changes from "Act Today <i>below</i>" to "Act Today (scroll up)" and from "⚠️ Alerts below" to "⚠️ Notices tab", because the dock now sits under the page.</p>
+    <p><b>What the mockup can't show:</b> whether Streamlit remembers the tab you picked across page reruns. That gets checked live after the deploy.</p>
+  </div>
+</div>
+
+<script>
+const PAGE = (day) => `
+  ${day==='outage' ? `<div class="bar red">⚠️ <b>Couldn't load market data for your 13 holdings</b> — an in-page error that stays put, as today.</div>` : ''}
+  <div class="cc"><div class="t">📊 Portfolio Command Center ${day==='busy'?'<span style="background:#ef4444;color:#000;font-size:11px;padding:1px 8px;border-radius:10px;margin-left:6px">ELEVATED</span>':''}</div>
+    <div class="metrics">
+      <div class="m"><div class="k">Value</div><div class="v">$24,310</div></div>
+      <div class="m"><div class="k">Today</div><div class="v ${day==='busy'?'dn':'up'}">${day==='busy'?'−$412':'+$86'}</div></div>
+      <div class="m"><div class="k">Positions</div><div class="v">13</div></div>
+      <div class="m"><div class="k">Alerts</div><div class="v">${day==='busy'?'2🔴 1🟡':'0🔴 0🟡'}</div></div>
+    </div></div>
+  <h2>📋 Today's Brief</h2>
+  ${day==='outage' ? `<p class="cap">The Brief can't be built without market data.</p>` : `
+  <div class="cards">
+    ${day==='busy' ? `<div class="card act"><b>⛔ EXIT · MRVL</b><br>Close below the stop $148.20</div><div class="card act"><b>⛔ EXIT · TER</b><br>Trend break, 3 days</div><div class="card act"><b>✂️ TRIM · AAPL</b><br>Over the 15% cap</div><div class="card">🌱 Grow Today: 2 picks</div>`
+      : `<div class="card">🌱 Grow Today: 2 picks</div><div class="card">🔔 Catalyst: CRWD earnings in 6d</div>`}
+  </div>`}
+  <div class="sect">Evening Debrief · AI Snapshot · … (unchanged, scrolls)</div>
+  <div class="sect">… rest of Home …</div>`;
+
+const ACT = {
+  busy:   `<div class="bar red">🔴 <b>3 Act Today</b> — 2 EXIT · 1 TRIM — see 📋 Today's Brief → Act Today (scroll up)</div>`,
+  calm:   `<div class="bar green">✅ Nothing to act on today</div>`,
+  outage: `<div class="bar amber">⚠️ Couldn't load market data for your holdings — Act Today was NOT checked. Retry from the ⚠️ Notices tab.</div>`,
+};
+const NOTICE_LINE = {
+  busy:   `<div class="bar red">⚠️ Needs a look: <b>System Trust, Broker drift</b> · 2 more notes</div>`,
+  calm:   `<p class="cap">· 2 notes</p>`,
+  outage: `<div class="bar red">⚠️ Needs a look: <b>Data outage</b></div>`,
+};
+const NOTICES = {
+  busy:   `<div class="bar red">🔴 1 pipeline check(s) failing — a cron lane has died. [Open →]</div><div class="bar amber">⚠️ Broker drift: journal 12 MRVL vs Robinhood 10</div><p class="cap">ℹ️ Journal vs Robinhood: 1 difference in price or date</p><p class="cap">Price cross-check paused …</p>`,
+  calm:   `<p class="cap">ℹ️ Journal vs Robinhood: 1 difference in price or date</p><p class="cap">Margin: 1.6× leverage, 15.2% to a call</p>`,
+  outage: `<div class="bar red">⚠️ Couldn't load market data for your 13 holdings … [🔄 Retry data load]</div>`,
+};
+const PRICES = `<div class="px"><div><b>AAPL</b><br>$271.20<br><span class="up">▲ +0.8%</span></div><div><b>MRVL</b><br>$145.54<br><span class="dn">▼ −3.1%</span></div><div><b>MSFT</b><br>$512.10<br><span class="up">▲ +0.2%</span></div><div><b>CRWD</b><br>$498.00<br><span class="dn">▼ −0.6%</span></div><div><b>TSLA</b><br>$348.94<br><span class="up">▲ +1.4%</span></div></div><p class="cap" style="margin-top:6px">Prices: Finnhub (real-time) · 3:41 PM ET · 🔄 auto-refreshes every 60s</p>`;
+const MARKETS = `<div class="idx"><div class="i-dn">DOW<br><b>46,210</b><br><span class="dn">▼ −0.4%</span></div><div class="i-dn">S&amp;P 500<br><b>6,702</b><br><span class="dn">▼ −0.6%</span></div><div class="i-up">NASDAQ<br><b>22,880</b><br><span class="up">▲ +0.1%</span></div></div>`;
+
+const state = {day:'busy', A:'Live Prices', B:'Act Today', foldA:false, foldB:false};
+
+function dockA(day){
+  const tabs = ['⚠️ Notices','💹 Live Prices','📈 Markets'];
+  const body = {'⚠️ Notices':NOTICES[day],'💹 Live Prices':`<p class="cap">13 positions</p>`+PRICES,'📈 Markets':MARKETS};
+  const cur = tabs.find(t=>t.includes(state.A)) || tabs[1];
+  return `<div class="dhead" data-fold="A"><span class="car">${state.foldA?'›':'⌄'}</span>🏠 Act Today · Notices · Prices · Markets</div>
+   <div class="dbody">${ACT[day]}${NOTICE_LINE[day]}
+    <div class="tabs">${tabs.map(t=>`<button class="tab ${t===cur?'on':''}" data-d="A" data-t="${t}">${t}</button>`).join('')}</div>
+    <div class="pane">${body[cur]}</div></div>`;
+}
+function dockB(day){
+  const tabs = ['🔴 Act Today','⚠️ Notices','💹 Live Prices','📈 Markets'];
+  const body = {'🔴 Act Today':ACT[day],'⚠️ Notices':NOTICE_LINE[day]+NOTICES[day],'💹 Live Prices':`<p class="cap">13 positions</p>`+PRICES,'📈 Markets':MARKETS};
+  const cur = tabs.find(t=>t.includes(state.B)) || tabs[0];
+  return `<div class="dhead" data-fold="B"><span class="car">${state.foldB?'›':'⌄'}</span>🏠 Act Today · Notices · Prices · Markets</div>
+   <div class="dbody">
+    <div class="tabs">${tabs.map(t=>`<button class="tab ${t===cur?'on':''}" data-d="B" data-t="${t}">${t}</button>`).join('')}</div>
+    <div class="pane">${body[cur]}</div></div>`;
+}
+function render(){
+  document.querySelectorAll('[data-page]').forEach(el=>el.innerHTML=PAGE(state.day));
+  const a=document.getElementById('dockA'), b=document.getElementById('dockB');
+  a.innerHTML=dockA(state.day); b.innerHTML=dockB(state.day);
+  a.classList.toggle('collapsed',state.foldA); b.classList.toggle('collapsed',state.foldB);
+}
+document.getElementById('day').addEventListener('click',e=>{
+  const v=e.target.dataset.v; if(!v) return;
+  state.day=v; state.A='Live Prices'; state.B='Act Today';
+  document.querySelectorAll('#day button').forEach(x=>x.classList.toggle('on',x.dataset.v===v));
+  render();
+});
+document.addEventListener('click',e=>{
+  const t=e.target.closest('.tab'); if(t){ const lbl=t.dataset.t.replace(/^\S+\s/,''); state[t.dataset.d]=lbl; render(); return; }
+  const f=e.target.closest('[data-fold]'); if(f){ const k='fold'+f.dataset.fold; state[k]=!state[k]; render(); }
+});
+render();
+</script>
+</body>
+</html>

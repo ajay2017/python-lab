@@ -4672,14 +4672,130 @@ def _index_strip():
         unsafe_allow_html=True,
     )
 
-# ── Bottom dock, every page (docs/plans/home-dock.md, C0c) ──
+# ── Bottom dock, every page (docs/plans/home-dock.md, C0c / C1) ──
 # Declared here, before page dispatch, so a page that stops early still gets
 # it; the CSS pins it to the bottom of the screen, so where it is declared does
-# not decide where it shows. Markets is its only tab until C1 / C1b.
+# not decide where it shows. On 🏠 Home it has four fixed-label tabs (Act Today,
+# Notices, Live Prices, Markets); every other page keeps the one-tab Markets dock
+# until C1b. Home's placeholders are declared HERE (an st.empty() must be
+# assigned before anything can write into it) and filled by Home's own code far
+# below, so the dock must be declared before Home's branch, not after it.
 st.markdown(home_dock.dock_css(), unsafe_allow_html=True)
+_dock_on_home = page == "🏠 Home"
+# Home's tab set gets a fresh key on every FULL script run, so the dock re-opens
+# on 🔴 Act Today instead of restoring a tab picked earlier (the frontend keeps
+# the picked tab under the block id, built from the key alone). Fragment reruns
+# (the 60 s refresh) run no module code, so a tab picked between full runs
+# survives them. The expander key stays fixed, so folding the dock persists.
+if _dock_on_home:
+    st.session_state["_home_dock_run_n"] = st.session_state.get("_home_dock_run_n", 0) + 1
 with st.container(key=home_dock.DOCK_KEY):
-    with st.expander("📈 Markets", expanded=True, key=home_dock.DOCK_EXPANDER_KEY):
-        (_dock_tab_markets,) = st.tabs(["📈 Markets"], key=home_dock.DOCK_TABS_KEY)
+    with st.expander(home_dock.dock_title(_dock_on_home), expanded=True,
+                     key=home_dock.dock_expander_key(_dock_on_home)):
+        _dock_tabs = st.tabs(list(home_dock.dock_tabs(_dock_on_home)),
+                             key=home_dock.dock_tabs_key(
+                                 _dock_on_home,
+                                 run_n=st.session_state.get("_home_dock_run_n", 0)))
+        _dock_tab_markets = _dock_tabs[-1]
+        if _dock_on_home:
+            _dock_tab_act, _dock_tab_notices, _dock_tab_prices = _dock_tabs[:3]
+
+            # ── Act Today tab (the default, first tab) ──
+            with _dock_tab_act:
+                with st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False):
+                    # Act Today pointer (Home redesign P2, docs/plans/home-redesign.md's
+                    # 2026-10-06 "P1 + P2 designed" section) — a one-line pointer in the
+                    # dock's Act Today tab, reading the SAME act_today_view() result the
+                    # full Act Today section renders from (never a second count/call —
+                    # see act_today_pointer.py's own module docstring). Declared first,
+                    # before P1's notices summary placeholder (D7), so it is the first
+                    # content-bearing element of the tab.
+                    _act_ptr_ph = st.empty()
+
+                    # ── Notices summary (Home redesign P1, docs/plans/home-redesign.md's
+                    # 2026-10-06 "P1 + P2 designed" section) — a one-line summary built
+                    # from what the Notices tab's own 17 fill sites actually render this
+                    # run. Shown here too (not only in the Notices tab) so a red notice
+                    # is visible on the dock's default tab. A LOCAL list in Home (not
+                    # session_state — a single-render accumulator, never meant to
+                    # persist or grow across reruns) feeds it. Declared before the
+                    # Notices tab's own first placeholder so it renders ABOVE it.
+                    _notices_summary_ph = st.empty()
+
+            # ── Notices tab: the unified alert stack ──
+            # (2026-08-04 UX audit I1; widened 2026-09-25; moved from a collapsed
+            # "⚠️ Alerts" expander on Home into this dock tab in C1.)
+            # 17 reserved placeholders so every AMBIENT (background-computed, not
+            # click-triggered) notice on Home visually groups into one section
+            # instead of appearing wherever its own compute happens to run.
+            # Declared here, ahead of Home's code, because 3 of the 17 (System
+            # Trust chip, held-ticker load failures, stale-cache) fire before the
+            # original 6-placeholder block's old position — an st.empty() must be
+            # assigned before anything can .container() into it.
+            # Each placeholder is filled at its banner's existing, unmoved compute
+            # position; st.empty() renders content at the RESERVED slot, not the
+            # fill-in call site, so nothing about data-dependency ordering below
+            # changes — only where each banner visually lands.
+            #
+            # Deliberately NOT everything warning-shaped on the page (2026-09-25
+            # scoping pass, catalogued ~39 sites first): roughly half of the
+            # scattered banners are inline feedback for something the user just
+            # clicked (Debate button, Refresh Signals, Generate Brief, a rebalance-
+            # plan toggle, Research a Stock) — moving those away from their trigger
+            # would hurt usability, not improve it, so they stay put. Only the
+            # AMBIENT ones (fire from background computation, no click) move here —
+            # matching a 2026-08-29 finding (project_home_redesign memory) that a
+            # FULL synthesized "needs attention" tray was declined on risk grounds
+            # (new consumer of overloaded/3-state producer caches, a severity-
+            # ranking layer). This is deliberately NOT that: no new cache reads, no
+            # ranking, no synthesis — every site below keeps its own existing
+            # condition/text/logic untouched; only the render DESTINATION moves,
+            # reusing the exact mechanism already proven on the original 6 (buttons
+            # and loops included, via the Stock Split banner).
+            with _dock_tab_notices:
+                with st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False):
+                    # The second copy of the Needs-a-look line (the first is in the
+                    # Act Today tab); _home_notice() writes both.
+                    _notices_tab_summary_ph = st.empty()
+                    _alert_ph_dayshock   = st.empty()
+                    _alert_ph_xcheck     = st.empty()
+                    _alert_ph_split      = st.empty()
+                    _alert_ph_structural = st.empty()
+                    # Filled far below (after live prices exist) but DECLARED here;
+                    # same declare-early/fill-late pattern as _alert_ph_structural.
+                    # (Before C1 this slot sat above the Portfolio Value tile; it is
+                    # now in the dock, and the Needs-a-look line names "Broker drift"
+                    # on the dock's opening Act Today tab when it fires as a warning.)
+                    _alert_ph_drift      = st.empty()
+                    # TJDate U8c: the journal-vs-Robinhood line, right under the broker-drift
+                    # notice it cross-references. Same declare-early/fill-late pattern.
+                    _alert_ph_journalmatch = st.empty()
+                    # 2026-09-24: moved in from the end of Today's Brief (was rendering
+                    # below the Buy Candidates overflow, well past this stack) so this
+                    # awareness nudge groups with the other 5 instead of surfacing far
+                    # down the page. Same declare-early/fill-late pattern; its compute
+                    # (thesis_erosion_cache read, dedup, baseline walk-back) is unmoved.
+                    _alert_ph_thesis     = st.empty()
+                    # 2026-09-25 widening — 9 ambient sites added:
+                    _alert_ph_systrust   = st.empty()   # System Trust chip (degraded/down)
+                    _alert_ph_heldload   = st.empty()   # held-ticker _parallel_load_all failures
+                    _alert_ph_stale      = st.empty()   # "showing cached data" (stale_as_of)
+                    _alert_ph_dropped    = st.empty()   # dropped-holdings (no_price_data etc.)
+                    _alert_ph_scorewithheld = st.empty()   # score-withheld holdings (no fundamentals)
+                    _alert_ph_outage     = st.empty()   # full-book data outage + retry
+                    _alert_ph_leverage   = st.empty()   # margin/leverage awareness caption
+                    _alert_ph_pnldq      = st.empty()   # Today's P&L data-quality cluster
+                    _alert_ph_crossasset = st.empty()   # cross-asset macro stress / offline
+                    _alert_ph_debrief    = st.empty()   # Evening Debrief build failure
+                    # Static and descriptive, NOT an all-clear: it says what this tab
+                    # holds, never that nothing is wrong.
+                    st.caption("Notices from this Home run show here.")
+
+            # ── Live Prices tab: Home fills this pane with the _price_strip fragment ──
+            with _dock_tab_prices:
+                _dock_pane_prices = st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False)
+
+        # ── Markets tab (every page) ──
         with _dock_tab_markets:
             with st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False):
                 _index_strip()
@@ -5122,118 +5238,55 @@ if page == "🏠 Home":
     # grading harness.
     st.session_state["_judgment_opinions_today"] = []
 
-    # ── Act Today pointer (Home redesign P2, docs/plans/home-redesign.md's
-    # 2026-10-06 "P1 + P2 designed" section) — a one-line pointer at the very
-    # top of Home, reading the SAME act_today_view() result the full Act
-    # Today section below renders from (never a second count/call — see
-    # act_today_pointer.py's own module docstring). Declared first, before
-    # P1's notices summary placeholder (D7), so it is the first content-
-    # bearing element Home ever renders.
-    _act_ptr_ph = st.empty()
-
     # Shared by BOTH the full-book data-load-outage st.stop() below (which
     # fires before _act_view can ever be computed) and the narrower
     # _daily_brief_offline case near _act_view's own computation further
-    # down — same wording either way, so the top pointer and the Act Today
-    # section below it never disagree on how to describe "not checked".
+    # down — same wording either way, so the dock's Act Today pointer and the
+    # Act Today section on the page never disagree on how to describe "not checked".
     _OFFLINE_ACT_MSG = (
         "⚠️ Today's Brief couldn't be built this run — Act Today was NOT "
         "checked. Refresh Signals to retry."
     )
 
-    # ── Notices summary (Home redesign P1, docs/plans/home-redesign.md's
-    # 2026-10-06 "P1 + P2 designed" section) — a one-line summary above the
-    # "⚠️ Alerts" expander below, built from what the expander's own 16 fill
-    # sites actually render this run. A LOCAL list (not session_state — this
-    # is a single-render accumulator, never meant to persist or grow across
-    # reruns). Declared before the expander's own first placeholder so the
-    # summary always renders ABOVE it.
+    # ── Notices summary (Home redesign P1) — the placeholders it writes
+    # (`_notices_summary_ph` in the dock's Act Today tab and
+    # `_notices_tab_summary_ph` in the Notices tab) are declared in the
+    # module-level dock above. A LOCAL list (not session_state — this is a
+    # single-render accumulator, never meant to persist or grow across reruns)
+    # feeds the one-line summary, built from what the Notices tab's own 17 fill
+    # sites actually render this run.
     _home_notices: list[tuple[str, str]] = []
-    _notices_summary_ph = st.empty()
 
     def _home_notice(source: str, tier: str) -> None:
         """Record one fill site's actual rendered tier and refresh the
-        one-line summary above the Alerts expander. Call this ONLY from
-        inside the conditional branch that actually drew something — never
-        unconditionally in a fill site's outer block, which would manufacture
-        a false daily notice. Wrapped end-to-end so a bug here can never take
-        down a fill site that isn't itself inside a try/except."""
+        one-line summary in the dock's Act Today and Notices tabs. Call this
+        ONLY from inside the conditional branch that actually drew something —
+        never unconditionally in a fill site's outer block, which would
+        manufacture a false daily notice. Wrapped end-to-end so a bug here can
+        never take down a fill site that isn't itself inside a try/except."""
         try:
             _home_notices.append((source, tier))
             _summary = _home_notices_mod.summarize_notices(_home_notices)
             _headline = _home_notices_mod.notices_headline(_summary)
-            if not _summary or not _headline:
-                _notices_summary_ph.empty()
-                return
-            if _summary["tier"] == "error":
-                _notices_summary_ph.error(_headline)
-            elif _summary["tier"] == "warning":
-                _notices_summary_ph.warning(_headline)
-            else:
-                _notices_summary_ph.caption(_headline)
+            # The Act Today tab's copy points at the Notices tab; the Notices
+            # tab's own copy does not.
+            for _ph, _ph_suffix in ((_notices_summary_ph, " → ⚠️ Notices tab"),
+                                    (_notices_tab_summary_ph, "")):
+                if not _summary or not _headline:
+                    _ph.empty()
+                elif _summary["tier"] == "error":
+                    _ph.error(_headline + _ph_suffix)
+                elif _summary["tier"] == "warning":
+                    _ph.warning(_headline + _ph_suffix)
+                else:
+                    _ph.caption(_headline + _ph_suffix)
         except Exception:
-            _notices_summary_ph.caption("⚠️ Notices summary unavailable — open ⚠️ Alerts below")
+            for _ph in (_notices_summary_ph, _notices_tab_summary_ph):
+                _ph.caption("⚠️ Notices summary unavailable — open the ⚠️ Notices tab")
 
-    # ── Unified alert stack (2026-08-04 UX audit I1; widened 2026-09-25) —
-    # 15 reserved placeholders so every AMBIENT (background-computed, not
-    # click-triggered) notice on Home visually groups into one collapsed
-    # section instead of appearing wherever its own compute happens to run.
-    # Declared here, at the very top of Home, because 3 of the 15 (System
-    # Trust chip, held-ticker load failures, stale-cache) fire before the
-    # original 6-placeholder block's old position — an st.empty() must be
-    # assigned before anything can .container() into it, so the whole block
-    # moved up rather than leaving a second one behind (Streamlit raises on
-    # two `with st.expander(..., key=...)` blocks sharing a key in one run).
-    # Each placeholder is filled at its banner's existing, unmoved compute
-    # position; st.empty() renders content at the RESERVED slot, not the
-    # fill-in call site, so nothing about data-dependency ordering below
-    # changes — only where each banner visually lands.
-    #
-    # Deliberately NOT everything warning-shaped on the page (2026-09-25
-    # scoping pass, catalogued ~39 sites first): roughly half of the
-    # scattered banners are inline feedback for something the user just
-    # clicked (Debate button, Refresh Signals, Generate Brief, a rebalance-
-    # plan toggle, Research a Stock) — moving those away from their trigger
-    # would hurt usability, not improve it, so they stay put. Only the
-    # AMBIENT ones (fire from background computation, no click) move here —
-    # matching a 2026-08-29 finding (project_home_redesign memory) that a
-    # FULL synthesized "needs attention" tray was declined on risk grounds
-    # (new consumer of overloaded/3-state producer caches, a severity-
-    # ranking layer). This is deliberately NOT that: no new cache reads, no
-    # ranking, no synthesis — every site below keeps its own existing
-    # condition/text/logic untouched; only the render DESTINATION moves,
-    # reusing the exact mechanism already proven on the original 6 (buttons
-    # and loops included, via the Stock Split banner).
-    with st.expander("⚠️ Alerts", expanded=False, key="_home_alerts_exp"):
-        _alert_ph_dayshock   = st.empty()
-        _alert_ph_xcheck     = st.empty()
-        _alert_ph_split      = st.empty()
-        _alert_ph_structural = st.empty()
-        # Filled far below (after live prices exist) but DECLARED here so it
-        # renders ABOVE the Portfolio Value tile — the caveat has to precede
-        # the number it caveats. Same declare-early/fill-late pattern as
-        # _alert_ph_structural.
-        _alert_ph_drift      = st.empty()
-        # TJDate U8c: the journal-vs-Robinhood line, right under the broker-drift
-        # notice it cross-references. Same declare-early/fill-late pattern.
-        _alert_ph_journalmatch = st.empty()
-        # 2026-09-24: moved in from the end of Today's Brief (was rendering
-        # below the Buy Candidates overflow, well past this expander) so this
-        # awareness nudge groups with the other 5 instead of surfacing far
-        # down the page. Same declare-early/fill-late pattern; its compute
-        # (thesis_erosion_cache read, dedup, baseline walk-back) is unmoved.
-        _alert_ph_thesis     = st.empty()
-        # 2026-09-25 widening — 9 ambient sites added:
-        _alert_ph_systrust   = st.empty()   # System Trust chip (degraded/down)
-        _alert_ph_heldload   = st.empty()   # held-ticker _parallel_load_all failures
-        _alert_ph_stale      = st.empty()   # "showing cached data" (stale_as_of)
-        _alert_ph_dropped    = st.empty()   # dropped-holdings (no_price_data etc.)
-        _alert_ph_scorewithheld = st.empty()   # score-withheld holdings (no fundamentals)
-        _alert_ph_outage     = st.empty()   # full-book data outage + retry
-        _alert_ph_leverage   = st.empty()   # margin/leverage awareness caption
-        _alert_ph_pnldq      = st.empty()   # Today's P&L data-quality cluster
-        _alert_ph_crossasset = st.empty()   # cross-asset macro stress / offline
-        _alert_ph_debrief    = st.empty()   # Evening Debrief build failure
+    # The ⚠️ Notices tab's 17 `_alert_ph_*` placeholders are declared in the
+    # module-level dock above (see the comment there for why they are declared
+    # ahead of Home's code and what is deliberately NOT routed to them).
 
     # ── System Trust chip (System Proprioception Phase 1) — owner-only, degraded-
     # only. One line at the top of Home ONLY when a pipeline check is amber/red,
@@ -5439,7 +5492,7 @@ if page == "🏠 Home":
             st.warning(
                 f"📦 **Showing cached data** (as of {_stale_oldest}) for "
                 f"{len(_stale_held)} name{'s' if len(_stale_held) != 1 else ''}: {_stale_names}. "
-                "The live history/fundamentals provider is down — live prices in the strip remain "
+                "The live history/fundamentals provider is down — live prices in the 💹 Live Prices tab remain "
                 "current, but signals & analysis for these names may be slightly stale."
             )
 
@@ -5494,12 +5547,12 @@ if page == "🏠 Home":
         st.session_state.pop("_brief_news_rescore_status", None)
 
     # ── Live price strip — fragment auto-refreshes every 60 s ────────────
-    # Collapsed by default (2026-09-17 Home decluttering, mockup-approved) so
-    # Today's Brief is reached sooner. The fragment is called INSIDE the
-    # expander below, not moved — a fragment renders into whatever container
-    # was open at its call site and keeps re-rendering there on its own 60s
-    # schedule, independent of the outer script and of the expander's own
-    # open/closed state.
+    # Lives in the dock's 💹 Live Prices tab (home dock C1; it was a collapsed
+    # expander on the page since the 2026-09-17 Home decluttering). The fragment
+    # is called INSIDE that tab's pane (`_dock_pane_prices`, declared in the
+    # module-level dock) — a fragment renders into whatever container was open
+    # at its call site and keeps re-rendering there on its own 60s schedule,
+    # independent of the outer script and of which dock tab is showing.
     @st.fragment(run_every=60)
     def _price_strip(tickers: list[str]):
         mkt = market_status()
@@ -5557,10 +5610,8 @@ if page == "🏠 Home":
         )
         st.divider()
 
-    with st.expander(
-        f"💹 Live Prices ({len(held_tickers)} position{'s' if len(held_tickers) != 1 else ''})",
-        expanded=False, key="_home_price_strip_exp",
-    ):
+    with _dock_pane_prices:
+        st.caption(f"{len(held_tickers)} position{'s' if len(held_tickers) != 1 else ''}")
         _price_strip(held_tickers)
 
     # ── Price cross-check, computed early (2026-08-31) ────────────────────────
@@ -5792,7 +5843,7 @@ if page == "🏠 Home":
     st.session_state["_signals_computed_at"] = _now_et().strftime("%I:%M %p")  # for staleness warning
 
     if _manual_stops_unreadable:
-        # Rendered in-flow (not in the collapsed Alerts expander): a protective
+        # Rendered in-flow (not in the dock's Notices tab): a protective
         # input is missing, so this must not be foldable away.
         st.error(MANUAL_STOPS_UNREADABLE_BANNER)
 
@@ -5842,7 +5893,7 @@ if page == "🏠 Home":
                     f"⚠️ **Couldn't load market data for your {_n} holding"
                     f"{'s' if _n != 1 else ''}** ({', '.join(held_tickers)}).\n\n"
                     "Your holdings are **safe** — this is a data-provider issue, not data loss. "
-                    "Live prices in the strip above are fine; only the **history & fundamentals** "
+                    "Live prices in the 💹 Live Prices tab are fine; only the **history & fundamentals** "
                     "feed is temporarily failing (usually a brief upstream hiccup, common pre-open). "
                     "It clears itself once the provider recovers — no need to re-enter anything."
                 )
@@ -5861,9 +5912,16 @@ if page == "🏠 Home":
                 if _rl_locked:
                     st.caption(f"⏳ Retry cooling down — available in {_rl_rem}s. "
                                "Hammering it deepens the throttle; give the provider a minute.")
+            # The explanation and the Retry button live in the dock's Notices tab;
+            # without this line the page itself would say nothing on an outage run.
+            st.error(
+                "⚠️ Couldn't load market data for your holdings — Act Today was NOT "
+                "checked. See the 🔴 Act Today and ⚠️ Notices tabs in the dock at the "
+                "bottom of the window for details and Retry."
+            )
             # This st.stop() fires before _act_view can ever be computed below
             # (that needs a built Daily Brief, which needs port_df) — without
-            # this fill, the top-of-page Act Today pointer (P2) would sit
+            # this fill, the dock's Act Today pointer (P2) would sit
             # permanently blank on an outage day, which this design's explicit
             # calm "Nothing to act on today" success state could make read as
             # an unstated all-clear. Branch-specific wording (reviewer finding,
@@ -5872,7 +5930,7 @@ if page == "🏠 Home":
             # at the retry button actually shown above instead.
             _act_ptr_ph.warning(
                 "⚠️ Couldn't load market data for your holdings — Act Today "
-                "was NOT checked. Retry above, or from ⚠️ Alerts below."
+                "was NOT checked. Retry from the ⚠️ Notices tab."
             )
         else:
             st.info(
@@ -8203,7 +8261,7 @@ if page == "🏠 Home":
             ),
         )
     else:
-        _c3.metric("Today's P&L", "Updating…", help="Loads with the live price strip")
+        _c3.metric("Today's P&L", "Updating…", help="Loads with the 💹 Live Prices tab")
     _c4.metric("Alerts",           f"{n_danger}🔴 {n_warning}🟡",
                help=f"{n_danger} danger · {n_warning} Watch — check 📡 Signals & Advice")
     _c5.metric("Avg Score",        f"{avg_score:.0f}/100")
@@ -8444,7 +8502,7 @@ if page == "🏠 Home":
         _home_notice("pnldq", "caption")
     if _dq_msgs or _fill_note:
         # No nested st.expander (Streamlit disallows expander-in-expander,
-        # and this now lives inside the top "⚠️ Alerts" one) -- the per-issue
+        # and this now lives inside the dock's Notices tab) -- the per-issue
         # captions just render directly below the summary warning.
         with _alert_ph_pnldq.container():
             if len(_dq_msgs) == 1:
@@ -8495,7 +8553,7 @@ if page == "🏠 Home":
     # _act_ptr_ph's own first fill below), so the outage st.stop() far above
     # (before _act_view can be computed) and this point use identical wording.
 
-    # Fill the top-of-page Act Today pointer (P2) now that _act_view is
+    # Fill the Act Today pointer in the dock's Act Today tab (P2) now that _act_view is
     # computed — act_pointer() never recomputes anything, it only reads this
     # SAME dict. Never raises, so no try/except needed around the call itself.
     _act_ptr = _act_pointer_mod.act_pointer(_act_view)
@@ -8508,7 +8566,7 @@ if page == "🏠 Home":
             # disclosure for the identical situation (app.py's _sm_resolved
             # caption) — D2.
             _act_ptr_clear_msg += (
-                f" · {_act_ptr['n_resolved']} stop breach(es) resolved — monitoring below"
+                f" · {_act_ptr['n_resolved']} stop breach(es) resolved — monitoring in 📋 Today's Brief"
             )
         _act_ptr_ph.success(_act_ptr_clear_msg)
     else:
@@ -8528,9 +8586,9 @@ if page == "🏠 Home":
             _act_ptr_msg += f" — {_act_ptr_chips}"
         if _act_ptr["n_resolved"]:
             _act_ptr_msg += (
-                f", {_act_ptr['n_resolved']} resolved below"
+                f", {_act_ptr['n_resolved']} resolved in 📋 Today's Brief"
             )
-        _act_ptr_msg += " — see 📋 Today's Brief → Act Today below"
+        _act_ptr_msg += " — see 📋 Today's Brief → Act Today"
         _act_ptr_ph.error(_act_ptr_msg)
     # ═══════════════════════════════════════════════════════════════════════════
     # TODAY'S BRIEF — promoted to a full-width top section (not a tab); see
@@ -12539,14 +12597,14 @@ if page == "🏠 Home":
             else:
                 _render_act_card(_item, in_act=in_act)
 
-        # Static in-page anchor for the top-of-page Act Today pointer's jump
+        # Static in-page anchor for the dock Act Today pointer's jump
         # link (D5) — a bare, non-interpolated string, so it's exempt from
         # the dynamic-unsafe_allow_html antipattern rule on the same footing
         # as the dynamic HTML immediately below it. Deliberately not paired
         # with a literal `<a href='#drishta-act-today'>` link from the
         # pointer text — no existing in-page-anchor precedent in this
         # codebase to confirm Streamlit's own scroll behavior actually
-        # honors it, so the pointer uses plain "see ... below" text instead
+        # honors it, so the pointer uses plain "see 📋 Today's Brief → Act Today" text instead
         # (lower-risk per the build spec's own judgment call).
         st.markdown("<div id='drishta-act-today'></div>", unsafe_allow_html=True)
 
@@ -14486,7 +14544,7 @@ elif page == "🧾 Summary":
             _sm_dp_late = _sm_dpnl.get("late_filled")   # absent on an older cached payload
             _sm_dp_late_note = (
                 f" {len(_sm_dp_late)} name(s) in the baseline snapshot were corrected "
-                f"from the journal (see 🏠 Home → ⚠️ Alerts)."
+                f"from the journal (see 🏠 Home → ⚠️ Notices)."
                 if isinstance(_sm_dp_late, list) and _sm_dp_late else "")
             _sm_dp_flat = (_signed_display(_sm_dpnl["day_pnl"], 0)[1]
                            and _signed_display(_sm_dpnl["day_pnl_pct"], 2)[1])
@@ -46130,7 +46188,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🧭 Monthly Decision Review (AI) — "is the engine picking well, and am I acting well?"** Lives on the 📄 Reports page. A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of the app's **entry calls** (New Position, Add to Winner and Enter Now; an Enter Now on a name you already held is left out), which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. A call counts as **acted on** only when you bought that name on the call day or within {_UG_ENTRY_WINDOW_N} trading day(s) after it; a sell, or a buy dated before the call, never counts. A name is judged on its closed calls; only a name whose every call's window runs past the month's end shows as **still open**: it is listed by name at the end of Signal discipline, is not counted as bought or skipped, and is not revisited in next month's report; a name the app couldn't judge is listed as **not judged** the same way. A skipped name you bought during the month, but not within any of its calls' windows (earlier calls whose windows reach into the month included), stays skipped and is listed as **bought outside the window** with its buy dates. Two tiles open it: **Names you bought** and **Names you skipped**, each a count of distinct names with its average alpha vs SPY in percentage points (bought: over the matured surfacings you acted on, from your fill price; skipped: over every matured surfacing of the names you didn't buy within a call's decision window). The conviction-tier bar prices every call from its **call-day price**, whether or not you bought it. 📜 Recommendations History and the other pages that count acted calls still use the older rule (a same-day trade tagged as a recommendation), so their counts can differ; a report saved under the older rule (only that same-day trade counted, and only New Position calls were listed) carries a caption saying so. The skipped average is saved from the first report generated after this update (2026-11-14); an older report says it wasn't saved rather than recomputing it. The report is visual (funnel chart with each step's count, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing. Each report covers **one calendar month** (the email on the first Sunday of December covers 1–30 November), and each pick's result is measured up to the day the report was generated. **Generate** rebuilds the last completed month, or the month you picked in the picker; reports made before 2026-11-17 covered the 4 weeks ending on a Sunday and show their own dates. Regenerating a month that was already emailed shows a preview and keeps the emailed version; only **Replace the emailed version** overwrites it. If your trade journal or the recommendations can't be read, no report is built (it would otherwise read every name as skipped).
 
-- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A position whose label changed since the last day it was scored auto-expands with a **"🆕 Changed since your last visit"** badge, so a real tier shift can't get missed just because this tab only recomputes once per trading day. Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears in the "⚠️ Alerts" group near the top of 🏠 Home (alongside Day Shock, price cross-check, and the other awareness banners) when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
+- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A position whose label changed since the last day it was scored auto-expands with a **"🆕 Changed since your last visit"** badge, so a real tier shift can't get missed just because this tab only recomputes once per trading day. Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears in the ⚠️ Notices tab of 🏠 Home's bottom dock (alongside Day Shock, price cross-check, and the other awareness banners) when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
 
 - **⚔️ Debate — "make me the strongest case on both sides before I buy this"** On any 📈 Grow Today entry candidate, click **⚔️ Debate** to run a structured 4-round argument: a Bull agent opens the case for the position, a Bear agent counters, Bull rebuts, Bear delivers its closing concern — then an impartial judge scores both sides and names the **one specific claim** they disagree on most. Verdict reads as 🟢 Bull wins, 🔴 Bear wins, or ⚖️ Contested (the most common and most useful outcome — it tells you exactly what to research further before deciding). Both agents debate the same evidence — composite score, momentum, and relative strength vs the market — so neither side is arguing from information you don't also have. Runs once per candidate per day (results are cached — reopen the card any time to reread it), capped at 3 new debates per session. **The debate never reorders candidates or changes the composite score — it's a second opinion you read before deciding, not a vote that counts.**
 
@@ -46214,7 +46272,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 **7. ⚡ Broker Sync (optional) — automates the two manual habits above for Robinhood.** Open the 💰 Account page's **"🔌 Brokerage Trend"** tab for the "⚡ Broker Sync" section, which connects Robinhood via **SnapTrade** (a middleman service — the app never sees your Robinhood login). Once connected, a background job keeps your **cash balance** current automatically (the "Cash as of" line at the top of the Account page shows when it last synced), and shows:
 - **Position drift** — a live comparison of what Robinhood actually holds vs. what's logged in this app (three buckets: Robinhood-only, App-only, quantity mismatches). Awareness only — it never edits your trades or holdings for you; you reconcile it yourself the same way you always have.
 - **Pending trade imports** — buy/sell activity Robinhood reports that couldn't be auto-matched to a trade you already logged (the auto-match requires an exact date and price, so a manually-logged trade with a slightly different date or price can land here; its verdict then tells you it is already in your journal). This is a **different, stricter check than Position Drift above** — a row can appear here even when that ticker's drift is completely clean. Each pending fill is compared, one by one, with your journal, and its row says which of these it is: **✅ Already in your journal**, **⚠️ In your journal, but the details differ** (a different date, price or share count), **🆕 Not in your journal**, or a plain note that it is unclear, couldn't be compared, is an option trade, is older than the comparison window, or wasn't compared this render (each with its reason). A line under the list says how far the comparison reaches, which is the last completed transaction sync. The buttons follow the verdict. Nothing is written automatically: **"Log This Trade →"** opens the Trade Journal with ticker/shares/price/date already locked in from the real fill — you still choose a trigger reason and write the required pre-mortem (labeled "Retrospective" since the trade already happened), same as any other Buy. It is switched off when the fill is already in your journal (logging it would count it twice) or is an option trade, and the row says why. When the comparison names a journal row that could already be this fill, it asks you to tick "I've checked #N: this fill is a separate trade" first. **"Already logged"** clears the row from Pending Imports and never logs or edits a trade; it is the main button when the fill is already in your journal or is an option trade, and when the comparison says the fill is not in your journal it asks you to tick "I've checked: this fill is already in my journal under a row the comparison didn't match" first. When your journal or Robinhood's records couldn't be read, the rows say so and both buttons stay plain, so check each fill in Robinhood and 📋 History yourself. A ✗ button lets you back out of a locked import at any point without logging it. Since 2026-11-07 the sync dates each fill by its US Eastern trading day (a fill after 8 PM ET no longer lands on the next day), and a pending row whose fill the sync has linked to a trade in your journal usually clears itself on the next sync (until it does, its row says the fill is in your journal).
-- **🧾 Journal vs Robinhood** — below Pending Imports, your recent journal rows are compared with Robinhood's own fill records, including fills you marked "Already logged". The list says what differs (a Robinhood fill missing from your journal, a journal row with no Robinhood fill, a different share count, price or date), where the dates differ but the journal may be right, what couldn't be matched automatically, and, folded away, what isn't compared yet and what agrees. Each item that needs a look says what to check in Robinhood, and each item says the date it leaves the comparison; the line above the list names the window. A fill still waiting in Pending Imports isn't listed again: the summary line counts it ("N more are in 📥 Pending Imports above"), and when the Pending Imports list couldn't be read every fill is listed here instead. Nothing is changed automatically, and a correction that also repairs past account figures isn't built yet. The one action is **"Log This Trade →"** for a Robinhood fill that is in no journal row but was marked Already logged earlier, or shows as logged with no journal row linked to it: tick that you've checked first. It is switched off, and the item says why, when a matching fill in Pending Imports above offers Log for the same trade, or when Robinhood's record for the fill couldn't be found. On 🏠 Home, one line in the ⚠️ Alerts area, under the broker-drift notice, points here: a warning when a difference changes share counts, a quieter note when only a price or date differs, a "not checked" note when your journal or Robinhood's fills couldn't be read, and nothing when there is nothing to say (it never says "all clear"). A share-count difference the broker-drift notice already shows isn't counted again; the line points to that notice instead.
+- **🧾 Journal vs Robinhood** — below Pending Imports, your recent journal rows are compared with Robinhood's own fill records, including fills you marked "Already logged". The list says what differs (a Robinhood fill missing from your journal, a journal row with no Robinhood fill, a different share count, price or date), where the dates differ but the journal may be right, what couldn't be matched automatically, and, folded away, what isn't compared yet and what agrees. Each item that needs a look says what to check in Robinhood, and each item says the date it leaves the comparison; the line above the list names the window. A fill still waiting in Pending Imports isn't listed again: the summary line counts it ("N more are in 📥 Pending Imports above"), and when the Pending Imports list couldn't be read every fill is listed here instead. Nothing is changed automatically, and a correction that also repairs past account figures isn't built yet. The one action is **"Log This Trade →"** for a Robinhood fill that is in no journal row but was marked Already logged earlier, or shows as logged with no journal row linked to it: tick that you've checked first. It is switched off, and the item says why, when a matching fill in Pending Imports above offers Log for the same trade, or when Robinhood's record for the fill couldn't be found. On 🏠 Home, one line in the ⚠️ Notices tab of the bottom dock, under the broker-drift notice, points here: a warning when a difference changes share counts, a quieter note when only a price or date differs, a "not checked" note when your journal or Robinhood's fills couldn't be read, and nothing when there is nothing to say (it never says "all clear"). A share-count difference the broker-drift notice already shows isn't counted again; the line points to that notice instead.
 - **Cash Activity** — a trend of dividends, interest, and fees, purely for visibility (it never feeds your Growth/Return numbers above — those stay driven by the deposits/withdrawals you log). Pick **View by** (Monthly / Quarterly / Yearly) and **Range** (Last 12 months / This year / All time); the YTD lines under the chart always cover Jan 1 to today whatever you pick. Bars are signed: dividends and interest earned above zero, **margin interest** and fees below, so a Gold credit never hides that month's margin interest. The broker sync labels margin interest as a "fee"; since your only genuine fee is the annual Gold fee, those charges are counted as margin interest and listed under the chart. The chart pulls from your **SnapTrade broker sync**; your **Robinhood statement** is the source of truth, so upload it via the "📥 Import from Robinhood Statement" expander below the chart (download a CSV from your broker's Statements page) and its rows replace any matching broker-synced ones. A **Realized P&L (trades)** line is overlaid on the same chart, showing how much your closed trades actually made or lost each month — the same avg-cost figure your 📒 Trade Journal's Monthly Realized P&L Trend already shows, so the two never disagree. Hover any month to see dividends, interest, fees, and realized P&L together in one tooltip. A **"📋 Last statement import"** caption shows how current your statement upload is and how many broker-synced events haven't been cross-checked against one yet; a **"⚠️ possible unreconciled duplicate(s)"** expander appears only if the app finds a broker-sync event and a statement event that look like the same real transaction but weren't automatically recognized as one — worth a manual look, never something the app merges or hides on its own.
 
 Setup is a one-time, three-step process shown on the page itself (it needs a free SnapTrade Personal API Key and one Railway environment variable pair — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.
@@ -46234,7 +46292,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
         with st.expander("🗺️ The pages, at a glance", expanded=False):
             st.markdown(
                 """
-- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **The very first thing Home shows is a one-line Act Today pointer** — 🔴 "N Act Today" with an EXIT/TRIM/WATCH breakdown, a calm "✅ Nothing to act on today," or an explicit "NOT checked" if the Brief couldn't be built this run — so you know before scrolling past anything else whether there's something to act on, read from the exact same count the full Act Today section below renders from (never a second, independently-computed number). Just below it, a **muted notices line** summarizes the collapsed "⚠️ Alerts" expander beneath it — naming anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or a quiet note count on an otherwise clean day, so a busy morning doesn't require opening the expander to know something's off. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip (on a weekend, a holiday or before the 9:30 open it says "in the last session" with that session's date, because the live move then is the last completed session's) — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected. A **second, separate pause** works alongside it: when two names you hold sit at *danger-tier* correlation (≥0.80) — a standing near-duplicate exposure rather than a newly-formed one — Grow Today's add-to-winner is paused on **both** names, and a "🔗 Add Paused — Standing Correlated Pair" block names the partner and the correlation. This one has **no acknowledge step**: unlike the cluster pause above, a Structural Scan does not clear it, and neither does trimming the weaker name (trimming doesn't change how correlated two stocks are). It lasts while the pair stays that correlated and you hold both. It fires whether or not a trim card exists for that pair on 📡 Signals & Advice — the correlation is the trigger, so a data outage that hides the trim card can't quietly switch the pause off. Still pure suppression: no trim is recommended, and the hard caps are untouched. **And if a holding's price history couldn't be loaded at all**, a 🔍 line under Grow Today names it: that holding was left out of both correlation checks entirely, so no pairing involving it could be detected. It is deliberately *not* treated as a reason to pause anything — but it is also never silently counted as "checked and fine," which is what used to happen.
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **A dock pinned to the bottom of the window** has four tabs, and its title bar folds it down to one line. **🔴 Act Today** opens each time Home loads or reruns (a tab you pick stays during the 60-second refresh) and shows a one-line Act Today pointer — 🔴 "N Act Today" with an EXIT/TRIM/WATCH breakdown, a calm "✅ Nothing to act on today," or an explicit "NOT checked" if the Brief couldn't be built this run — so you know before scrolling past anything else whether there's something to act on, read from the exact same count the full Act Today section renders from (never a second, independently-computed number). Under it, a **notices line** names anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or gives a quiet note count on an otherwise clean day, so a red notice is visible without opening the next tab. **⚠️ Notices** holds the data and system notices that used to sit in the collapsed "⚠️ Alerts" box (Day Shock, the price cross-check, broker drift, Journal vs Robinhood, System Trust, a data outage with its Retry button, and the rest). **💹 Live Prices** shows your held positions and refreshes every 60 seconds, and **📈 Markets** shows the index tiles. Protective banners that must not be folded away (such as unreadable manual stops or the held-stop basis) stay in the page itself, not in the dock. In the ⚠️ Notices tab, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip (on a weekend, a holiday or before the 9:30 open it says "in the last session" with that session's date, because the live move then is the last completed session's) — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected. A **second, separate pause** works alongside it: when two names you hold sit at *danger-tier* correlation (≥0.80) — a standing near-duplicate exposure rather than a newly-formed one — Grow Today's add-to-winner is paused on **both** names, and a "🔗 Add Paused — Standing Correlated Pair" block names the partner and the correlation. This one has **no acknowledge step**: unlike the cluster pause above, a Structural Scan does not clear it, and neither does trimming the weaker name (trimming doesn't change how correlated two stocks are). It lasts while the pair stays that correlated and you hold both. It fires whether or not a trim card exists for that pair on 📡 Signals & Advice — the correlation is the trigger, so a data outage that hides the trim card can't quietly switch the pause off. Still pure suppression: no trim is recommended, and the hard caps are untouched. **And if a holding's price history couldn't be loaded at all**, a 🔍 line under Grow Today names it: that holding was left out of both correlation checks entirely, so no pairing involving it could be detected. It is deliberately *not* treated as a reason to pause anything — but it is also never silently counted as "checked and fine," which is what used to happen.
 - **🧾 Summary** — the cockpit: one screen that answers "is the book safe, what must I do today, and is anything drifting" without visiting another page. Six zones, in order of urgency. **① Book Safety** (top, colour-coded) — leverage ×, margin cushion, distance to a margin call, and whether your share counts still match the broker. Awareness only; it never changes a recommendation. It shows a grey **"not verified"** rather than green when your cash balance hasn't been loaded — an unmeasured book and a debt-free book are not the same thing, and it won't guess. Broker drift likewise distinguishes **In sync** (checked, matches), **Clean, dated** (matched when last captured, but that snapshot is old), **Trades pending** (differences explained by trades you logged since), and **Not checked** (unknown). When leverage is elevated above your own reference level **and** equity has fallen meaningfully from its recent high, a note states the measured split — how much of the rise came from equity shrinking versus the margin loan itself growing — plus how much smaller the book (or how much more cash) would bring leverage back to your reference. It never tells you to sell or trim anything; it states the two facts together because nothing else in the app does. **② Today** — 5 KPI tiles: Portfolio Value (+ 45-day sparkline), Unrealized P&L, Today's P&L (Home's Tier-B figure when available, else an honestly-labelled held-mark), **Today's Movers** (the 3 biggest moves either way; a name with no quote is reported unpriced, never as a flat 0%), and Avg Score against the buy threshold. The movers tile **renames itself "Last session's movers"** on a weekend, a holiday, or before the open — the change is measured against the previous close, so it only means "today" once today's session has begun. **③ Act Today** — bucketed as **EXIT · TRIM · WATCH** so you can tell an alarm's *nature* at a glance, then **one row per item** (badge · ticker · why · composite score), worst first. Below it a purple banner names any tickers under an active reduce/exit call whose ADD suggestions are being suppressed app-wide. Same source as Home, so it can never under-report. When there's a live EXIT or TRIM item and this engine's own protective track record is measurably running early, a small note appears above the rows stating the measured number (e.g. "historically run early... average N pp... worth confirming before you act, not a reason to ignore the call") — a factual disclosure of a real, tracked pattern, never a reason by itself to override the call. **④ Portfolio Health** — four cards: Risk Posture (falls back to counting the protective calls in today's Brief when the fragility dial can't be computed, and says "not computed" rather than an all-clear if that's missing too), Thesis Integrity (**names** the weakening tickers, not just a count), Diversification, and Active Vetoes. All four say "not checked" rather than "none" when they genuinely don't know. **⑤ Horizon** — three cards: 🎯 Engine Track Record (whether acting on the app's calls has beaten the S&P, offence and defence, alongside what the calls you *skipped* returned so the headline can't read as pure skill), 🔔 Catalyst Watch (which holdings report and when, flagged 🚫 when the name is also under a reduce call), and 📋 Portfolio Thesis (this week's five standing claims, each marked held or shifted). The full ledger with last week's comparison stays in the collapsed expander below. **"Alert level" there is not the same thing as "Risk Posture" above it** — alert level counts danger-level alerts, risk posture reads the market regime, so the two can legitimately differ. **⑥ Top Positions** — your 6 largest by weight: score coloured by the same Buy/Hold/Sell bands the rest of the app uses, a weight bar scaled to your single-name cap, an inline EXIT/TRIM/CAP badge, and ⚡ on a same-day shock. A footer counts how many rose, fell, or had no quote. The full Holdings table is one click away in an expander. Reads what Home already computed this session — visit 🏠 Home first if this page says it needs today's Brief. **The 🧭 "Is this account earning extra?" card** sits on this page too: the dollars you are ahead of or behind the same money left in SPY since tracking began (from your baseline row; the card's starting-point line names it), the borrowed-money net for complete months whose margin interest has posted (paid, cost, too close to call, or incomplete), and the tax already triggered by this year's sales. Its figures are as of the last close, and the same lines arrive in the Sunday weekly debrief email.
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above).

@@ -1,5 +1,5 @@
-"""Tests for stock_analyzer.act_today_pointer — Home redesign P2's top-of-
-page Act Today pointer (docs/plans/home-redesign.md's 2026-10-06 "P1 + P2
+"""Tests for stock_analyzer.act_today_pointer — Home redesign P2's Act Today
+pointer (now the first element of the Home dock's Act Today tab) (docs/plans/home-redesign.md's 2026-10-06 "P1 + P2
 designed" section), and its wiring into app.py.
 
 Three things this file guards:
@@ -318,8 +318,8 @@ def test_act_ptr_ph_declared_before_notices_summary_ph():
     assert notices_ph_line is not None, "_notices_summary_ph = st.empty() not found in app.py"
     assert act_ptr_line < notices_ph_line, (
         "_act_ptr_ph must be declared BEFORE _notices_summary_ph (D7) -- the "
-        "Act Today pointer must be the first content-bearing element Home "
-        "renders, ahead of P1's notices summary."
+        "Act Today pointer must be the first content-bearing element of the "
+        "dock's Act Today tab, ahead of P1's notices summary."
     )
 
 

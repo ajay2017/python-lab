@@ -1,5 +1,5 @@
 """Tests for stock_analyzer.home_notices (Home redesign P1 — the one-line
-notices summary above the "⚠️ Alerts" expander) and its wiring into app.py.
+notices summary in the Home dock's Act Today and Notices tabs) and its wiring into app.py.
 
 Two halves:
 1. `summarize_notices` / `notices_headline` pure-logic boundaries — empty
@@ -14,7 +14,7 @@ Two halves:
    reachable from its fill site, the 5 blocks that run on every render never
    call it as a bare top-level statement (it must be nested inside an If/For,
    or it would manufacture a false daily notice), the summary placeholder is
-   declared before the Alerts expander's own first placeholder, and the
+   declared before the Notices tab's own first placeholder, and the
    `_home_notice` closure is defined before its first call (module-def-order
    convention).
 """
@@ -112,7 +112,7 @@ def test_deterministic_ordering_is_source_order_position_not_call_order_or_alpha
 def test_busy_day_all_17_sources_exact_named_and_n_notes_split():
     # One realistic mixed-tier entry per source, covering every id in
     # SOURCE_ORDER -- the logic-level stand-in for a day where every one of
-    # the 17 Alerts-expander fill sites fires at once, which can't be forced
+    # the 17 Notices-tab fill sites fires at once, which can't be forced
     # to happen live.
     tiers_by_source = {
         "dayshock":      "error",
@@ -283,7 +283,7 @@ def test_unconditional_alert_blocks_never_call_home_notice_at_top_level():
             )
 
 
-def test_notices_summary_placeholder_declared_before_alerts_expander():
+def test_notices_summary_placeholder_declared_before_notices_tab():
     tree = _parse_app_py()
     notices_ph_line = None
     first_alert_ph_line = None
@@ -300,7 +300,7 @@ def test_notices_summary_placeholder_declared_before_alerts_expander():
     assert notices_ph_line is not None, "_notices_summary_ph = st.empty() not found in app.py"
     assert first_alert_ph_line is not None, "no _alert_ph_* placeholder found in app.py"
     assert notices_ph_line < first_alert_ph_line, (
-        "_notices_summary_ph must be declared BEFORE the Alerts expander's own "
+        "_notices_summary_ph must be declared BEFORE the Notices tab's own "
         "first placeholder, so the summary always renders above it (D7)."
     )
 
