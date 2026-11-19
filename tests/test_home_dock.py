@@ -31,6 +31,12 @@ def test_sticky_css():
     assert "position: fixed" not in css
     # no blank band under the dock at the end of the page (C0 probe finding)
     assert '[data-testid="stMainBlockContainer"] { padding-bottom: 0; }' in css
+    # a page shorter than the screen still has the dock at the bottom edge
+    assert "margin-top: auto" in css
+    assert (
+        '[data-testid="stVerticalBlock"]:has(> :is(.st-key-home_dock, '
+        ':has(> .st-key-home_dock))) { min-height: calc(100dvh - 6rem); }'
+    ) in css
 
 
 def test_probe_switch_is_gone():

@@ -27,6 +27,11 @@ _DOCK_CHILD = (
     '[data-testid="stVerticalBlock"] > '
     ":is(.st-key-home_dock, :has(> .st-key-home_dock))"
 )
+# The vertical block that directly holds the dock (the page's main block).
+_DOCK_PARENT = (
+    '[data-testid="stVerticalBlock"]:has(> '
+    ":is(.st-key-home_dock, :has(> .st-key-home_dock)))"
+)
 
 # Streamlit's own theme backgroundColor (.streamlit/config.toml) and a muted border.
 _BG = "#131722"
@@ -40,11 +45,18 @@ _CAP_RULE = (
 _STICKY_CSS = (
     "<style>"
     f"{_DOCK_CHILD} {{ order: 9999; position: sticky; bottom: 0; z-index: 990; "
-    f"background: {_BG}; border-top: {_BORDER}; padding-top: 4px; }} "
+    f"background: {_BG}; border-top: {_BORDER}; padding-top: 4px; margin-top: auto; }} "
     # At the end of the page a sticky element rests at its own place in the flow,
     # so Streamlit's bottom padding (~10rem) showed as a blank band under the dock
     # (C0 probe, owner 2026-11-19). The CSS is emitted on every page now.
     '[data-testid="stMainBlockContainer"] { padding-bottom: 0; } '
+    # A page shorter than the screen (📖 User Guide with its sections collapsed)
+    # left the dock floating mid-screen: sticky only holds an element at the
+    # bottom when the page is taller than the screen (owner 2026-11-19). The
+    # vertical block holding the dock is made at least one screen tall (minus
+    # Streamlit's 6rem top padding), and the dock's `margin-top: auto` above
+    # pushes it to that block's bottom.
+    f'{_DOCK_PARENT} {{ min-height: calc(100dvh - 6rem); }} '
     f"{_CAP_RULE}"
     "</style>"
 )
