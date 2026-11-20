@@ -3,7 +3,7 @@ app.py's wiring (app.py is never imported by a test).
 
 C0c made the dock app-wide: one module-level ``with st.container(key=DOCK_KEY)``
 in app.py, before page dispatch, holding the only ``_index_strip()`` call.
-C1 gave 🏠 Home four tabs (Act Today, Notices, Live Prices, Markets): the Home
+C1 gave 🏠 Home tabs (C1c retired Act Today, leaving Notices, Live Prices, Markets): the Home
 placeholders are declared inside the dock's tabs and filled by Home's code.
 """
 import ast
@@ -32,12 +32,12 @@ def test_sticky_css():
     assert "order: 9999" in css
     assert "position: fixed" not in css
     # no blank band under the dock at the end of the page (C0 probe finding)
-    assert '[data-testid="stMainBlockContainer"] { padding-bottom: 0; }' in css
+    assert "padding-bottom: 0; }" in css
     # a page shorter than the screen still has the dock at the bottom edge
     assert "margin-top: auto" in css
     assert (
         '[data-testid="stVerticalBlock"]:has(> :is(.st-key-home_dock, '
-        ':has(> .st-key-home_dock))) { min-height: calc(100dvh - 6rem); }'
+        ':has(> .st-key-home_dock))) { min-height: calc(100dvh - 4.25rem); }'
     ) in css
 
 
@@ -110,10 +110,11 @@ def test_app_has_no_dock_query_switch():
 
 # ── C1: pure helpers ─────────────────────────────────────────────────────────
 
-def test_home_dock_has_four_tabs_act_today_first_markets_last():
+def test_home_dock_has_three_tabs_notices_first_markets_last():
     tabs = hd.dock_tabs(True)
-    assert tabs == ("🔴 Act Today", "⚠️ Notices", "💹 Live Prices", "📈 Markets")
-    assert tabs[0] == "🔴 Act Today" and tabs[-1] == "📈 Markets"
+    assert tabs == ("⚠️ Notices", "💹 Live Prices", "📈 Markets")
+    assert tabs[0] == "⚠️ Notices" and tabs[-1] == "📈 Markets"
+    assert not any("Act Today" in t for t in tabs)
 
 
 def test_other_pages_keep_the_markets_only_dock():
@@ -122,7 +123,7 @@ def test_other_pages_keep_the_markets_only_dock():
 
 
 def test_home_title_names_every_tab_and_differs_from_other_pages():
-    assert hd.dock_title(True) == "🏠 Act Today · Notices · Live Prices · Markets"
+    assert hd.dock_title(True) == "🏠 Notices · Live Prices · Markets"
     assert hd.dock_title(True) != hd.dock_title(False)
 
 
@@ -189,9 +190,7 @@ def test_home_placeholders_are_assigned_only_inside_the_dock():
     names = _assigned_names(tree)
     alert_names = [n for n in names if n.startswith("_alert_ph_")]
     assert len(alert_names) == 17
-    wanted = alert_names + [
-        "_act_ptr_ph", "_notices_summary_ph", "_notices_tab_summary_ph", "_dock_pane_prices",
-    ]
+    wanted = alert_names + ["_notices_summary_ph", "_dock_pane_prices"]
     for name in wanted:
         assert name in names, f"{name} is never assigned in app.py"
         for node in names[name]:
@@ -200,27 +199,18 @@ def test_home_placeholders_are_assigned_only_inside_the_dock():
             )
 
 
-def test_act_tab_holds_the_pointer_and_summary_and_notices_tab_the_alerts():
+def test_notices_tab_holds_the_summary_and_every_alert_placeholder():
     tree = parse_file_cached(_APP)
     dock = _dock_with(tree)
-    act = _with_named(dock, "_dock_tab_act")
     notices = _with_named(dock, "_dock_tab_notices")
     prices = _with_named(dock, "_dock_tab_prices")
-    assert _is_name_assigned_in(act, "_act_ptr_ph")
-    assert _is_name_assigned_in(act, "_notices_summary_ph")
-    assert not _is_name_assigned_in(act, "_notices_tab_summary_ph")
-    assert _is_name_assigned_in(notices, "_notices_tab_summary_ph")
+    assert _is_name_assigned_in(notices, "_notices_summary_ph")
     for name in sorted(n for n in _assigned_names(tree) if n.startswith("_alert_ph_")):
         assert _is_name_assigned_in(notices, name), f"{name} is not in the Notices tab"
-        assert not _is_name_assigned_in(act, name)
     assert _is_name_assigned_in(prices, "_dock_pane_prices")
-
-
-def test_pointer_is_declared_before_the_summary_in_the_act_tab():
-    tree = parse_file_cached(_APP)
-    act = _with_named(_dock_with(tree), "_dock_tab_act")
-    names = _assigned_names(act)
-    assert names["_act_ptr_ph"][0].lineno < names["_notices_summary_ph"][0].lineno
+    # one summary placeholder only (the Act Today tab's copy went with the tab)
+    assert len(_assigned_names(tree)["_notices_summary_ph"]) == 1
+    assert "_dock_tab_act" not in _SRC
 
 
 def test_notices_tab_ends_with_a_descriptive_caption_not_an_all_clear():
@@ -258,14 +248,18 @@ def test_old_expander_keys_are_gone():
     assert "_home_price_strip_exp" not in _SRC
 
 
-def test_home_notice_writes_both_summary_placeholders():
+def test_home_notice_writes_the_one_summary_placeholder():
     tree = parse_file_cached(_APP)
     fn = next(
         n for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef) and n.name == "_home_notice"
     )
     used = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
-    assert {"_notices_summary_ph", "_notices_tab_summary_ph"} <= used
+    assert "_notices_summary_ph" in used
+    assert "_notices_tab_summary_ph" not in _SRC
+    # no pointer hint is appended any more: the line is already in the Notices tab
+    consts = [n.value for n in ast.walk(fn) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    assert not any("→ ⚠️ Notices tab" in c for c in consts)
 
 
 # ── C1 review fixes ──────────────────────────────────────────────────────────
@@ -345,11 +339,11 @@ def test_tab_unpack_target_order_is_pinned():
         n for n in ast.walk(dock)
         if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Tuple)
         and [e.id for e in n.targets[0].elts if isinstance(e, ast.Name)]
-        == ["_dock_tab_act", "_dock_tab_notices", "_dock_tab_prices"]
+        == ["_dock_tab_notices", "_dock_tab_prices"]
     ]
     assert len(unpacks) == 1
     src = ast.unparse(unpacks[0].value)
-    assert src == "_dock_tabs[:3]"
+    assert src == "_dock_tabs[:2]"
 
 
 def test_notices_tab_summary_is_assigned_before_the_first_alert_placeholder():
@@ -359,7 +353,7 @@ def test_notices_tab_summary_is_assigned_before_the_first_alert_placeholder():
     first_alert = min(
         n.lineno for k, v in names.items() if k.startswith("_alert_ph_") for n in v
     )
-    assert names["_notices_tab_summary_ph"][0].lineno < first_alert
+    assert names["_notices_summary_ph"][0].lineno < first_alert
 
 
 def _home_branch(tree):
@@ -378,7 +372,7 @@ def test_dock_placeholder_uses_outside_the_dock_sit_inside_the_home_branch():
     dock_ids = {id(n) for n in ast.walk(_dock_with(tree))}
     home_ids = {id(n) for stmt in _home_branch(tree).body for n in ast.walk(stmt)}
     names = {n for n in _assigned_names(tree) if n.startswith("_alert_ph_")}
-    names |= {"_act_ptr_ph", "_notices_summary_ph", "_notices_tab_summary_ph", "_dock_pane_prices"}
+    names |= {"_notices_summary_ph", "_dock_pane_prices"}
     uses = 0
     for n in ast.walk(tree):
         if id(n) in dock_ids:
@@ -389,3 +383,67 @@ def test_dock_placeholder_uses_outside_the_dock_sit_inside_the_home_branch():
                 f"{n.id} is used outside the dock and outside Home's branch at app.py:{n.lineno}"
             )
     assert uses > 20, "expected the Home fill sites to be found"
+
+
+# ── C1c: top padding and the style-only elements above the first card ────────
+
+def test_top_pad_constant_is_header_plus_a_small_gap():
+    assert hd._HEADER_HEIGHT_REM == 3.75
+    assert hd._TOP_PAD_REM > hd._HEADER_HEIGHT_REM, "content must never sit under the header"
+    assert hd._TOP_PAD_REM - hd._HEADER_HEIGHT_REM <= 1.0
+
+
+def test_top_pad_is_used_in_both_rules_and_is_not_zero():
+    css = hd.dock_css()
+    pad = f"{hd._TOP_PAD_REM:g}rem"
+    assert f'[data-testid="stMainBlockContainer"] {{ padding-top: {pad}; ' in css
+    assert f"min-height: calc(100dvh - {pad})" in css
+    assert "padding-top: 0;" not in css and "padding-top: 0rem" not in css
+    assert "6rem" not in css
+
+
+def test_dock_css_has_no_tag_like_text_inside_the_style():
+    # Streamlit's st.html sanitizer (DOMPurify 3.4.0, SAFE_FOR_XML) drops a style
+    # element whose text contains "<" + a letter, "/" or "!".
+    import re
+    css = hd.dock_css()
+    inner = css[len("<style>"):-len("</style>")]
+    assert not re.search(r"<[/\w!]", inner)
+
+
+def _st_html_string_args(tree):
+    out = []
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "html" and isinstance(n.func.value, ast.Name)
+                and n.func.value.id == "st" and n.args
+                and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str)):
+            out.append(n.args[0].value)
+    return out
+
+
+def test_global_theme_is_style_only_st_html_without_tag_text_inside():
+    import re
+    tree = parse_file_cached(_APP)
+    htmls = _st_html_string_args(tree)
+    themes = [h for h in htmls if "Inter:wght" in h]
+    assert len(themes) == 1, "the global theme must be one st.html call"
+    body = themes[0].strip()
+    assert body.startswith("<style>") and body.endswith("</style>")
+    inner = body[len("<style>"):-len("</style>")]
+    assert not re.search(r"<[/\w!]", inner), "a tag-like string inside the CSS makes st.html drop it"
+    assert "</style>" not in inner
+
+
+def test_dock_css_is_emitted_with_st_html():
+    tree = parse_file_cached(_APP)
+    hits = [
+        n for n in tree.body
+        if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+        and isinstance(n.value.func, ast.Attribute) and n.value.func.attr == "html"
+        and n.value.args and isinstance(n.value.args[0], ast.Call)
+        and isinstance(n.value.args[0].func, ast.Attribute)
+        and n.value.args[0].func.attr == "dock_css"
+    ]
+    assert len(hits) == 1, "expected one module-level st.html(home_dock.dock_css())"
+    assert "st.markdown(home_dock.dock_css()" not in _SRC

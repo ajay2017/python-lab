@@ -6,9 +6,10 @@ dispatch, so a page that stops early still gets it; the CSS built here pins it
 to the bottom of the screen, so where it is declared does not decide where it
 shows. Sticky pinning (which keeps the main column's width) was proven on
 Railway in the C0 probe, so the probe's fixed-position fallback and its URL
-switch are gone. C1: on 🏠 Home the dock has four fixed-label tabs (Act Today,
-Notices, Live Prices, Markets; no counts in a label, because Streamlit fixes
-the labels when ``st.tabs`` is called, before Home computes anything); every
+switch are gone. C1: on 🏠 Home the dock has fixed-label tabs (Notices, Live
+Prices, Markets; no counts in a label, because Streamlit fixes the labels when
+``st.tabs`` is called, before Home computes anything). C1c retired the Act Today
+pointer and its tab (Today's Brief says the same), leaving Notices first; every
 other page keeps the one-tab Markets dock until C1b. Home and the other pages
 use separate widget keys so a tab picked on Home cannot carry onto the one-tab
 dock. See docs/plans/home-dock.md. ``.st-key-home_dock`` keeps its old name,
@@ -28,9 +29,9 @@ HOME_DOCK_TABS_KEY = "_home_dock_tabs_home"
 # Tab labels are fixed (no counts): Streamlit sets them, and the starting tab, when
 # st.tabs is called at module level, before Home has computed anything. The first
 # tab is the default.
-HOME_DOCK_TABS = ("🔴 Act Today", "⚠️ Notices", "💹 Live Prices", "📈 Markets")
+HOME_DOCK_TABS = ("⚠️ Notices", "💹 Live Prices", "📈 Markets")
 OTHER_DOCK_TABS = ("📈 Markets",)
-HOME_DOCK_TITLE = "🏠 Act Today · Notices · Live Prices · Markets"
+HOME_DOCK_TITLE = "🏠 Notices · Live Prices · Markets"
 OTHER_DOCK_TITLE = "📈 Markets"
 
 # Owner Q6 (2026-11-19): about 3 rows of content. A display size, not a decision
@@ -49,6 +50,15 @@ _DOCK_PARENT = (
     ":is(.st-key-home_dock, :has(> .st-key-home_dock)))"
 )
 
+# Streamlit 1.57.0 frontend (static/js/index.*.js, utils.*.js): the fixed header
+# (stHeader, position: absolute) is theme.sizes.headerHeight = 3.75rem, and
+# stMainBlockContainer's default padding-top is 6rem (4.5rem or 8rem in embedded /
+# top-nav modes, neither used here). 6rem left ~2.25rem of blank space under the
+# header; the content starts at the header's height plus a small gap instead.
+# Never 0: content must not slide under the header.
+_HEADER_HEIGHT_REM = 3.75
+_TOP_PAD_REM = _HEADER_HEIGHT_REM + 0.5
+
 # Streamlit's own theme backgroundColor (.streamlit/config.toml) and a muted border.
 _BG = "#131722"
 _BORDER = "1px solid #31333f"
@@ -65,14 +75,15 @@ _STICKY_CSS = (
     # At the end of the page a sticky element rests at its own place in the flow,
     # so Streamlit's bottom padding (~10rem) showed as a blank band under the dock
     # (C0 probe, owner 2026-11-19). The CSS is emitted on every page now.
-    '[data-testid="stMainBlockContainer"] { padding-bottom: 0; } '
+    f'[data-testid="stMainBlockContainer"] {{ padding-top: {_TOP_PAD_REM:g}rem; '
+    "padding-bottom: 0; } "
     # A page shorter than the screen (📖 User Guide with its sections collapsed)
     # left the dock floating mid-screen: sticky only holds an element at the
     # bottom when the page is taller than the screen (owner 2026-11-19). The
     # vertical block holding the dock is made at least one screen tall (minus
-    # Streamlit's 6rem top padding), and the dock's `margin-top: auto` above
-    # pushes it to that block's bottom.
-    f'{_DOCK_PARENT} {{ min-height: calc(100dvh - 6rem); }} '
+    # the main block's top padding, _TOP_PAD_REM), and the dock's `margin-top: auto`
+    # above pushes it to that block's bottom.
+    f'{_DOCK_PARENT} {{ min-height: calc(100dvh - {_TOP_PAD_REM:g}rem); }} '
     f"{_CAP_RULE}"
     "</style>"
 )
@@ -84,7 +95,7 @@ def dock_css() -> str:
 
 
 def dock_tabs(on_home: bool) -> tuple[str, ...]:
-    """The tab labels, in order: four on Home, Markets alone elsewhere."""
+    """The tab labels, in order: three on Home, Markets alone elsewhere."""
     return HOME_DOCK_TABS if on_home else OTHER_DOCK_TABS
 
 
@@ -99,9 +110,8 @@ def home_tabs_key(run_n: int) -> str:
     Streamlit's frontend keeps the picked tab as element state under the block
     id, which is built from the key alone, and restores it on every run while
     the labels are unchanged. A fixed key would therefore leave Home on a tab
-    the owner picked earlier (say Live Prices), hiding the Act Today pointer and
-    the Needs-a-look line. A fresh key per FULL script run resets the dock to
-    its first tab (Act Today); a fragment rerun (the 60 s Live Prices and
+    the owner picked earlier (say Live Prices), hiding the Needs-a-look line. A fresh key per FULL script run resets the dock to
+    its first tab (Notices); a fragment rerun (the 60 s Live Prices and
     Markets refresh) does not execute module code, so the counter, and with it
     the key, does not change and a tab picked between full runs survives it.
     """

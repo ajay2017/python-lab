@@ -126,7 +126,7 @@ def test_no_stock_analyzer_module_names_the_cache():
 
 
 def test_brief_act_today_and_synthesis_never_import_journal_match_view():
-    for name in ("act_today_view", "act_today_pointer", "act_today_precedence",
+    for name in ("act_today_view", "act_today_precedence",
                  "daily_briefing", "home_risk_synthesis", "judgment_synthesis",
                  "entry_posture", "budget_view"):
         src = (PKG / f"{name}.py").read_text(encoding="utf-8")

@@ -1,5 +1,5 @@
 """Tests for stock_analyzer.home_notices (Home redesign P1 — the one-line
-notices summary in the Home dock's Act Today and Notices tabs) and its wiring into app.py.
+notices summary at the top of the Home dock's Notices tab) and its wiring into app.py.
 
 Two halves:
 1. `summarize_notices` / `notices_headline` pure-logic boundaries — empty
