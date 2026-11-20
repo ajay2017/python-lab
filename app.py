@@ -119,6 +119,7 @@ from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer import broker_frame_view as _broker_frame_view
 from stock_analyzer import home_dock
 from stock_analyzer import home_dock_digest
+from stock_analyzer import brief_chips
 from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
@@ -9252,12 +9253,24 @@ if page == "🏠 Home":
                 f"currently {_rec_dir}{_rec_es}; refresh after the open for today's read."
             )
 
-    # ── Market tone · fragility · action summary — three chips ────────────
-    _tone_col, _frag_col, _act_col = st.columns([5, 5, 3])
+    # ── Market tone · today's actions · pullback gauge — three equal cards ──
+    # One style (filled card, 1px border, 12px radius, 14px 20px padding) and
+    # ALWAYS one height: `brief_chips.chips_css()` makes the cards fill their
+    # columns (st.columns already stretches the columns; see brief_chips.py), so a
+    # longer tone line grows the whole row. Display only: no counts or colours
+    # changed.
+    st.html(brief_chips.chips_css())
+    with st.container(key=brief_chips.CHIPS_KEY):
+        _tone_col, _act_col, _frag_col = st.columns([4, 3, 5])
+    # D1: a failed index read is recorded as "flat" (Grow Today still treats
+    # it so); say so. `.get(...) is False` -- an old context shows nothing.
+    # It is the last line INSIDE the tone card, so the card stays one element.
+    _tone_unread = _market_context.get("tone_available") is False
     with _tone_col:
         st.markdown(
-            f"<div style='background:{_tone_color};border:1px solid {_tone_bdr};"
-            f"border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:165px'>"
+            "<div class='brief-card' "
+            f"style='background:{_tone_color};border:1px solid {_tone_bdr};"
+            f"border-radius:12px;padding:14px 20px'>"
             f"<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
             f"<span style='font-size:1.1em;font-weight:700;color:#f9fafb'>"
             f"{_tone_label}</span>"
@@ -9269,124 +9282,23 @@ if page == "🏠 Home":
             + (f"<div style='color:#fbbf24;font-size:0.76em;margin-top:6px;"
                f"border-top:1px solid rgba(255,255,255,0.08);padding-top:5px'>"
                f"⚠️ {_tone_reconcile}</div>" if _tone_reconcile else "")
+            + ("<div style='color:#fbbf24;font-size:0.76em;margin-top:6px;"
+               "border-top:1px solid rgba(255,255,255,0.08);padding-top:5px'>"
+               "⚠️ Market tone couldn't be read this run — treated as a flat day; "
+               "the bear-day check didn't run.</div>" if _tone_unread else "")
             + f"</div>",
             unsafe_allow_html=True,
         )
-        # D1: a failed index read is recorded as "flat" (Grow Today still treats
-        # it so); say so. `.get(...) is False` -- an old context shows nothing.
-        if _market_context.get("tone_available") is False:
-            st.caption("⚠️ Market tone couldn't be read this run — treated as a flat day; the bear-day check didn't run.")
 
-    # Fragility gauge — wrapped in a bordered container so it matches the chip style
-    with _frag_col:
-        with st.container(border=True):
-            _frag = st.session_state.get("_fragility_cache")
-            if _frag:
-                _fg_sev       = _frag["severity"]
-                # "calm" uses ☀️, not 🛡️ — 🛡️ is reserved for the risk-off
-                # de-risk TRIM card (2026-08-04 UX audit CA10).
-                _fg_icon      = {"calm": "☀️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
-                _fg_lead      = {
-                    "calm":    "Your book moves roughly with the market.",
-                    "caution": "Your book is more volatile than the market.",
-                    "fragile": "Your book is fragile to a pullback.",
-                }[_fg_sev]
-                _fg_bar_color = {"calm": "#22c55e", "caution": "#f59e0b", "fragile": "#ef4444"}[_fg_sev]
-                _fg_why       = (" · most exposed: " + ", ".join(_frag["exposed"])) if _frag["exposed"] else ""
-                _fg_mult_val  = _frag.get("mult") or 1.0
-                _fg_left, _fg_right = st.columns([2, 3])
-                with _fg_left:
-                    _fg_fig = go.Figure(go.Indicator(
-                        mode="gauge+number",
-                        value=_fg_mult_val,
-                        number={"suffix": "×", "font": {"size": 26, "color": "#f0f2f5"}},
-                        title={"text": ""},
-                        gauge={
-                            "axis": {
-                                "range": [0, 3],
-                                "tickvals": [0, 1, 2, 3],
-                                "ticktext": ["0", "1×", "2×", "3×"],
-                                "tickwidth": 1, "tickcolor": "#4b5563",
-                                "tickfont": {"size": 9, "color": "#6b7280"},
-                            },
-                            "bar": {"color": _fg_bar_color, "thickness": 0.28},
-                            "bgcolor": "rgba(0,0,0,0)",
-                            "borderwidth": 0,
-                            "steps": [
-                                {"range": [0, PORTFOLIO_BETA_ELEVATED],
-                                 "color": "rgba(34,197,94,0.10)"},
-                                {"range": [PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING],
-                                 "color": "rgba(245,158,11,0.14)"},
-                                {"range": [PORTFOLIO_BETA_CEILING, 3],
-                                 "color": "rgba(239,68,68,0.10)"},
-                            ],
-                            "threshold": {
-                                "line": {"color": "#6b7280", "width": 1},
-                                "thickness": 0.75, "value": 1.0,
-                            },
-                        },
-                    ))
-                    _fg_fig.update_layout(
-                        height=130, margin={"l": 5, "r": 5, "t": 10, "b": 0},
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    )
-                    st.plotly_chart(_fg_fig, width="stretch",
-                                    config={"displayModeBar": False})
-                with _fg_right:
-                    _hb = st.session_state.get("_highbeta_share")
-                    _hb_warn  = (_hb is not None and _hb >= CONCENTRATION_HIGHBETA_SHARE_WARN)
-                    _hb_color = "#f59e0b" if _hb_warn else "#6b7280"
-                    _hb_line  = (
-                        f"<div style='color:{_hb_color};font-size:0.75em;margin-top:8px'>"
-                        f"🔗 <b>{_hb:.0f}%</b> in high-beta (β ≥ {PORTFOLIO_BETA_ELEVATED:.1f}) names"
-                        + (" — correlated on risk-off days." if _hb_warn else " — moderate.")
-                        + "</div>"
-                    ) if (_hb is not None and _hb > 0) else ""
-                    st.markdown(
-                        f"<div style='padding-top:24px'>"
-                        f"<div style='color:#9ca3af;font-size:0.85em'>"
-                        f"{_fg_icon} {_fg_lead}</div>"
-                        f"<div style='color:#d1d5db;font-size:0.80em;margin-top:8px'>"
-                        f"A {abs(_frag['pullback_pct']):.0f}% pullback → "
-                        f"~<b>{_frag['implied_move']:+.0f}%</b>{_fg_why}</div>"
-                        + _hb_line +
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                # Clarifies why this "×" can differ from Risk Analysis's single
-                # "Portfolio Beta" figure — this one is a bottom-up, dollar-weighted
-                # blend of each position's OWN beta under a simulated shock, not a
-                # portfolio-level regression (stress_test.py's assess_fragility
-                # docstring). Without this, the two numbers look like they should
-                # match and a real one (e.g. beta 1.60 vs this gauge's 1.4x) reads
-                # as a bug rather than two different, both-correct calculations.
-                st.caption(
-                    "ℹ️ This multiplier reflects each position's own beta under a "
-                    "simulated pullback — a different calculation from the single "
-                    "\"Portfolio Beta\" figure on 🔗 Risk Analysis, so the two can "
-                    "legitimately differ."
-                )
-            elif not port_df.empty:
-                # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
-                # computed — say so rather than imply zero exposure. Matches the
-                # fundamentals-gate "withhold with a visible reason" precedent.
-                st.markdown(
-                    "<div style='background:#1c1917;border:1px solid #4b5563;"
-                    "border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:96px;"
-                    "color:#9ca3af;font-size:0.8em'>"
-                    "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed "
-                    "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
-                    unsafe_allow_html=True,
-                )
-
-    # Action summary chip — counts moved out of the tone chip
+    # Action summary card — counts moved out of the tone card
     with _act_col:
         if _db_offline:
             # Fail LOUD, not calm: a crashed Brief build must never render as
-            # "0 Act Today" (a false all-clear) in this chip.
+            # "0 Act Today" (a false all-clear) in this card.
             st.markdown(
-                f"<div style='background:#451a03;border:1px solid #92400e;"
-                f"border-radius:12px;padding:14px 20px;min-height:165px'>"
+                "<div class='brief-card' "
+                f"style='background:#451a03;border:1px solid #92400e;"
+                f"border-radius:12px;padding:14px 20px'>"
                 f"<div style='font-size:0.72em;font-weight:700;letter-spacing:0.08em;"
                 f"text-transform:uppercase;color:#fde68a;margin-bottom:8px'>Today's Actions</div>"
                 f"<div style='color:#fef3c7;font-size:0.88em;font-weight:600;line-height:1.5'>"
@@ -9398,7 +9310,7 @@ if page == "🏠 Home":
         else:
             # Counts mirror the post-split buckets (and the Tune-up lane) rendered in
             # the defensive column below — never the raw act_today/review_list lists —
-            # so the chip can't contradict the section headers.
+            # so the card can't contradict the section headers.
             _act_n      = _act_view["n_active"]
             _grow_n     = len(_db_grow.get("new_picks", [])) + len(_db_grow.get("add_positions", []))
             _aware_n    = len(_act_view["aware"])
@@ -9407,8 +9319,9 @@ if page == "🏠 Home":
             _act_color  = "#7f1d1d" if _act_n > 0 else "#0f172a"
             _act_border = "#ef4444" if _act_n > 0 else "#334155"
             st.markdown(
-                f"<div style='background:{_act_color};border:1px solid {_act_border};"
-                f"border-radius:12px;padding:14px 20px;min-height:165px'>"
+                "<div class='brief-card' "
+                f"style='background:{_act_color};border:1px solid {_act_border};"
+                f"border-radius:12px;padding:14px 20px'>"
                 f"<div style='font-size:0.72em;font-weight:700;letter-spacing:0.08em;"
                 f"text-transform:uppercase;color:#9ca3af;margin-bottom:8px'>Today's Actions</div>"
                 f"<div style='color:#f9fafb;font-size:0.95em;font-weight:600;line-height:1.7'>"
@@ -9420,6 +9333,119 @@ if page == "🏠 Home":
                 f"</div>",
                 unsafe_allow_html=True,
             )
+
+    # Fragility gauge card — a keyed container styled like the other two cards by
+    # `brief_chips.chips_css()` (`.st-key-brief_frag_chip`). When nothing can be
+    # shown (no gauge and no holdings) no card is drawn, so no empty box appears.
+    with _frag_col:
+        _frag = st.session_state.get("_fragility_cache")
+        _frag_ok = bool(_frag)
+        if _frag_ok or not port_df.empty:
+            with st.container(key=brief_chips.FRAG_KEY, border=False):
+                if _frag_ok:
+                    _fg_sev       = _frag["severity"]
+                    # "calm" uses ☀️, not 🛡️ — 🛡️ is reserved for the risk-off
+                    # de-risk TRIM card (2026-08-04 UX audit CA10).
+                    _fg_icon      = {"calm": "☀️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
+                    _fg_lead      = {
+                        "calm":    "Your book moves roughly with the market.",
+                        "caution": "Your book is more volatile than the market.",
+                        "fragile": "Your book is fragile to a pullback.",
+                    }[_fg_sev]
+                    _fg_bar_color = {"calm": "#22c55e", "caution": "#f59e0b", "fragile": "#ef4444"}[_fg_sev]
+                    _fg_why       = (" · most exposed: " + ", ".join(_frag["exposed"])) if _frag["exposed"] else ""
+                    _fg_mult_val  = _frag.get("mult") or 1.0
+                    # Clarifies why this "×" can differ from Risk Analysis's single
+                    # "Portfolio Beta" figure — this one is a bottom-up, dollar-weighted
+                    # blend of each position's OWN beta under a simulated shock, not a
+                    # portfolio-level regression (stress_test.py's assess_fragility
+                    # docstring). Without this, the two numbers look like they should
+                    # match and a real one (e.g. beta 1.60 vs this gauge's 1.4x) reads
+                    # as a bug rather than two different, both-correct calculations.
+                    # Shown as a hover tip on the ⓘ beside the lead line (it was a two-line
+                    # caption under the gauge, which made this card taller than the other two).
+                    # The text is escaped (it contains double quotes) because it sits in a
+                    # title attribute.
+                    _fg_tip_html = (
+                        " <span title=\"" + _safe_html(
+                            "This multiplier reflects each position's own beta under a "
+                            "simulated pullback — a different calculation from the single "
+                            "\"Portfolio Beta\" figure on 🔗 Risk Analysis, so the two can "
+                            "legitimately differ."
+                        ) + "\" style='display:inline-block;width:16px;height:16px;"
+                        "border-radius:50%;border:1px solid #6b7280;color:#9ca3af;"
+                        "font-size:11px;line-height:14px;text-align:center;cursor:help;"
+                        "margin-left:4px'>i</span>"
+                    )
+                    _fg_left, _fg_right = st.columns([2, 3])
+                    with _fg_left:
+                        _fg_fig = go.Figure(go.Indicator(
+                            mode="gauge+number",
+                            value=_fg_mult_val,
+                            number={"suffix": "×", "font": {"size": 26, "color": "#f0f2f5"}},
+                            title={"text": ""},
+                            gauge={
+                                "axis": {
+                                    "range": [0, 3],
+                                    "tickvals": [0, 1, 2, 3],
+                                    "ticktext": ["0", "1×", "2×", "3×"],
+                                    "tickwidth": 1, "tickcolor": "#4b5563",
+                                    "tickfont": {"size": 9, "color": "#6b7280"},
+                                },
+                                "bar": {"color": _fg_bar_color, "thickness": 0.28},
+                                "bgcolor": "rgba(0,0,0,0)",
+                                "borderwidth": 0,
+                                "steps": [
+                                    {"range": [0, PORTFOLIO_BETA_ELEVATED],
+                                     "color": "rgba(34,197,94,0.10)"},
+                                    {"range": [PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING],
+                                     "color": "rgba(245,158,11,0.14)"},
+                                    {"range": [PORTFOLIO_BETA_CEILING, 3],
+                                     "color": "rgba(239,68,68,0.10)"},
+                                ],
+                                "threshold": {
+                                    "line": {"color": "#6b7280", "width": 1},
+                                    "thickness": 0.75, "value": 1.0,
+                                },
+                            },
+                        ))
+                        _fg_fig.update_layout(
+                            height=130, margin={"l": 5, "r": 5, "t": 10, "b": 0},
+                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        )
+                        st.plotly_chart(_fg_fig, width="stretch",
+                                        config={"displayModeBar": False})
+                    with _fg_right:
+                        _hb = st.session_state.get("_highbeta_share")
+                        _hb_warn  = (_hb is not None and _hb >= CONCENTRATION_HIGHBETA_SHARE_WARN)
+                        _hb_color = "#f59e0b" if _hb_warn else "#6b7280"
+                        _hb_line  = (
+                            f"<div style='color:{_hb_color};font-size:0.75em;margin-top:8px'>"
+                            f"🔗 <b>{_hb:.0f}%</b> in high-beta (β ≥ {PORTFOLIO_BETA_ELEVATED:.1f}) names"
+                            + (" — correlated on risk-off days." if _hb_warn else " — moderate.")
+                            + "</div>"
+                        ) if (_hb is not None and _hb > 0) else ""
+                        st.markdown(
+                            f"<div style='padding-top:24px'>"
+                            f"<div style='color:#9ca3af;font-size:0.85em'>"
+                            f"{_fg_icon} {_fg_lead}{_fg_tip_html}</div>"
+                            f"<div style='color:#d1d5db;font-size:0.80em;margin-top:8px'>"
+                            f"A {abs(_frag['pullback_pct']):.0f}% pullback → "
+                            f"~<b>{_frag['implied_move']:+.0f}%</b>{_fg_why}</div>"
+                            + _hb_line +
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
+                    # computed — say so rather than imply zero exposure. Matches the
+                    # fundamentals-gate "withhold with a visible reason" precedent.
+                    st.markdown(
+                        "<div style='color:#9ca3af;font-size:0.8em'>"
+                        "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed "
+                        "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
+                        unsafe_allow_html=True,
+                    )
 
     # Cross-asset macro note — shown when ≥ CROSS_ASSET_STRESS_BRIEF_SCORE signals are stressed
     from stock_analyzer.constants import CROSS_ASSET_STRESS_BRIEF_SCORE as _CA_BRIEF_MIN

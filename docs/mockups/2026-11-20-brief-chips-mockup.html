@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brief chips alignment</title>
+<style>
+:root{--bg:#0e1117;--panel:#111827;--line2:#31333f;--text:#fafafa;--muted:#9ca3af}
+*{box-sizing:border-box}
+body{margin:0;background:#05070b;color:var(--text);font:15px/1.5 "Source Sans 3","Source Sans Pro",system-ui,sans-serif}
+.wrap{max-width:1400px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:24px;margin:0 0 4px}
+h2{font-size:17px;margin:26px 0 4px}
+.lead,.why{color:var(--muted);margin:0 0 12px;max-width:1100px;font-size:14px}
+.why b{color:var(--text)}
+.rec{display:inline-block;background:#14532d;color:#bbf7d0;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;margin-left:6px;vertical-align:2px}
+.controls{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:0 0 10px}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
+.seg button{background:transparent;color:var(--muted);border:0;padding:6px 14px;font:inherit;font-size:14px;cursor:pointer}
+.seg button.on{background:#1f2937;color:var(--text)}
+.lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-right:6px}
+.stage{background:var(--bg);border:1px solid var(--line2);border-radius:10px;padding:18px}
+.row{display:grid;gap:16px;align-items:start}
+.row.eq{align-items:stretch}
+.card{border-radius:12px;padding:14px 20px;font-size:14px}
+.tone{background:#7f1d1d;border:1px solid #ef4444}
+.tone .h{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.tone .h b{font-size:16px}.tone .d{color:#9ca3af;font-size:12px}
+.tone .m{color:#d1d5db;font-size:12.5px;margin-top:6px}
+.tone .f{color:#fbbf24;font-size:12px;margin-top:8px;border-top:1px solid rgba(255,255,255,.08);padding-top:6px}
+.act{background:#7f1d1d;border:1px solid #ef4444}
+.act .k{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:8px}
+.act .v{font-weight:600;line-height:1.7;font-size:14.5px}
+.frag{background:transparent;border:1px solid #31333f}
+.frag.styled{background:#111827;border:1px solid #31333f}
+.fg{display:flex;gap:14px;align-items:center}
+.gauge{width:150px;height:96px;flex:none;position:relative}
+.gauge svg{width:150px;height:96px}
+.gauge .n{position:absolute;left:0;right:0;bottom:4px;text-align:center;font-size:22px}
+.fr{font-size:13px;color:#d1d5db}
+.fr .l{color:#9ca3af}
+.fr .hb{color:#6b7280;font-size:12px;margin-top:6px}
+.fcap{color:#9ca3af;font-size:12.5px;margin-top:8px}
+.i{display:inline-block;width:16px;height:16px;border-radius:50%;border:1px solid #6b7280;color:#9ca3af;font-size:11px;line-height:14px;text-align:center;cursor:help;margin-left:4px;position:relative}
+.i:hover::after{content:attr(data-tip);position:absolute;left:50%;top:22px;transform:translateX(-50%);width:300px;background:#1f2937;color:#e5e7eb;border:1px solid #374151;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.4;text-align:left;z-index:5}
+.note{color:var(--muted);font-size:13px;margin-top:10px}
+.note li{margin-bottom:3px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📋 Today's Brief: the three cards</h1>
+  <p class="lead">Below are today's layout, the fix with your suggested order, and one alternative. The switch shows a normal day and a pre-market day with the futures note, which makes the tone card taller. Hover the ⓘ in the proposed versions to see where the long caption goes.</p>
+  <div class="controls"><span><span class="lbl">Day</span><span class="seg" id="day">
+    <button data-v="normal" class="on">Normal day</button><button data-v="pre">Pre-market (futures note)</button></span></span></div>
+
+  <h2>Today</h2>
+  <p class="why">Three different heights: the gauge card's two-line caption makes it about 75 px taller, and it is a different kind of box (a Streamlit bordered container, transparent, a different padding and corner). Nothing makes the three equal.</p>
+  <div class="stage"><div class="row" style="grid-template-columns:5fr 5fr 3fr" id="today"></div></div>
+
+  <h2>A · Tone · Today's Actions · Pullback gauge, all the same height <span class="rec">lead recommends</span></h2>
+  <p class="why">Your order: market context, then <b>what to do</b>, then the risk read. All three are the same card style (filled background, 12 px corners, same padding) and <b>always the same height</b>: they stretch together, so a longer tone line grows the whole row instead of breaking it. The gauge's long caption moves into an <b>ⓘ hover tip</b> next to its text (no height cost). Widths 4 · 3 · 5: the gauge card needs the most room, Today's Actions the least.</p>
+  <div class="stage"><div class="row eq" style="grid-template-columns:4fr 3fr 5fr" id="optA"></div></div>
+
+  <h2>B · Today's Actions first</h2>
+  <p class="why">The same fix, decision first: the box that says what to act on comes before the market context. Stronger "decides, doesn't inform" reading, but the red Protect Mode headline, which explains <i>why</i> today is defensive, moves to the middle.</p>
+  <div class="stage"><div class="row eq" style="grid-template-columns:3fr 4fr 5fr" id="optB"></div></div>
+
+  <ul class="note">
+    <li><b>Same in A and B:</b> no number, count or wording changes; the Today's Actions count is still the same Act Today result; the offline versions of each card (Brief couldn't be built, beta couldn't be computed, tone unavailable) get the same height and style.</li>
+    <li><b>Shown only as a pre-market example:</b> the futures note line ("Reflects Thu Nov 19 close …") already exists today; it's here to show the row staying aligned when one card has more text.</li>
+    <li><b>Not in this change (ideas for later):</b> making each Today's Actions line a jump link to its section; filling the tone card's empty space with more content.</li>
+  </ul>
+</div>
+<script>
+const TIP="This multiplier reflects each position's own beta under a simulated pullback — a different calculation from the single “Portfolio Beta” figure on 🔗 Risk Analysis, so the two can legitimately differ.";
+const gauge=`<div class="gauge"><svg viewBox="0 0 150 96"><path d="M15 88 A60 60 0 0 1 135 88" fill="none" stroke="#3b1d1d" stroke-width="16"/><path d="M15 88 A60 60 0 0 1 61 31" fill="none" stroke="#22c55e" stroke-width="9"/></svg><div class="n">1.3×</div></div>`;
+function tone(pre){return `<div class="card tone"><div class="h"><b>🛡️ Protect Mode — Markets Down</b><span class="d">Friday, November 20 2026 · data as of Thu Nov 19</span></div><div class="m">S&amp;P 500 -2.02% · Nasdaq -2.25% · Leading: Cybersecurity (-0.1% 1W), Utilities (-1.8% 1W)</div>${pre?`<div class="f">⚠️ Reflects Thu Nov 19 close — live futures currently higher (ES +0.62%); refresh after the open for today's read.</div>`:''}</div>`}
+const act=`<div class="card act"><div class="k">Today's Actions</div><div class="v">🔴 1 Act Today<br>📈 0 Grow Today<br>🟡 3 monitoring · 0 resolved breaches<br>🔧 2 Portfolio Tune-up</div></div>`;
+function frag(styled,withCap){return `<div class="card frag ${styled?'styled':''}"><div class="fg">${gauge}<div class="fr"><div class="l">☀️ Your book moves roughly with the market.${withCap?'':` <span class="i" data-tip="${TIP}">i</span>`}</div><div style="margin-top:6px">A 10% pullback → ~<b>-13%</b> · most exposed: MRVL, SNOW</div><div class="hb">🔗 40% in high-beta (β ≥ 1.3) names — moderate.</div></div></div>${withCap?`<div class="fcap">ℹ️ ${TIP}</div>`:''}</div>`}
+function render(pre){
+  const t=document.getElementById('today');
+  t.innerHTML=`<div style="min-height:165px">${tone(pre).replace('class="card tone"','class="card tone" style="min-height:165px"')}</div>${frag(false,true)}<div>${act.replace('class="card act"','class="card act" style="min-height:165px"')}</div>`;
+  document.getElementById('optA').innerHTML=tone(pre)+act+frag(true,false);
+  document.getElementById('optB').innerHTML=act+tone(pre)+frag(true,false);
+}
+document.getElementById('day').addEventListener('click',e=>{const v=e.target.dataset.v;if(!v)return;document.querySelectorAll('#day button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));render(v==='pre')});
+render(false);
+</script>
+</body>
+</html>
