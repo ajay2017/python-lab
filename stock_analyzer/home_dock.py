@@ -31,8 +31,10 @@ HOME_DOCK_TABS_KEY = "_home_dock_tabs_home"
 # tab is the default.
 HOME_DOCK_TABS = ("⚠️ Notices", "💹 Live Prices", "📈 Markets")
 OTHER_DOCK_TABS = ("📈 Markets",)
-HOME_DOCK_TITLE = "🏠 Notices · Live Prices · Markets"
-OTHER_DOCK_TITLE = "📈 Markets"
+# The title bar exists only to fold the dock (owner Q1). Naming the tabs in it
+# repeated the tab row right under it (owner 2026-11-19), so it is one muted word,
+# styled slim by _TITLE_BAR_RULE.
+DOCK_TITLE = "Dock"
 
 # Owner Q6 (2026-11-19): about 3 rows of content. A display size, not a decision
 # threshold, so it lives here and not in constants.py.
@@ -68,6 +70,17 @@ _CAP_RULE = (
     ".st-key-home_dock { max-height: 45vh; overflow: auto; }"
 )
 
+# A slim, muted title bar. Streamlit 1.57's expander header is a `summary` inside
+# `details` inside [data-testid="stExpander"] (static/js/src.*.js); its label is
+# rendered as markdown, so the paragraph's font size is set too. Scoped to the
+# dock's key class so no other expander changes.
+_TITLE_BAR_RULE = (
+    '.st-key-home_dock [data-testid="stExpander"] summary '
+    "{ padding: 2px 10px; min-height: 0; color: #9ca3af; } "
+    '.st-key-home_dock [data-testid="stExpander"] summary p '
+    "{ font-size: 0.78rem; margin: 0; } "
+)
+
 _STICKY_CSS = (
     "<style>"
     f"{_DOCK_CHILD} {{ order: 9999; position: sticky; bottom: 0; z-index: 990; "
@@ -85,6 +98,7 @@ _STICKY_CSS = (
     # above pushes it to that block's bottom.
     f'{_DOCK_PARENT} {{ min-height: calc(100dvh - {_TOP_PAD_REM:g}rem); }} '
     f"{_CAP_RULE}"
+    f"{_TITLE_BAR_RULE}"
     "</style>"
 )
 
@@ -100,8 +114,9 @@ def dock_tabs(on_home: bool) -> tuple[str, ...]:
 
 
 def dock_title(on_home: bool) -> str:
-    """The dock's collapsible title bar."""
-    return HOME_DOCK_TITLE if on_home else OTHER_DOCK_TITLE
+    """The dock's collapsible title bar: the same single word on every page
+    (``on_home`` is kept so the call site stays symmetric with the tabs)."""
+    return DOCK_TITLE
 
 
 def home_tabs_key(run_n: int) -> str:

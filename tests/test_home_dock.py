@@ -119,12 +119,25 @@ def test_home_dock_has_three_tabs_notices_first_markets_last():
 
 def test_other_pages_keep_the_markets_only_dock():
     assert hd.dock_tabs(False) == ("📈 Markets",)
-    assert hd.dock_title(False) == "📈 Markets"
 
 
-def test_home_title_names_every_tab_and_differs_from_other_pages():
-    assert hd.dock_title(True) == "🏠 Notices · Live Prices · Markets"
-    assert hd.dock_title(True) != hd.dock_title(False)
+def test_title_bar_is_one_word_that_repeats_no_tab_label():
+    # Owner 2026-11-19: the title bar only folds the dock; naming the tabs in it
+    # duplicated the tab row right under it.
+    for on_home in (True, False):
+        title = hd.dock_title(on_home)
+        assert title == hd.DOCK_TITLE == "Dock"
+        for label in hd.dock_tabs(on_home):
+            assert label.split(" ", 1)[-1] not in title
+
+
+def test_title_bar_css_is_slim_and_scoped_to_the_dock():
+    css = hd.dock_css()
+    assert '.st-key-home_dock [data-testid="stExpander"] summary ' in css
+    assert "padding: 2px 10px" in css
+    # never an unscoped expander rule (it would restyle every expander in the app)
+    assert '\n[data-testid="stExpander"]' not in css and '} [data-testid="stExpander"]' not in css
+    assert "<" not in css.removeprefix("<style>").removesuffix("</style>")
 
 
 def test_home_and_other_keys_differ():
