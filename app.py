@@ -118,6 +118,7 @@ from stock_analyzer import report_display as _rdisp   # not `_rd`: app.py reuses
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer import broker_frame_view as _broker_frame_view
 from stock_analyzer import home_dock
+from stock_analyzer import home_dock_digest
 from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
@@ -4683,25 +4684,137 @@ def _index_strip():
         unsafe_allow_html=True,
     )
 
-# ── Bottom dock, every page (docs/plans/home-dock.md, C0c / C1) ──
+# ── Live price strip — fragment auto-refreshes every 60 s ────────────
+# Lives in the dock's 💹 Live Prices tab on EVERY page (home dock C1 / C1b; it was
+# a collapsed expander on Home since the 2026-09-17 decluttering). Defined at
+# module level, before the dock, so the dock can call it on any page. The
+# fragment is called INSIDE that tab's pane: Home passes its own held tickers,
+# other pages the tickers 🏠 Home last published (`_last_held_tickers`). A
+# fragment renders into whatever container was open at its call site and keeps
+# re-rendering there on its own 60s schedule, independent of the outer script
+# and of which dock tab is showing.
+@st.fragment(run_every=60)
+def _price_strip(tickers: list[str]):
+    mkt = market_status()
+    live = _cached_live_prices(tuple(tickers))
+    st.session_state["_live_prices"] = live   # share with P&L table
+    if not live:
+        return
+    # Tickers currently failing the strict prev-close cross-check (computed
+    # a few sections below, shared via session_state — this fragment reruns
+    # on its own 60s schedule, independent of that compute). A flagged
+    # ticker's change_pct is built on a prev_close the app itself doesn't
+    # trust right now (2026-08-31: Finnhub's prev_close lagged a session
+    # behind post-weekend), so show an honest "unverified" instead of a
+    # specific number that may be misattributing an earlier session's move
+    # to today — same principle as the chg-is-None case just below.
+    _xc_bad_prev = st.session_state.get("_xc_bad_prev_tickers") or set()
+    price_cols = st.columns(len(live))
+    for col, (t, lp) in zip(price_cols, live.items()):
+        chg   = lp.get("change_pct")
+        if t in _xc_bad_prev:
+            clr, _chg_disp = "#f0ad4e", "⚠ unverified"
+        elif chg is None:                          # prev close unknown (M2) → honest blank, no false 0.00%
+            clr, _chg_disp = "#94a3b8", "—"
+        else:
+            clr       = "#00C851" if chg >= 0 else "#ff4444"
+            _chg_disp = f"{'▲' if chg >= 0 else '▼'} {chg:+.2f}%"
+        col.markdown(
+            f"<div style='text-align:center;padding:6px 2px;"
+            f"border:1px solid #333;border-radius:6px'>"
+            f"<b>{t}</b><br>"
+            f"<span style='font-size:1.1em'>${lp['price']:.2f}</span><br>"
+            f"<span style='color:{clr};font-size:0.85em'>"
+            f"{_chg_disp}</span></div>",
+            unsafe_allow_html=True,
+        )
+    refresh_note = (
+        "🔄 auto-refreshes every 60s"
+        if mkt["is_open"]
+        else "market closed · showing last close (pre/after-hours moves appear in Pre-Market Intel)"
+    )
+    # Reflect the ACTUAL source(s) that served these prices (multi-source
+    # layer: Finnhub real-time primary, gap-fill to yfinance/FMP). When the
+    # market is closed every source reports the last regular-session close.
+    _src_labels = {
+        "finnhub":       "Finnhub (real-time)",
+        "yahoo_finance": "Yahoo Finance (15-min delayed)",
+        "fmp":           "FMP (end-of-day)",
+    }
+    _srcs = {v.get("source") for v in live.values() if v.get("source")}
+    _src_str = " + ".join(_src_labels.get(s, s) for s in sorted(_srcs)) or "Yahoo Finance"
+    st.caption(
+        f"Prices: **{_src_str}** · "
+        f"{list(live.values())[0]['fetched_at']} · "
+        f"{mkt['label']} · {refresh_note}"
+    )
+    st.divider()
+
+# ── Dock digest and Live Prices pane for pages other than Home (C1b) ──
+def _render_dock_digest():
+    """The dock's ⚠️ Notices tab on every page but 🏠 Home: ONE dated line from
+    Home's last finished build (its Act Today count and Needs-a-look line), its
+    freshness, and a button to Home. The decisions (the wording, the tier, the
+    "may be out of date" caveat) live in `home_dock_digest`; this only reads the
+    cache with the offline-preserving helper and renders. Wrapped so a failure
+    here can never take the page down."""
+    try:
+        _dg = _get_or_offline(st.session_state, "_home_dock_digest")
+        _dg_fresh = coord_freshness.classify(
+            st.session_state.get("_coord_stamps"), _coord_epoch(), "_home_dock_digest")
+        _dg_line = home_dock_digest.digest_line(_dg, _dg_fresh, _now_et())
+        if _dg_line["tier"] == "error":
+            st.error(_dg_line["text"])
+        elif _dg_line["tier"] == "warning":
+            st.warning(_dg_line["text"])
+        else:
+            st.info(_dg_line["text"])
+    except Exception:
+        st.warning("Home's last check couldn't be read here — open 🏠 Home.")
+    if st.button("Open 🏠 Home", key="_dock_open_home"):
+        st.session_state["_pending_page"] = "🏠 Home"   # never nav_page directly
+        st.rerun()
+    st.caption("Details are in 🏠 Home's ⚠️ Notices tab.")
+
+
+def _render_dock_live_prices():
+    """The dock's 💹 Live Prices pane on every page but 🏠 Home: the held tickers
+    Home last published, priced by the same `_price_strip` fragment Home uses.
+    `None` / absent means Home hasn't loaded the book this session (not "no
+    holdings")."""
+    _dk_held = _get_or_offline(st.session_state, "_last_held_tickers")
+    if _dk_held is None:
+        st.caption("Open 🏠 Home once this session to load your holdings' prices.")
+    elif len(_dk_held) == 0:
+        st.caption("No holdings.")
+    else:
+        _dk_n = len(_dk_held)
+        st.caption(
+            f"{_dk_n} position{'s' if _dk_n != 1 else ''} · holdings as of 🏠 Home's last build"
+        )
+        _price_strip(list(_dk_held))
+
+
+# ── Bottom dock, every page (docs/plans/home-dock.md, C0c / C1 / C1b) ──
 # Declared here, before page dispatch, so a page that stops early still gets
 # it; the CSS pins it to the bottom of the screen, so where it is declared does
-# not decide where it shows. On 🏠 Home it has three fixed-label tabs (Notices,
-# Live Prices, Markets); every other page keeps the one-tab Markets dock
-# until C1b. Home's placeholders are declared HERE (an st.empty() must be
-# assigned before anything can write into it) and filled by Home's own code far
-# below, so the dock must be declared before Home's branch, not after it.
+# not decide where it shows. Every page has the same three fixed-label tabs
+# (Notices, Live Prices, Markets). On 🏠 Home the Notices tab is the unified alert
+# stack and Home's own code fills it; on every other page it is one dated line
+# from Home's last build (`_render_dock_digest`). Home's placeholders are
+# declared HERE (an st.empty() must be assigned before anything can write into
+# it) and filled by Home's own code far below, so the dock must be declared
+# before Home's branch, not after it.
 # st.html, not st.markdown: style-only html goes to the event container, so the
 # dock CSS takes no flex gap above the page's first element.
 st.html(home_dock.dock_css())
 _dock_on_home = page == "🏠 Home"
-# Home's tab set gets a fresh key on every FULL script run, so the dock re-opens
-# on ⚠️ Notices instead of restoring a tab picked earlier (the frontend keeps
-# the picked tab under the block id, built from the key alone). Fragment reruns
-# (the 60 s refresh) run no module code, so a tab picked between full runs
+# The tab set gets a fresh key on every FULL script run, on every page, so the dock
+# re-opens on ⚠️ Notices instead of restoring a tab picked earlier (the frontend
+# keeps the picked tab under the block id, built from the key alone). Fragment
+# reruns (the 60 s refresh) run no module code, so a tab picked between full runs
 # survives them. The expander key stays fixed, so folding the dock persists.
-if _dock_on_home:
-    st.session_state["_home_dock_run_n"] = st.session_state.get("_home_dock_run_n", 0) + 1
+st.session_state["_home_dock_run_n"] = st.session_state.get("_home_dock_run_n", 0) + 1
 with st.container(key=home_dock.DOCK_KEY):
     with st.expander(home_dock.dock_title(_dock_on_home), expanded=True,
                      key=home_dock.dock_expander_key(_dock_on_home)):
@@ -4709,9 +4822,8 @@ with st.container(key=home_dock.DOCK_KEY):
                              key=home_dock.dock_tabs_key(
                                  _dock_on_home,
                                  run_n=st.session_state.get("_home_dock_run_n", 0)))
-        _dock_tab_markets = _dock_tabs[-1]
+        _dock_tab_notices, _dock_tab_prices, _dock_tab_markets = _dock_tabs
         if _dock_on_home:
-            _dock_tab_notices, _dock_tab_prices = _dock_tabs[:2]
 
             # ── Notices tab: the unified alert stack ──
             # (2026-08-04 UX audit I1; widened 2026-09-25; moved from a collapsed
@@ -4792,6 +4904,14 @@ with st.container(key=home_dock.DOCK_KEY):
             # ── Live Prices tab: Home fills this pane with the _price_strip fragment ──
             with _dock_tab_prices:
                 _dock_pane_prices = st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False)
+        else:
+            # ── Other pages: the dated Home digest and the held positions' prices ──
+            with _dock_tab_notices:
+                with st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False):
+                    _render_dock_digest()
+            with _dock_tab_prices:
+                with st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False):
+                    _render_dock_live_prices()
 
         # ── Markets tab (every page) ──
         with _dock_tab_markets:
@@ -5236,6 +5356,13 @@ if page == "🏠 Home":
     # grading harness.
     st.session_state["_judgment_opinions_today"] = []
 
+    # The dock's Home digest (C1b): None while this build is in progress, so an
+    # interrupted or crashed run never leaves an older answer standing as "Home's
+    # last check". It is published again, with its stamp, at every place this
+    # run ends (the two early-exit branches below and the end of the branch).
+    st.session_state["_home_dock_digest"] = None
+    _stamp_coord(["_home_dock_digest"])   # a published None clears any old stamp
+
     # Shared by the Brief's own offline banners (the _daily_brief_offline case
     # near _act_view's computation further down), so they never disagree on how
     # to describe "not checked". The full-book outage st.stop() below has its
@@ -5275,6 +5402,25 @@ if page == "🏠 Home":
                 _notices_summary_ph.caption(_headline)
         except Exception:
             _notices_summary_ph.caption("⚠️ Notices summary unavailable")
+
+    def _publish_home_dock_digest(act_view, *, no_holdings: bool = False) -> None:
+        """Publish what this finished Home build knows for the dock on the other
+        pages: the single Act Today view and the notices roll-up. The decision
+        (normalization, the offline-vs-clear rule) is in `home_dock_digest`.
+        A failure publishes None (never a stale or partial answer) and never
+        takes Home down."""
+        try:
+            _dg_summary = _home_notices_mod.summarize_notices(_home_notices)
+            st.session_state["_home_dock_digest"] = home_dock_digest.build_digest(
+                act_view,
+                _dg_summary,
+                _home_notices_mod.notices_headline(_dg_summary),
+                _now_et().isoformat(),
+                no_holdings=no_holdings,
+            )
+        except Exception:
+            st.session_state["_home_dock_digest"] = None
+        _stamp_coord(["_home_dock_digest"])
 
     # The ⚠️ Notices tab's 17 `_alert_ph_*` placeholders are declared in the
     # module-level dock above (see the comment there for why they are declared
@@ -5538,70 +5684,9 @@ if page == "🏠 Home":
         st.session_state.pop("_brief_held_news", None)
         st.session_state.pop("_brief_news_rescore_status", None)
 
-    # ── Live price strip — fragment auto-refreshes every 60 s ────────────
-    # Lives in the dock's 💹 Live Prices tab (home dock C1; it was a collapsed
-    # expander on the page since the 2026-09-17 Home decluttering). The fragment
-    # is called INSIDE that tab's pane (`_dock_pane_prices`, declared in the
-    # module-level dock) — a fragment renders into whatever container was open
-    # at its call site and keeps re-rendering there on its own 60s schedule,
-    # independent of the outer script and of which dock tab is showing.
-    @st.fragment(run_every=60)
-    def _price_strip(tickers: list[str]):
-        mkt = market_status()
-        live = _cached_live_prices(tuple(tickers))
-        st.session_state["_live_prices"] = live   # share with P&L table
-        if not live:
-            return
-        # Tickers currently failing the strict prev-close cross-check (computed
-        # a few sections below, shared via session_state — this fragment reruns
-        # on its own 60s schedule, independent of that compute). A flagged
-        # ticker's change_pct is built on a prev_close the app itself doesn't
-        # trust right now (2026-08-31: Finnhub's prev_close lagged a session
-        # behind post-weekend), so show an honest "unverified" instead of a
-        # specific number that may be misattributing an earlier session's move
-        # to today — same principle as the chg-is-None case just below.
-        _xc_bad_prev = st.session_state.get("_xc_bad_prev_tickers") or set()
-        price_cols = st.columns(len(live))
-        for col, (t, lp) in zip(price_cols, live.items()):
-            chg   = lp.get("change_pct")
-            if t in _xc_bad_prev:
-                clr, _chg_disp = "#f0ad4e", "⚠ unverified"
-            elif chg is None:                          # prev close unknown (M2) → honest blank, no false 0.00%
-                clr, _chg_disp = "#94a3b8", "—"
-            else:
-                clr       = "#00C851" if chg >= 0 else "#ff4444"
-                _chg_disp = f"{'▲' if chg >= 0 else '▼'} {chg:+.2f}%"
-            col.markdown(
-                f"<div style='text-align:center;padding:6px 2px;"
-                f"border:1px solid #333;border-radius:6px'>"
-                f"<b>{t}</b><br>"
-                f"<span style='font-size:1.1em'>${lp['price']:.2f}</span><br>"
-                f"<span style='color:{clr};font-size:0.85em'>"
-                f"{_chg_disp}</span></div>",
-                unsafe_allow_html=True,
-            )
-        refresh_note = (
-            "🔄 auto-refreshes every 60s"
-            if mkt["is_open"]
-            else "market closed · showing last close (pre/after-hours moves appear in Pre-Market Intel)"
-        )
-        # Reflect the ACTUAL source(s) that served these prices (multi-source
-        # layer: Finnhub real-time primary, gap-fill to yfinance/FMP). When the
-        # market is closed every source reports the last regular-session close.
-        _src_labels = {
-            "finnhub":       "Finnhub (real-time)",
-            "yahoo_finance": "Yahoo Finance (15-min delayed)",
-            "fmp":           "FMP (end-of-day)",
-        }
-        _srcs = {v.get("source") for v in live.values() if v.get("source")}
-        _src_str = " + ".join(_src_labels.get(s, s) for s in sorted(_srcs)) or "Yahoo Finance"
-        st.caption(
-            f"Prices: **{_src_str}** · "
-            f"{list(live.values())[0]['fetched_at']} · "
-            f"{mkt['label']} · {refresh_note}"
-        )
-        st.divider()
-
+    # ── Live price strip: the `_price_strip` fragment is defined at module level
+    # (before the dock, so every page's Live Prices tab can use it) and called
+    # here, inside Home's Live Prices pane. ──
     with _dock_pane_prices:
         st.caption(f"{len(held_tickers)} position{'s' if len(held_tickers) != 1 else ''}")
         _price_strip(held_tickers)
@@ -5914,6 +5999,7 @@ if page == "🏠 Home":
                 "checked. The ⚠️ Notices tab in the dock at the bottom of the window "
                 "has the details and Retry."
             )
+            _publish_home_dock_digest(None)   # Act Today was NOT checked: offline, never 0
         else:
             st.info(
                 "👋 No holdings yet — log your first BUY on 📒 Trade Journal "
@@ -5923,6 +6009,7 @@ if page == "🏠 Home":
             if st.button("📒 Go to Trade Journal", key="_home_goto_trade_journal"):
                 st.session_state["_pending_page"] = "📒 Trade Journal"
                 st.rerun()
+            _publish_home_dock_digest(None, no_holdings=True)
         st.stop()
 
     # Cache enriched port_df (with Sector) so other pages can use it
@@ -13678,6 +13765,12 @@ if page == "🏠 Home":
             f'</div>'
         )
         _brief_slot.markdown(_css + _card, unsafe_allow_html=True)
+
+    # Home's build finished: publish the dock digest from the SAME single
+    # `_act_view` every Act Today surface reads (never a second count) and the
+    # notices roll-up. This is the last statement of Home's branch, after the
+    # last `_home_notice` call (the Evening Debrief fill).
+    _publish_home_dock_digest(_act_view)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -46219,7 +46312,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
         with st.expander("🗺️ The pages, at a glance", expanded=False):
             st.markdown(
                 """
-- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **A dock pinned to the bottom of the window** has three tabs, and its title bar folds it down to one line. **⚠️ Notices** opens each time Home loads or reruns (a tab you pick stays during the 60-second refresh). At its top, a **notices line** names anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or gives a quiet note count on an otherwise clean day; below it sit the data and system notices that used to be in the collapsed "⚠️ Alerts" box (Day Shock, the price cross-check, broker drift, Journal vs Robinhood, System Trust, a data outage with its Retry button, and the rest). **💹 Live Prices** shows your held positions and refreshes every 60 seconds, and **📈 Markets** shows the index tiles. What to act on today is in 📋 Today's Brief's own 🔴 Act Today section and its Today's Actions card, not in the dock. Protective banners that must not be folded away (such as unreadable manual stops or the held-stop basis) stay in the page itself, not in the dock. In the ⚠️ Notices tab, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip (on a weekend, a holiday or before the 9:30 open it says "in the last session" with that session's date, because the live move then is the last completed session's) — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected. A **second, separate pause** works alongside it: when two names you hold sit at *danger-tier* correlation (≥0.80) — a standing near-duplicate exposure rather than a newly-formed one — Grow Today's add-to-winner is paused on **both** names, and a "🔗 Add Paused — Standing Correlated Pair" block names the partner and the correlation. This one has **no acknowledge step**: unlike the cluster pause above, a Structural Scan does not clear it, and neither does trimming the weaker name (trimming doesn't change how correlated two stocks are). It lasts while the pair stays that correlated and you hold both. It fires whether or not a trim card exists for that pair on 📡 Signals & Advice — the correlation is the trigger, so a data outage that hides the trim card can't quietly switch the pause off. Still pure suppression: no trim is recommended, and the hard caps are untouched. **And if a holding's price history couldn't be loaded at all**, a 🔍 line under Grow Today names it: that holding was left out of both correlation checks entirely, so no pairing involving it could be detected. It is deliberately *not* treated as a reason to pause anything — but it is also never silently counted as "checked and fine," which is what used to happen.
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **A dock pinned to the bottom of the window** has three tabs, and its title bar folds it down to one line. **⚠️ Notices** opens each time Home loads or reruns (a tab you pick stays during the 60-second refresh). At its top, a **notices line** names anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or gives a quiet note count on an otherwise clean day; below it sit the data and system notices that used to be in the collapsed "⚠️ Alerts" box (Day Shock, the price cross-check, broker drift, Journal vs Robinhood, System Trust, a data outage with its Retry button, and the rest). **💹 Live Prices** shows your held positions and refreshes every 60 seconds, and **📈 Markets** shows the index tiles. What to act on today is in 📋 Today's Brief's own 🔴 Act Today section and its Today's Actions card, not in the dock. Protective banners that must not be folded away (such as unreadable manual stops or the held-stop basis) stay in the page itself, not in the dock. **On every other page the dock has the same three tabs.** Its ⚠️ Notices tab shows one line from 🏠 Home's last build (the time, the 🔴 Act Today count and the Needs-a-look line) with an **Open 🏠 Home** button. It says so when Home's latest build didn't finish (or hasn't run) this session, for example when you left Home before it finished loading, and marks the line "may be out of date" after a trade or holdings update or when it is from an earlier day. Its 💹 Live Prices tab shows your held positions once Home has loaded them this session. In 🏠 Home's ⚠️ Notices tab, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip (on a weekend, a holiday or before the 9:30 open it says "in the last session" with that session's date, because the live move then is the last completed session's) — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected. A **second, separate pause** works alongside it: when two names you hold sit at *danger-tier* correlation (≥0.80) — a standing near-duplicate exposure rather than a newly-formed one — Grow Today's add-to-winner is paused on **both** names, and a "🔗 Add Paused — Standing Correlated Pair" block names the partner and the correlation. This one has **no acknowledge step**: unlike the cluster pause above, a Structural Scan does not clear it, and neither does trimming the weaker name (trimming doesn't change how correlated two stocks are). It lasts while the pair stays that correlated and you hold both. It fires whether or not a trim card exists for that pair on 📡 Signals & Advice — the correlation is the trigger, so a data outage that hides the trim card can't quietly switch the pause off. Still pure suppression: no trim is recommended, and the hard caps are untouched. **And if a holding's price history couldn't be loaded at all**, a 🔍 line under Grow Today names it: that holding was left out of both correlation checks entirely, so no pairing involving it could be detected. It is deliberately *not* treated as a reason to pause anything — but it is also never silently counted as "checked and fine," which is what used to happen.
 - **🧾 Summary** — the cockpit: one screen that answers "is the book safe, what must I do today, and is anything drifting" without visiting another page. Six zones, in order of urgency. **① Book Safety** (top, colour-coded) — leverage ×, margin cushion, distance to a margin call, and whether your share counts still match the broker. Awareness only; it never changes a recommendation. It shows a grey **"not verified"** rather than green when your cash balance hasn't been loaded — an unmeasured book and a debt-free book are not the same thing, and it won't guess. Broker drift likewise distinguishes **In sync** (checked, matches), **Clean, dated** (matched when last captured, but that snapshot is old), **Trades pending** (differences explained by trades you logged since), and **Not checked** (unknown). When leverage is elevated above your own reference level **and** equity has fallen meaningfully from its recent high, a note states the measured split — how much of the rise came from equity shrinking versus the margin loan itself growing — plus how much smaller the book (or how much more cash) would bring leverage back to your reference. It never tells you to sell or trim anything; it states the two facts together because nothing else in the app does. **② Today** — 5 KPI tiles: Portfolio Value (+ 45-day sparkline), Unrealized P&L, Today's P&L (Home's Tier-B figure when available, else an honestly-labelled held-mark), **Today's Movers** (the 3 biggest moves either way; a name with no quote is reported unpriced, never as a flat 0%), and Avg Score against the buy threshold. The movers tile **renames itself "Last session's movers"** on a weekend, a holiday, or before the open — the change is measured against the previous close, so it only means "today" once today's session has begun. **③ Act Today** — bucketed as **EXIT · TRIM · WATCH** so you can tell an alarm's *nature* at a glance, then **one row per item** (badge · ticker · why · composite score), worst first. Below it a purple banner names any tickers under an active reduce/exit call whose ADD suggestions are being suppressed app-wide. Same source as Home, so it can never under-report. When there's a live EXIT or TRIM item and this engine's own protective track record is measurably running early, a small note appears above the rows stating the measured number (e.g. "historically run early... average N pp... worth confirming before you act, not a reason to ignore the call") — a factual disclosure of a real, tracked pattern, never a reason by itself to override the call. **④ Portfolio Health** — four cards: Risk Posture (falls back to counting the protective calls in today's Brief when the fragility dial can't be computed, and says "not computed" rather than an all-clear if that's missing too), Thesis Integrity (**names** the weakening tickers, not just a count), Diversification, and Active Vetoes. All four say "not checked" rather than "none" when they genuinely don't know. **⑤ Horizon** — three cards: 🎯 Engine Track Record (whether acting on the app's calls has beaten the S&P, offence and defence, alongside what the calls you *skipped* returned so the headline can't read as pure skill), 🔔 Catalyst Watch (which holdings report and when, flagged 🚫 when the name is also under a reduce call), and 📋 Portfolio Thesis (this week's five standing claims, each marked held or shifted). The full ledger with last week's comparison stays in the collapsed expander below. **"Alert level" there is not the same thing as "Risk Posture" above it** — alert level counts danger-level alerts, risk posture reads the market regime, so the two can legitimately differ. **⑥ Top Positions** — your 6 largest by weight: score coloured by the same Buy/Hold/Sell bands the rest of the app uses, a weight bar scaled to your single-name cap, an inline EXIT/TRIM/CAP badge, and ⚡ on a same-day shock. A footer counts how many rose, fell, or had no quote. The full Holdings table is one click away in an expander. Reads what Home already computed this session — visit 🏠 Home first if this page says it needs today's Brief. **The 🧭 "Is this account earning extra?" card** sits on this page too: the dollars you are ahead of or behind the same money left in SPY since tracking began (from your baseline row; the card's starting-point line names it), the borrowed-money net for complete months whose margin interest has posted (paid, cost, too close to call, or incomplete), and the tax already triggered by this year's sales. Its figures are as of the last close, and the same lines arrive in the Sunday weekly debrief email.
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above).

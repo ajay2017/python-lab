@@ -117,8 +117,10 @@ def test_home_dock_has_three_tabs_notices_first_markets_last():
     assert not any("Act Today" in t for t in tabs)
 
 
-def test_other_pages_keep_the_markets_only_dock():
-    assert hd.dock_tabs(False) == ("📈 Markets",)
+def test_other_pages_have_the_same_three_tabs():
+    # C1b: Notices, Live Prices and Markets on every page.
+    assert hd.dock_tabs(False) == hd.dock_tabs(True) == (
+        "⚠️ Notices", "💹 Live Prices", "📈 Markets")
 
 
 def test_title_bar_is_one_word_that_repeats_no_tab_label():
@@ -143,7 +145,7 @@ def test_title_bar_css_is_slim_and_scoped_to_the_dock():
 def test_home_and_other_keys_differ():
     assert hd.dock_tabs_key(True) != hd.dock_tabs_key(False)
     assert hd.dock_expander_key(True) != hd.dock_expander_key(False)
-    assert hd.dock_tabs_key(False) == hd.DOCK_TABS_KEY
+    assert hd.dock_tabs_key(False) == hd.other_tabs_key(0)
     assert hd.dock_expander_key(False) == hd.DOCK_EXPANDER_KEY
     assert hd.dock_tabs_key(True) == hd.home_tabs_key(0)
     assert hd.dock_expander_key(True) == hd.HOME_DOCK_EXPANDER_KEY
@@ -176,15 +178,26 @@ def _assigned_names(tree):
     return out
 
 
-def _with_named(dock_with, name):
-    """The `with <name>:` node inside the dock."""
+def _home_branch_of_dock(dock_with):
+    """The dock's `if _dock_on_home:` branch (Home's own tab panes)."""
     hits = [
         n for n in ast.walk(dock_with)
+        if isinstance(n, ast.If) and isinstance(n.test, ast.Name) and n.test.id == "_dock_on_home"
+    ]
+    assert len(hits) == 1
+    return hits[0]
+
+
+def _with_named(dock_with, name):
+    """The `with <name>:` node inside Home's branch of the dock."""
+    home_if = ast.Module(body=_home_branch_of_dock(dock_with).body, type_ignores=[])
+    hits = [
+        n for n in ast.walk(home_if)
         if isinstance(n, ast.With)
         and any(isinstance(i.context_expr, ast.Name) and i.context_expr.id == name
                 for i in n.items)
     ]
-    assert len(hits) == 1, f"expected one `with {name}:` in the dock, found {len(hits)}"
+    assert len(hits) == 1, f"expected one `with {name}:` in Home's dock branch, found {len(hits)}"
     return hits[0]
 
 
@@ -239,13 +252,19 @@ def test_notices_tab_ends_with_a_descriptive_caption_not_an_all_clear():
         assert "all clear" not in low and "no notices" not in low, c
 
 
-def test_price_strip_is_called_inside_the_prices_pane():
-    tree = parse_file_cached(_APP)
-    calls = [
+def _price_strip_calls(tree):
+    return [
         n for n in ast.walk(tree)
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_price_strip"
     ]
-    assert len(calls) == 1
+
+
+def test_price_strip_has_exactly_two_exclusive_call_paths():
+    """One in Home's `_dock_pane_prices` pane and one in the dock's other-page pane
+    function; Home never calls the dock function (so one call per run)."""
+    tree = parse_file_cached(_APP)
+    calls = _price_strip_calls(tree)
+    assert len(calls) == 2
     panes = [
         n for n in ast.walk(tree)
         if isinstance(n, ast.With)
@@ -253,7 +272,35 @@ def test_price_strip_is_called_inside_the_prices_pane():
                 for i in n.items)
     ]
     assert len(panes) == 1
-    assert calls[0] in list(ast.walk(panes[0]))
+    in_pane = [c for c in calls if c in list(ast.walk(panes[0]))]
+    assert len(in_pane) == 1
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == "_render_dock_live_prices")
+    in_fn = [c for c in calls if c in list(ast.walk(fn))]
+    assert len(in_fn) == 1
+    # the dock function is called only from the dock's non-Home branch
+    dock = _dock_with(tree)
+    home_if = _home_branch_of_dock(dock)
+    callers = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        and n.func.id == "_render_dock_live_prices"
+    ]
+    assert len(callers) == 1
+    assert callers[0] in list(ast.walk(ast.Module(body=home_if.orelse, type_ignores=[])))
+
+
+def test_price_strip_is_a_module_level_fragment_defined_before_the_dock():
+    tree = parse_file_cached(_APP)
+    fns = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_price_strip"]
+    assert len(fns) == 1, "_price_strip must be defined once, at module level"
+    assert fns[0].lineno < _dock_with(tree).lineno
+    deco = ast.unparse(fns[0].decorator_list[0])
+    assert deco == "st.fragment(run_every=60)"
+    # and not also defined inside Home's branch
+    home = _home_branch(tree)
+    assert not any(isinstance(n, ast.FunctionDef) and n.name == "_price_strip"
+                   for stmt in home.body for n in ast.walk(stmt))
 
 
 def test_old_expander_keys_are_gone():
@@ -277,15 +324,19 @@ def test_home_notice_writes_the_one_summary_placeholder():
 
 # ── C1 review fixes ──────────────────────────────────────────────────────────
 
-def test_home_tabs_key_is_fresh_per_run_and_other_pages_constant():
+def test_tabs_key_is_fresh_per_run_on_every_page():
     assert hd.home_tabs_key(1) != hd.home_tabs_key(2)
     assert hd.home_tabs_key(7) == hd.home_tabs_key(7)
     assert hd.HOME_DOCK_TABS_KEY in hd.home_tabs_key(3)
     assert hd.dock_tabs_key(True, run_n=1) != hd.dock_tabs_key(True, run_n=2)
     assert hd.dock_tabs_key(True, run_n=4) == hd.home_tabs_key(4)
-    assert hd.dock_tabs_key(False, run_n=1) == hd.dock_tabs_key(False, run_n=99) == hd.DOCK_TABS_KEY
-    # a Home key never equals the one-tab dock's key
-    assert hd.home_tabs_key(0) != hd.DOCK_TABS_KEY
+    # C1b: the other pages' key is per full run too, with its own prefix
+    assert hd.dock_tabs_key(False, run_n=1) != hd.dock_tabs_key(False, run_n=2)
+    assert hd.DOCK_TABS_KEY in hd.dock_tabs_key(False, run_n=5)
+    # a Home key never equals another page's key, at any run number
+    for n in range(4):
+        for m in range(4):
+            assert hd.home_tabs_key(n) != hd.other_tabs_key(m)
 
 
 def _dock_tabs_call(dock):
@@ -315,34 +366,29 @@ def test_dock_tabs_key_carries_a_run_counter_not_a_constant():
     assert len(exp_keys) == 1 and "run_n" not in ast.dump(exp_keys[0])
 
 
-def test_run_counter_is_bumped_at_module_level_before_the_dock():
+def test_run_counter_is_bumped_at_module_level_on_every_page_before_the_dock():
     tree = parse_file_cached(_APP)
     dock = _dock_with(tree)
     bumps = [
         stmt for stmt in tree.body
-        if isinstance(stmt, ast.If) and '_home_dock_run_n' in ast.dump(stmt)
-        and "_dock_on_home" in ast.dump(stmt.test)
+        if isinstance(stmt, ast.Assign) and stmt.lineno < dock.lineno
+        and "_home_dock_run_n" in ast.unparse(stmt.targets[0])
     ]
-    assert len(bumps) == 1, "expected one module-level `if _dock_on_home:` counter bump"
-    assert bumps[0].lineno < dock.lineno
-    assert any(isinstance(s, ast.Assign) and s.targets[0].id == "_dock_on_home"
-               for s in tree.body if isinstance(s, ast.Assign) and isinstance(s.targets[0], ast.Name)
-               and s.lineno < bumps[0].lineno)
+    assert len(bumps) == 1, "expected one unconditional module-level counter bump"
     # The bump must really add 1 (a constant here would freeze the key and
-    # bring back the sticky-tab bug while the presence checks above pass).
-    on_home = [
-        s for s in tree.body
-        if isinstance(s, ast.Assign) and isinstance(s.targets[0], ast.Name)
-        and s.targets[0].id == "_dock_on_home"
-    ]
-    assert ast.unparse(on_home[0].value) == "page == '🏠 Home'"
-    bump_assigns = [s for s in bumps[0].body if isinstance(s, ast.Assign)]
-    assert len(bump_assigns) == 1
-    value = bump_assigns[0].value
+    # bring back the sticky-tab bug while the presence checks pass).
+    value = bumps[0].value
     assert isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add)
     assert isinstance(value.right, ast.Constant) and value.right.value == 1
-    assert "_home_dock_run_n" in ast.unparse(bump_assigns[0].targets[0])
     assert "_home_dock_run_n" in ast.unparse(value.left)
+    # not inside an `if page ==` guard: it runs on every page
+    assert not any(isinstance(st_, ast.If) and bumps[0] in list(ast.walk(st_)) for st_ in tree.body)
+    on_home = [
+        s_ for s_ in tree.body
+        if isinstance(s_, ast.Assign) and isinstance(s_.targets[0], ast.Name)
+        and s_.targets[0].id == "_dock_on_home"
+    ]
+    assert ast.unparse(on_home[0].value) == "page == '🏠 Home'"
 
 
 def test_tab_unpack_target_order_is_pinned():
@@ -352,11 +398,10 @@ def test_tab_unpack_target_order_is_pinned():
         n for n in ast.walk(dock)
         if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Tuple)
         and [e.id for e in n.targets[0].elts if isinstance(e, ast.Name)]
-        == ["_dock_tab_notices", "_dock_tab_prices"]
+        == ["_dock_tab_notices", "_dock_tab_prices", "_dock_tab_markets"]
     ]
     assert len(unpacks) == 1
-    src = ast.unparse(unpacks[0].value)
-    assert src == "_dock_tabs[:2]"
+    assert ast.unparse(unpacks[0].value) == "_dock_tabs"
 
 
 def test_notices_tab_summary_is_assigned_before_the_first_alert_placeholder():
@@ -460,3 +505,126 @@ def test_dock_css_is_emitted_with_st_html():
     ]
     assert len(hits) == 1, "expected one module-level st.html(home_dock.dock_css())"
     assert "st.markdown(home_dock.dock_css()" not in _SRC
+
+
+# ── C1b: the digest on every other page ──────────────────────────────────────
+
+def _fn(tree, name):
+    return next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+
+
+def test_other_pages_dock_branch_calls_both_panes():
+    tree = parse_file_cached(_APP)
+    other = ast.Module(body=_home_branch_of_dock(_dock_with(tree)).orelse, type_ignores=[])
+    called = {n.func.id for n in ast.walk(other)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert {"_render_dock_digest", "_render_dock_live_prices"} <= called
+    withs = {i.context_expr.id for n in ast.walk(other) if isinstance(n, ast.With)
+             for i in n.items if isinstance(i.context_expr, ast.Name)}
+    assert {"_dock_tab_notices", "_dock_tab_prices"} <= withs
+
+
+def test_digest_pane_reads_with_get_or_offline_and_navigates_via_pending_page():
+    tree = parse_file_cached(_APP)
+    fn = _fn(tree, "_render_dock_digest")
+    src = ast.unparse(fn)
+    assert "_get_or_offline(st.session_state, '_home_dock_digest')" in src
+    assert "coord_freshness.classify(" in src
+    assert "home_dock_digest.digest_line(" in src
+    assert "st.session_state['_pending_page'] = '🏠 Home'" in src
+    assert "nav_page" not in src
+    assert "key='_dock_open_home'" in src
+    # the digest key is never read with a bare .get(...) / `in session_state`
+    assert ".get('_home_dock_digest'" not in src and "in st.session_state" not in src
+    # a failure never breaks the page
+    assert any(isinstance(n, ast.Try) for n in ast.walk(fn))
+    consts = [n.value for n in ast.walk(fn) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    assert "Home's last check couldn't be read here — open 🏠 Home." in consts
+    assert "Details are in 🏠 Home's ⚠️ Notices tab." in consts
+
+
+def test_live_prices_pane_reads_the_published_holdings_with_get_or_offline():
+    tree = parse_file_cached(_APP)
+    fn = _fn(tree, "_render_dock_live_prices")
+    src = ast.unparse(fn)
+    assert "_get_or_offline(st.session_state, '_last_held_tickers')" in src
+    consts = [n.value for n in ast.walk(fn) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    assert "Open 🏠 Home once this session to load your holdings' prices." in consts
+    assert "No holdings." in consts
+
+
+# ── C1b: the Home producer of `_home_dock_digest` ───────────────────────────
+
+def _is_publish_call(n) -> bool:
+    return (isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+            and isinstance(n.value.func, ast.Name)
+            and n.value.func.id == "_publish_home_dock_digest")
+
+
+def test_home_resets_the_digest_to_none_near_its_top():
+    home = _home_branch(parse_file_cached(_APP))
+    first = home.body[:6]
+    resets = [
+        st_ for st_ in first
+        if isinstance(st_, ast.Assign) and "_home_dock_digest" in ast.unparse(st_.targets[0])
+        and isinstance(st_.value, ast.Constant) and st_.value.value is None
+    ]
+    assert len(resets) == 1, "Home must set _home_dock_digest to None at its top"
+    # and clears the stamp the same way Home stamps its other keys
+    assert any("_stamp_coord(['_home_dock_digest'])" == ast.unparse(st_.value)
+               for st_ in home.body[:8] if isinstance(st_, ast.Expr))
+
+
+def test_home_publishes_before_every_st_stop_and_at_the_end():
+    tree = parse_file_cached(_APP)
+    home = _home_branch(tree)
+    stops = []
+    for node in ast.walk(ast.Module(body=home.body, type_ignores=[])):
+        for field in ("body", "orelse"):
+            lst = getattr(node, field, None)
+            if isinstance(lst, list):
+                for i, st_ in enumerate(lst):
+                    if (isinstance(st_, ast.Expr) and isinstance(st_.value, ast.Call)
+                            and isinstance(st_.value.func, ast.Attribute)
+                            and st_.value.func.attr == "stop"
+                            and isinstance(st_.value.func.value, ast.Name)
+                            and st_.value.func.value.id == "st"):
+                        stops.append((lst, i))
+    assert len(stops) == 1, "Home has exactly one st.stop(); a new one needs a digest publish"
+    lst, i = stops[0]
+    branch = lst[i - 1]
+    assert isinstance(branch, ast.If), "the st.stop() must follow the outage / no-holdings if/else"
+    for part, expect_no_holdings in ((branch.body, False), (branch.orelse, True)):
+        pubs = [n for st_ in part for n in ast.walk(st_)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "_publish_home_dock_digest"]
+        assert len(pubs) == 1
+        assert ("no_holdings" in [kw.arg for kw in pubs[0].keywords]) == expect_no_holdings
+        assert isinstance(pubs[0].args[0], ast.Constant) and pubs[0].args[0].value is None
+    last = home.body[-1]
+    assert _is_publish_call(last), "the last statement of Home's branch must publish the digest"
+    assert ast.unparse(last.value.args[0]) == "_act_view"
+
+
+def test_publish_helper_is_defined_before_its_first_call_and_stamps():
+    tree = parse_file_cached(_APP)
+    home = _home_branch(tree)
+    fn = next(n for n in home.body if isinstance(n, ast.FunctionDef)
+              and n.name == "_publish_home_dock_digest")
+    first_call = min(n.lineno for n in ast.walk(tree)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                     and n.func.id == "_publish_home_dock_digest")
+    assert fn.lineno < first_call
+    src = ast.unparse(fn)
+    assert "home_dock_digest.build_digest(" in src
+    assert "_stamp_coord(['_home_dock_digest'])" in src
+    # a failure publishes None, never a partial answer
+    assert "st.session_state['_home_dock_digest'] = None" in src
+
+
+def test_digest_key_is_registered_for_freshness():
+    from stock_analyzer import coord_freshness as cf
+    meta = cf.PORTFOLIO_DEPENDENT_KEYS["_home_dock_digest"]
+    assert meta["producer"] == "home" and meta["tier"] == cf.TIER_DECISION
+    assert "_home_dock_digest" in cf.keys_for_producer("home")
+    assert "_home_dock_digest" in cf.SURFACE_KEYS["dock"]

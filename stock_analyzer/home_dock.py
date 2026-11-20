@@ -9,20 +9,21 @@ Railway in the C0 probe, so the probe's fixed-position fallback and its URL
 switch are gone. C1: on 🏠 Home the dock has fixed-label tabs (Notices, Live
 Prices, Markets; no counts in a label, because Streamlit fixes the labels when
 ``st.tabs`` is called, before Home computes anything). C1c retired the Act Today
-pointer and its tab (Today's Brief says the same), leaving Notices first; every
-other page keeps the one-tab Markets dock until C1b. Home and the other pages
-use separate widget keys so a tab picked on Home cannot carry onto the one-tab
-dock. See docs/plans/home-dock.md. ``.st-key-home_dock`` keeps its old name,
+pointer and its tab (Today's Brief says the same), leaving Notices first. C1b: every
+other page has the same three tabs; there the Notices tab is one dated line from
+Home's last build (see ``home_dock_digest``) and Live Prices shows the held
+positions Home last loaded. Home and the other pages use separate widget keys, and
+both get a fresh tab key per full script run. See docs/plans/home-dock.md. ``.st-key-home_dock`` keeps its old name,
 because renaming the key would only churn. Display only: no gate, no
 threshold, no count logic.
 """
 from __future__ import annotations
 
 DOCK_KEY = "home_dock"
-# Keys for the one-tab dock on every page except Home.
+# Keys for the dock on every page except Home.
 DOCK_EXPANDER_KEY = "_home_dock_exp"
 DOCK_TABS_KEY = "_home_dock_tabs"
-# Separate keys on Home, so a tab index picked there can't carry onto a 1-tab dock.
+# Separate keys on Home (its Notices tab is a different pane from the other pages').
 HOME_DOCK_EXPANDER_KEY = "_home_dock_exp_home"
 HOME_DOCK_TABS_KEY = "_home_dock_tabs_home"
 
@@ -30,7 +31,7 @@ HOME_DOCK_TABS_KEY = "_home_dock_tabs_home"
 # st.tabs is called at module level, before Home has computed anything. The first
 # tab is the default.
 HOME_DOCK_TABS = ("⚠️ Notices", "💹 Live Prices", "📈 Markets")
-OTHER_DOCK_TABS = ("📈 Markets",)
+OTHER_DOCK_TABS = HOME_DOCK_TABS   # C1b: the same three tabs on every page
 # The title bar exists only to fold the dock (owner Q1). Naming the tabs in it
 # repeated the tab row right under it (owner 2026-11-19), so it is one muted word,
 # styled slim by _TITLE_BAR_RULE.
@@ -109,7 +110,7 @@ def dock_css() -> str:
 
 
 def dock_tabs(on_home: bool) -> tuple[str, ...]:
-    """The tab labels, in order: three on Home, Markets alone elsewhere."""
+    """The tab labels, in order: the same three on every page (C1b)."""
     return HOME_DOCK_TABS if on_home else OTHER_DOCK_TABS
 
 
@@ -125,19 +126,25 @@ def home_tabs_key(run_n: int) -> str:
     Streamlit's frontend keeps the picked tab as element state under the block
     id, which is built from the key alone, and restores it on every run while
     the labels are unchanged. A fixed key would therefore leave Home on a tab
-    the owner picked earlier (say Live Prices), hiding the Needs-a-look line. A fresh key per FULL script run resets the dock to
-    its first tab (Notices); a fragment rerun (the 60 s Live Prices and
+    the owner picked earlier (say Live Prices), hiding the Needs-a-look line.
+    A fresh key per FULL script run resets the dock to its first tab (Notices);
+    a fragment rerun (the 60 s Live Prices and
     Markets refresh) does not execute module code, so the counter, and with it
     the key, does not change and a tab picked between full runs survives it.
     """
     return f"{HOME_DOCK_TABS_KEY}_{run_n}"
 
 
+def other_tabs_key(run_n: int) -> str:
+    """The ``st.tabs`` key on every page but Home, fresh per full script run for
+    the same reason as ``home_tabs_key``."""
+    return f"{DOCK_TABS_KEY}_{run_n}"
+
+
 def dock_tabs_key(on_home: bool, run_n: int = 0) -> str:
-    """The ``st.tabs`` widget key: per-run on Home (see ``home_tabs_key``), the
-    constant ``DOCK_TABS_KEY`` on every other page (separate from Home's, see the
-    module docstring)."""
-    return home_tabs_key(run_n) if on_home else DOCK_TABS_KEY
+    """The ``st.tabs`` widget key: per full script run on every page (see
+    ``home_tabs_key``), with separate prefixes for Home and the other pages."""
+    return home_tabs_key(run_n) if on_home else other_tabs_key(run_n)
 
 
 def dock_expander_key(on_home: bool) -> str:

@@ -203,6 +203,18 @@ PORTFOLIO_DEPENDENT_KEYS: dict[str, dict] = {
                "a day's new buys, so a stale count can show a size the budget "
                "no longer has room for",
     },
+    # Added with the dock's other-page Notices line (C1b): what 🏠 Home's last
+    # finished build said about Act Today and the Needs-a-look line, read by the
+    # bottom dock on every other page. DECISION tier: it tells the owner whether
+    # there is something to act on. None / absent = Home has not finished a
+    # build this session (never an all-clear); a trade logged since makes it
+    # STALE, and the dock line then says so.
+    "_home_dock_digest": {
+        "producer": "home", "tier": TIER_DECISION,
+        "why": "the dock's one-line Act Today count and notices summary from "
+               "Home's last build; stale after a logged trade, so the line "
+               "says it may be out of date",
+    },
     # Added with daily-budget chunk 5 (B1): the Watchlist's ENTER_NOW ASKS
     # (ticker, composite, price, F-255 sizing -- not their budgeted sizes),
     # published for 📈 Analysis, which re-runs the Watchlist's plan over them so
@@ -418,6 +430,7 @@ _DIMENSION_LABELS = {
     "_new_position_budget_cache": "today's new-position budget",
     "_wl_budget_plan_cache": "Watchlist share counts",
     "_wl_held_cache": "Watchlist held-today list",
+    "_home_dock_digest": "Home's Act Today line",
 }
 
 
@@ -505,6 +518,11 @@ SURFACE_KEYS: dict[str, tuple] = {
               "_reduce_calls"),
     "wl":    ("_grow_today_sectors_cache", "_port_risk_cache", "_risk_high_alerts_cache",
               "_new_position_budget_cache"),
+    # The bottom dock's Notices line on every page but Home (C1b). The dock carries
+    # its own staleness wording (home_dock_digest.digest_line), not the stale banner,
+    # so this suffix is for the registry's own map; no _render_portfolio_stale_banner
+    # call uses it.
+    "dock":  ("_home_dock_digest",),
 }
 
 

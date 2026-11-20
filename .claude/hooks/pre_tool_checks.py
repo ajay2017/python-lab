@@ -1263,6 +1263,12 @@ _GATE_FILES = {
     # distinction that prevents a crashed Brief build from reading as a false
     # all-clear).
     "stock_analyzer/act_today_view.py",
+    # Added 2026-11-19 (dock C1b, owner decision): decides what the bottom dock
+    # tells the user about Act Today on every page but Home -- the count, the
+    # offline-vs-clear distinction (an unchecked Brief never reads as a calm
+    # all-clear) and the "may be out of date" caveat on a stale or earlier-day
+    # digest. A decision surface from day one, same posture as act_today_view.py.
+    "stock_analyzer/home_dock_digest.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully
