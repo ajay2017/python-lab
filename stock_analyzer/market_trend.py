@@ -45,6 +45,7 @@ from stock_analyzer.constants import (
     TREND_RETURN_SESSIONS,
     UNCLASSIFIED_SECTOR,
 )
+from stock_analyzer import market_time
 from stock_analyzer.data import is_trading_day, previous_trading_day
 from stock_analyzer.portfolio import SECTOR_ETF
 
@@ -107,6 +108,11 @@ def _r1(x) -> float | None:
 def _fmt_date(d: date) -> str:
     """'Fri Nov 20' (day without a leading zero, on every platform)."""
     return f"{d.strftime('%a %b')} {d.day}"
+
+
+def fmt_session(d: date) -> str:
+    """Public alias of `_fmt_date` for the render layer's 'As of the … close'."""
+    return _fmt_date(d)
 
 
 def _minus(x: float) -> str:
@@ -338,7 +344,12 @@ def _build_row(symbol: str, name: str, sectors: list[str], ser: _Ser | None,
 
 def as_of_session(now_et: datetime) -> date:
     """The last COMPLETED NYSE session strictly before today (ET), all day.
-    Sat / Sun / Mon -> Friday; Thanksgiving Thu and Fri -> the Wednesday before."""
+    Sat / Sun / Mon -> Friday; Thanksgiving Thu and Fri -> the Wednesday before.
+    A tz-aware input is converted to America/New_York before its date is taken
+    (so a UTC clock at 02:30 on Sat reads as Fri evening ET); a naive input is
+    taken as already ET."""
+    if now_et.tzinfo is not None:
+        now_et = now_et.astimezone(market_time.ET)
     return previous_trading_day(now_et.date())
 
 

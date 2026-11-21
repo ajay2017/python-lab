@@ -119,6 +119,7 @@ from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer import broker_frame_view as _broker_frame_view
 from stock_analyzer import home_dock
 from stock_analyzer import home_dock_digest
+from stock_analyzer import market_trend
 from stock_analyzer import brief_chips
 from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.valuation_target import pt_label as _pt_label
@@ -4601,6 +4602,133 @@ def _fetch_sector_returns() -> pd.DataFrame:
         return pd.DataFrame(rows)
     except Exception:
         return pd.DataFrame()
+
+
+# ── Market and sector trend (🌐 Macro; docs/plans/market-sector-trend.md) ────
+@st.cache_data(ttl=3600, show_spinner=False)
+def _trend_result_ok(as_of_iso: str) -> dict:
+    """One batch download of the indices + sector funds up to the as-of close, then
+    market_trend.compute_trend. RAISES on an empty download or an unreadable
+    result, so st.cache_data never stores a failure for the hour."""
+    import yfinance as yf
+    from stock_analyzer.data import _retry
+    as_of = date.fromisoformat(as_of_iso)
+    raw = _retry(
+        yf.download, market_trend.trend_symbols(),
+        start=market_trend.history_start(as_of).isoformat(),
+        end=(as_of + timedelta(days=1)).isoformat(),  # end is exclusive: no partial bar for today
+        auto_adjust=True, progress=False, threads=True,
+    )
+    if raw is None or raw.empty:
+        raise RuntimeError("empty download")
+    close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
+    res = market_trend.compute_trend(close, as_of=as_of)
+    if res is None:
+        raise RuntimeError("trend not computable from the download")
+    return res
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_market_trend(as_of_iso: str) -> dict | None:
+    """_trend_result_ok with the failure turned into None (cached 5 min only, so a
+    bad fetch retries soon). None = couldn't read; never an empty-looking result."""
+    try:
+        return _trend_result_ok(as_of_iso)
+    except Exception as _e:
+        print(f"[market_trend] trend read failed for {as_of_iso}: {type(_e).__name__}: {_e}")
+        return None
+
+
+_TREND_RED = "#ef4444"
+_TREND_AMBER = "#f59e0b"
+_TREND_GREEN = "#22c55e"
+_TREND_LABEL_COLOUR = {"falling": _TREND_RED, "weakening": _TREND_AMBER, "rising": _TREND_GREEN}
+
+
+def _trend_pct(v, unit: str = "%") -> str:
+    """'+1.2%' / '−3.4%' (Unicode minus, 1 dp); 'n/a' for None. unit ' pts' for vs S&P."""
+    if v is None:
+        return "n/a"
+    f = float(v)
+    sign = "+" if f > 0 else ("−" if f < 0 else "")
+    return f"{sign}{abs(f):.1f}{unit}"
+
+
+def _render_trend_table(result: dict, weights, book_empty: bool = False) -> None:
+    """Render market_trend.table_rows as an indices table and a sectors table.
+    Display only: every label / figure / colour key comes from the module's row
+    fields (no threshold is compared here). The 🌐 Macro page calls this; (C3: the
+    dock's dialog will call this too.) book_empty = Home built and the book is
+    empty, so the weight cells read "–" rather than "open 🏠 Home first"."""
+    rows = market_trend.table_rows(result, {} if book_empty else weights)
+    cols = ["Fund", "4-week", "vs S&P 500", "vs 50-day average", "From 52-wk high",
+            "Trend", "Your weight", "1-week", "3-month", "6-month"]
+
+    def _name(r: dict) -> str:
+        secs = r["app_sectors"]
+        joined = " · ".join(secs)
+        if len(secs) > 1 and r["name"] != joined:
+            return f"{r['name']} ({joined})"
+        return r["name"]
+
+    _idx_syms = {x["symbol"] for x in result["indices"]}
+
+    def _frame(group: list[dict], first: str, second: str):
+        data, styles = [], []
+        for r in group:
+            high = _trend_pct(r["from_high_pct"])
+            if r["from_high_pct"] is not None and r["drawdown_word"]:
+                high += f" · {r['drawdown_word']}"
+            if r["label"] is None and r["reason"]:
+                # the module's reason already reads "not checked: …" / "not enough price history …"
+                trend = r["reason"][:1].upper() + r["reason"][1:]
+            else:
+                trend = r["label_text"] + (f" · {r['reason']}" if r["reason"] is not None else "")
+            vs = _trend_pct(r["vs_spx_pts"], " pts")
+            if r["vs_spx_pts"] is None and r["symbol"] in _idx_syms:
+                vs = "–"  # the S&P 500's own row has nothing to compare against
+            cells = [r["symbol"], _trend_pct(r["ret_4w"]), vs, r["ma50_text"] or "n/a", high, trend,
+                     r["weight_text"], _trend_pct(r["ret_1w"]), _trend_pct(r["ret_3m"]),
+                     _trend_pct(r["ret_6m"])]
+            data.append([_name(r)] + cells)
+            css = [""] * (len(cols) + 1)
+            for i, txt in enumerate([None] + cells):
+                if txt is not None and i in (2, 3, 8, 9, 10):
+                    css[i] = ("color: " + _TREND_GREEN) if txt.startswith("+") else (
+                        ("color: " + _TREND_RED) if txt.startswith("−") else "")
+            lc = _TREND_LABEL_COLOUR.get(r["label"])
+            if lc:
+                css[6] = f"color: {lc}; font-weight: 600"
+            if r["held"]:
+                css[7] = "font-weight: 700"
+            styles.append(css)
+        df = pd.DataFrame(data, columns=[first, second] + cols[1:])
+        sty = pd.DataFrame(styles, columns=df.columns, index=df.index)
+        return df.style.apply(lambda _d: sty, axis=None)
+
+    idx_rows = [r for r in rows if r["symbol"] in _idx_syms]
+    sec_rows = [r for r in rows if r["symbol"] not in _idx_syms]
+    # both frames are built before any st.* call, so a failure draws nothing half-way
+    idx_frame = _frame(idx_rows, "Index", "Symbol")
+    sec_frame = _frame(sec_rows, "Sector", "Fund")
+    if book_empty:
+        weight_note = "Your weight: you held nothing at 🏠 Home's last build."
+    else:
+        weight_note = (
+            "Your weight = share of your holdings' value at 🏠 Home's last build."
+            + (" It fills in once 🏠 Home has built your portfolio this session." if weights is None else "")
+        )
+
+    st.caption("Each index's and sector fund's own trend; the regime reads further down use other inputs.")
+    st.caption(
+        f"As of the {market_trend.fmt_session(result['as_of'])} close. Labels describe closes up "
+        "to then. Not a forecast, and they change no pick, size or stop."
+    )
+    st.dataframe(idx_frame, hide_index=True, width='stretch')
+    st.dataframe(sec_frame, hide_index=True, width='stretch')
+    st.caption(weight_note)
+    if result["not_checked"]:
+        st.caption("Not checked: " + ", ".join(result["not_checked"]) + " (see the Trend column).")
 
 
 # ── Factor-proxy ETF daily returns (for Portfolio Intelligence Factor Tilt) ──
@@ -24773,6 +24901,28 @@ elif page == "🌐 Macro":
         "and shows which holdings are in the tailwind or headwind. "
         "Institutional practice uses macro regime overlays to tilt sector weights 3–5% above/below benchmark."
     )
+
+    # Market and sector trend: shows before 🏠 Home has loaded the book (only
+    # "Your weight" waits); the rest of the page keeps its wait below.
+    st.markdown("#### 📈 Market and sector trend")
+    with st.spinner("Loading index and sector-fund prices…"):
+        _trend_res = _cached_market_trend(market_trend.as_of_session(_now_et()).isoformat())
+    if _trend_res is None:
+        st.info(
+            "ℹ️ Trend unavailable: the index and sector-fund prices couldn't be loaded. "
+            "No reading is shown rather than a calm-looking one. It retries within 5 minutes."
+        )
+    else:
+        try:
+            _trend_pdf = _get_or_offline(st.session_state, "_port_df_enriched")
+            # the post-trade "liquidated" outcome publishes an EMPTY DataFrame
+            _trend_book_empty = _trend_pdf is not None and getattr(_trend_pdf, "empty", False)
+            _trend_w = market_trend.held_weights(_trend_pdf)
+            _render_trend_table(_trend_res, _trend_w, book_empty=_trend_book_empty)
+        except Exception as _te:
+            print(f"[market_trend] render failed: {type(_te).__name__}: {_te}")
+            st.caption("Trend table couldn't be drawn this run.")
+    st.markdown("---")
 
     port_df = st.session_state.get("_port_df_enriched", pd.DataFrame())
     if port_df.empty:

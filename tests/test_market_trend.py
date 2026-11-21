@@ -8,7 +8,7 @@ Scenario shorthand: unless a test says otherwise the S&P 500 and every fund are
 flat at 100, so the S&P's 4-week return is 0 and a fund's `vs_spx` is just its own
 4-week return.
 """
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -437,6 +437,20 @@ def test_as_of_session_is_the_last_completed_session_before_today(now, expected)
 def test_as_of_session_ignores_the_clock_within_a_day():
     mornings = [mt.as_of_session(datetime(2026, 11, 18, h, 0, tzinfo=ET)) for h in (0, 9, 16, 23)]
     assert len(set(mornings)) == 1
+
+
+def test_as_of_session_converts_a_utc_aware_clock_to_et_first():
+    # 2026-11-21 02:30 UTC is Fri 2026-11-20 21:30 ET, so "today" is Fri 11-20
+    # and the last completed session before it is Thu 11-19.
+    utc = datetime(2026, 11, 21, 2, 30, tzinfo=timezone.utc)
+    assert mt.as_of_session(utc) == date(2026, 11, 19)
+
+
+def test_as_of_session_same_instant_as_et_aware_and_naive_et_agree():
+    utc = datetime(2026, 11, 21, 2, 30, tzinfo=timezone.utc)
+    et_aware = utc.astimezone(ET)
+    assert mt.as_of_session(et_aware) == date(2026, 11, 19)
+    assert mt.as_of_session(et_aware.replace(tzinfo=None)) == date(2026, 11, 19)
 
 
 def test_history_start_reaches_back_enough_for_the_high_and_200_day():

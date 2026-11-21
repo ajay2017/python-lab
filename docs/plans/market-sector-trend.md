@@ -1,6 +1,6 @@
 # Market and sector trend (display only)
 
-**Status:** DESIGNED 2026-11-21. Opus planner (claude-opus-5-5): PROCEED WITH CHANGES. Owner decisions Q1–Q10 taken 2026-11-21 (all as suggested; option 1 only). Owner took U1–U9 as recommended 2026-11-21 (U3 = 5, U6 = 252, U8 keep "Steady", U9 retire). **C1 BUILT 2026-11-21** (implementer, claude-sonnet-5-5: constants + `market_trend.py` + 91 tests; Opus review pending). Mockup: `docs/mockups/2026-11-21-market-sector-trend-mockup.html`.
+**Status:** DESIGNED 2026-11-21. Opus planner (claude-opus-5-5): PROCEED WITH CHANGES. Owner decisions Q1–Q10 taken 2026-11-21 (all as suggested; option 1 only). Owner took U1–U9 as recommended 2026-11-21 (U3 = 5, U6 = 252, U8 keep "Steady", U9 retire). **C1 COMMITTED 2026-11-21** (`ee5b6a2`, Opus SHIP). **C2 BUILT 2026-11-21** (🌐 Macro section, F-319; Opus SHIP, 0 blocking; review notes N1–N3, N5, N6, N8 applied after review in app.py / tests; N4 logged as SectorRetsEmptyCached in `docs/bug-register.md`; N7 = check on the screenshot that held rows' "Your weight" shows bold). C1 + C2 unpushed. **NEXT:** push (owner OK), the C2 live check, then C3. Mockup: `docs/mockups/2026-11-21-market-sector-trend-mockup.html`.
 
 ## Why
 
