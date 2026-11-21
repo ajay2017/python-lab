@@ -88,8 +88,9 @@ def test_pct_non_numeric_returns_placeholder():
 def test_band_line_full_row_joins_with_dot():
     row = {"band": "Strong Buy", "n_total": 5, "action_rate": 80.0, "n_priced": 4, "avg_alpha": 2.5}
     line = ir._band_line(row)
-    assert "Strong Buy: 5 rec(s)" in line
-    assert "acted 80%" in line
+    assert "Strong Buy: 5 call(s)" in line
+    assert "acted on 80% of calls" in line
+    assert "rec(s)" not in line
     assert "4 matured" in line
     assert "engine alpha +2.5%" in line
     assert " · " in line
@@ -513,6 +514,37 @@ def test_format_prompt_band_verdict_weekly_sections_only_when_nonempty():
     assert "By composite band" in text2
     assert "By cross-check verdict" in text2
     assert "Weekly performance trajectory" in text2
+
+
+def test_format_prompt_band_rows_say_calls_per_call_rate_and_matured_is_not_sample():
+    assert "How to read these rows" not in ir._format_prompt(_base_package())
+    text = ir._format_prompt(_base_package(band_rows=[
+        {"band": "Buy", "n_total": 2, "action_rate": 50.0, "n_priced": 2, "avg_alpha": 1.0}]))
+    assert "across ALL graded calls in the band" in text
+    assert "every count is CALLS" in text
+    assert "NOT comparable with the per-name action rate above" in text
+    assert "never call a result \"not a small sample\" because its calls have matured" in text
+    assert text.count("How to read these rows") == 1
+    # verdict rows alone still carry the reading note, once
+    text_v = ir._format_prompt(_base_package(verdict_rows=[
+        {"verdict": "Other / blank", "n_total": 2, "action_rate": 0.0, "n_priced": 2, "avg_alpha": 0.9}]))
+    assert text_v.count("How to read these rows") == 1
+
+
+def test_format_prompt_verdict_heading_never_says_steered_away():
+    text = ir._format_prompt(_base_package(verdict_rows=[
+        {"verdict": "Other / blank", "n_total": 2, "action_rate": 0.0, "n_priced": 2, "avg_alpha": 0.9}]))
+    head = next(ln for ln in text.splitlines() if ln.startswith("By cross-check verdict"))
+    assert "awareness it steered you away from" not in head
+    assert "NO group is names the App steered you away from" in head
+    assert "Other / blank = calls with no cross-check verdict: every Enter Now call" in head
+    assert "Add to Winner calls, which are saved as confirmed" in head
+
+
+def test_system_prompt_band_alpha_is_across_graded_calls():
+    text = ir._system_prompt()
+    assert "across ALL graded calls in that band" in text
+    assert "across ALL graded names in that band" not in text
 
 
 def test_format_prompt_reads_a_package_without_the_new_keys():

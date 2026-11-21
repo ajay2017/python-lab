@@ -62,7 +62,7 @@ Background you must use correctly:
 Write EXACTLY three sections with these bold headers and nothing before the first header:
 
 **Entry quality**
-How well did the ENGINE pick this period? Use the composite-band and verdict breakdowns: did higher-composite / Confirmed recommendations actually convert and beat SPY? The per-band / per-verdict "engine alpha" figures given to you are across ALL graded names in that band (acted or not) — the exact numbers shown in the band chart the reader sees; quote those, never an acted-only subset, so your text matches the chart. Where did quality cluster or weaken (e.g. a band or sector)? If the engine's high-conviction band underperformed a lower band, you MAY flag that the entry threshold is worth the investor's own review — but NEVER state a new threshold number, NEVER recommend a specific change, and NEVER tell the investor to change a gate; that is their policy decision alone. If there are too few matured recommendations to grade, say exactly that in one sentence and move on.
+How well did the ENGINE pick this period? Use the composite-band and verdict breakdowns: did higher-composite / Confirmed recommendations actually convert and beat SPY? The per-band / per-verdict "engine alpha" figures given to you are across ALL graded calls in that band (acted or not) — the exact numbers shown in the band chart the reader sees; quote those, never an acted-only subset, so your text matches the chart. Where did quality cluster or weaken (e.g. a band or sector)? If the engine's high-conviction band underperformed a lower band, you MAY flag that the entry threshold is worth the investor's own review — but NEVER state a new threshold number, NEVER recommend a specific change, and NEVER tell the investor to change a gate; that is their policy decision alone. If there are too few matured recommendations to grade, say exactly that in one sentence and move on.
 
 **Signal discipline**
 Did the investor ACT on what the engine surfaced, and did acting help? Use the action rate; the bought and skipped names' average alpha, quoting the two tile figures given in the data (never the per-call missed alpha in place of the skipped tile's figure); the per-call averages where useful, saying they are per call; and the best/worst single calls, saying each is one call. Was money left on the table by ignoring signals, or did acting add value? Be specific and factual; name tickers from the data.
@@ -137,9 +137,9 @@ def _band_line(row: dict) -> str:
     ar   = row.get("action_rate")
     npr  = row.get("n_priced", 0)
     al   = row.get("avg_alpha")   # ALL-graded band alpha — matches the band chart
-    bits = [f"{name}: {n} rec(s)"]
+    bits = [f"{name}: {n} call(s)"]
     if ar is not None:
-        bits.append(f"acted {ar:.0f}%")
+        bits.append(f"acted on {ar:.0f}% of calls")
     if npr:
         bits.append(f"{npr} matured")
         if al is not None:
@@ -503,16 +503,34 @@ def _format_prompt(package: dict) -> str:
     if package.get("band_rows"):
         lines.append("")
         lines.append(
-            "By composite band — 'engine alpha' is across ALL graded names in the band "
+            "By composite band — 'engine alpha' is across ALL graded calls in the band "
             "(acted or not), the engine-quality view the band chart plots; quote these "
             "for entry quality (higher-conviction tiers should sit higher):"
         )
         for row in package["band_rows"]:
             lines.append(_band_line(row))
 
+    if package.get("band_rows") or package.get("verdict_rows"):
+        lines.append(
+            "  How to read these rows: every count is CALLS (a name with calls on several "
+            "days counts once per call), never distinct names. \"Acted on X% of calls\" is "
+            "per call, so it is NOT comparable with the per-name action rate above; never "
+            "put the two side by side. \"N matured\" means N calls are old enough to "
+            "grade; it says nothing about whether the sample is large, so never call a "
+            "result \"not a small sample\" because its calls have matured.")
+
     if package.get("verdict_rows"):
         lines.append("")
-        lines.append("By cross-check verdict (Engine-Confirmed = the App's actual recommendations; others = awareness it steered you away from):")
+        lines.append(
+            "By cross-check verdict (the verdict the cross-check gave a call when it "
+            "surfaced). Every call here is an entry call the App told you to act on; the "
+            "awareness feed is excluded, so NO group is names the App steered you away "
+            "from, and you must never describe one that way. Engine-Confirmed = calls "
+            "saved with a confirmed cross-check (New Position calls it confirmed, and Add "
+            "to Winner calls, which are saved as confirmed); Conflicted / Caution / "
+            "Mixed / Unverified = New Position calls whose cross-check read that way; "
+            "Other / blank = calls with no cross-check verdict: every Enter Now call, plus "
+            "any New Position call that had none.")
         for row in package["verdict_rows"]:
             lines.append(_band_line(row))
 
