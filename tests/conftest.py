@@ -118,6 +118,17 @@ def _clear_llm_model_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_snaptrade_connections_call(monkeypatch):
+    """#34c C1: `_run_broker` now makes one extra SnapTrade GET per run
+    (`list_connections`). Tests that drive the lane patch `has_snaptrade` to True,
+    so without this a developer shell holding real SnapTrade credentials would
+    reach the live API. None = "couldn't read the connections"; a test that needs
+    a payload patches it itself (monkeypatch stacks)."""
+    from stock_analyzer import snaptrade_client
+    monkeypatch.setattr(snaptrade_client, "list_connections", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _clear_healthchecks_key(monkeypatch):
     """A HEALTHCHECKS_PING_KEY in the developer's shell must never let a test
     that runs cron_runner._record_heartbeat ping the owner's real checks."""

@@ -156,6 +156,10 @@ _INVENTORY: tuple[_Store, ...] = (
     # says "not checked" forever — a feature that looks fine while doing
     # nothing. Registering it here is what makes that state visible.
     _Store("broker_position_snapshot",  "Broker position snapshot",      "broker",    "daily",   False),
+    # #34c C1 (2026-11-21): one append-only status row per broker run (SnapTrade's own
+    # connection / refresh health). DDL applied by hand, so existence-only for the
+    # same reason as the snapshot row above; absence before the first run is legitimate.
+    _Store("broker_connection_status",  "Broker connection status",      "broker",    "daily",   False),
     # 2026-08-30 data-integrity audit: 7 tables that cron/the app actively
     # write to had ZERO visibility here — any of them could silently stop
     # being written with no signal anywhere in the app, not even "unknown".

@@ -158,6 +158,26 @@ def list_accounts():
         return None
 
 
+def list_connections():
+    """Return the list of brokerage connections (raw SDK dicts: `disabled`,
+    `disabled_date`, `data_freshness_mode`, ...), or None on failure/missing
+    credentials. One GET; read by the broker cron's connection-health capture
+    (#34c). Never logs credentials."""
+    if not has_snaptrade():
+        return None
+    try:
+        resp = _call_with_timeout(
+            _client().connections.list_brokerage_authorizations,
+            (), {},
+            SNAPTRADE_REQUEST_TIMEOUT_SEC,
+        )
+        _record_success()
+        return resp.body
+    except Exception as e:
+        _record_error(e)
+        return None
+
+
 def get_account_balance(account_id: str):
     """Return the raw balance entry (dict-like, at least `cash`/`buying_power`/
     `currency`) for one SnapTrade account, or None on failure. Multi-currency

@@ -44,6 +44,7 @@ def _run_lane(monkeypatch, positions_by_id):
     monkeypatch.setattr(cr.snaptrade_client, "get_account_positions",
                         lambda aid: positions_by_id.get(aid))
     monkeypatch.setattr(cr.db, "save_broker_position_snapshot", lambda *_a, **_k: True)
+    monkeypatch.setattr(cr.db, "save_broker_connection_status", lambda *_a, **_k: False)
 
     def _get_balance(aid):
         calls["balance"].append(aid)

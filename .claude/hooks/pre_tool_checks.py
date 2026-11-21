@@ -1269,6 +1269,11 @@ _GATE_FILES = {
     # all-clear) and the "may be out of date" caveat on a stale or earlier-day
     # digest. A decision surface from day one, same posture as act_today_view.py.
     "stock_analyzer/home_dock_digest.py",
+    # Added 2026-11-21 (#34c C1, docs/plans/broker-connection-alarm-34c.md): decides
+    # whether the broker checks are caveated as possibly stale and, from C2, when the
+    # connection alarm emails; a wrong call hides a dead Robinhood connection or cries
+    # wolf. Added while it only records (C1), so the later decision logic is gated.
+    "stock_analyzer/broker_connection.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

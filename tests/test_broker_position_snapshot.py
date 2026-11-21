@@ -47,6 +47,7 @@ def _run_lane(monkeypatch, accounts, positions_by_id):
     monkeypatch.setattr(cr.snaptrade_client, "get_account_activities",
                         lambda *_a, **_k: None)
     monkeypatch.setattr(cr.db, "save_broker_position_snapshot", rec)
+    monkeypatch.setattr(cr.db, "save_broker_connection_status", lambda *_a, **_k: False)
     monkeypatch.setattr(cr.db, "save_account_cash", lambda *_a, **_k: True)
     monkeypatch.setattr(cr, "_db_unavailable_detail", lambda: None)
     monkeypatch.setattr(cr, "_notify_broker_failure", lambda *_a, **_k: None)
@@ -156,5 +157,181 @@ def test_a_snapshot_write_failure_does_not_fail_the_lane(monkeypatch):
         raise RuntimeError("table does not exist")
 
     monkeypatch.setattr(cr.db, "save_broker_position_snapshot", _boom)
+    monkeypatch.setattr(cr.db, "save_broker_connection_status", lambda *_a, **_k: False)
     # Must not raise out of the lane.
     cr._run_broker(cr.datetime.now(cr._ET), force=True)
+
+
+# ── #34c C1: one broker_connection_status row per configured run ──────────────
+# Capture only (docs/plans/broker-connection-alarm-34c.md). The row is bookkeeping:
+# it must never change the lane's rc, raise, or be written when SnapTrade isn't set up.
+
+_HEALTHY_ACCOUNTS = [
+    {"id": "cc", "name": "Credit Card", "sync_status": {
+        "holdings": {"holdings_unavailable": None,
+                     "last_successful_sync": "2026-11-20T22:52:17.376190+00:00"},
+        "transactions": {"last_successful_sync": "2026-11-19"}}},
+    {"id": "individual", "name": "Individual", "sync_status": {
+        "holdings": {"holdings_unavailable": None,
+                     "last_successful_sync": "2026-11-20T22:52:17.376190+00:00"},
+        "transactions": {"last_successful_sync": "2026-11-19"}}},
+]
+_HEALTHY_CONNECTIONS = [{"disabled": False, "data_freshness_mode": "realtime"}]
+_REAL_RECORD = cr._record_broker_connection_status   # a driver call may swap it for a no-op
+
+
+def _drive(monkeypatch, *, accounts=_HEALTHY_ACCOUNTS, positions_by_id=None,
+           connections=_HEALTHY_CONNECTIONS, configured=True, save_result=True,
+           snapshot_result=True, record=True):
+    """Run `_run_broker`; returns (rc, status_rows, notified). `record=False` swaps
+    the status helper for a no-op: the "no status row at all" baseline."""
+    rows, notified = [], []
+    positions_by_id = positions_by_id if positions_by_id is not None else {
+        "cc": [], "individual": [_pos("DELL", 20.0)]}
+
+    def _save(row):
+        rows.append(row)
+        if isinstance(save_result, Exception):
+            raise save_result
+        return save_result
+
+    monkeypatch.setattr(cr.snaptrade_client, "has_snaptrade", lambda: configured)
+    monkeypatch.setattr(cr.snaptrade_client, "list_accounts", lambda: accounts)
+    monkeypatch.setattr(cr.snaptrade_client, "list_connections", lambda: connections)
+    monkeypatch.setattr(cr.snaptrade_client, "get_account_positions",
+                        lambda aid: positions_by_id.get(aid))
+    monkeypatch.setattr(cr.snaptrade_client, "get_account_balance", lambda _a: None)
+    monkeypatch.setattr(cr.snaptrade_client, "get_account_activities", lambda *_a, **_k: None)
+    monkeypatch.setattr(cr.db, "save_broker_position_snapshot", lambda *_a, **_k: snapshot_result)
+    monkeypatch.setattr(cr.db, "save_broker_connection_status", _save)
+    monkeypatch.setattr(cr.db, "save_account_cash", lambda *_a, **_k: True)
+    monkeypatch.setattr(cr, "_db_unavailable_detail", lambda: None)
+    monkeypatch.setattr(cr, "_notify_broker_failure", lambda *_a, **_k: notified.append(_a))
+    monkeypatch.setattr(cr, "_record_broker_connection_status",
+                        _REAL_RECORD if record else (lambda *_a, **_k: None))
+    rc = cr._run_broker(cr.datetime.now(cr._ET), force=True)
+    return rc, rows, notified
+
+
+def test_status_row_saved_on_the_normal_path(monkeypatch, capsys):
+    rc, rows, _ = _drive(monkeypatch)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["accounts_ok"] is True and row["connections_ok"] is True
+    assert row["n_accounts"] == 2 and row["n_connections"] == 1
+    assert row["any_disabled"] is False and row["any_holdings_unavailable"] is False
+    assert row["positions_read_ok"] is True and row["snapshot_saved"] is True
+    assert row["positions_sig"] == cr.broker_connection.positions_sig({"DELL": 20.0})
+    assert row["holdings_refreshed_oldest"] == "2026-11-20T22:52:17.376190+00:00"
+    assert row["checked_at"] >= row["run_started_at"]
+    assert "broker: connection status saved (" in capsys.readouterr().out
+
+
+def test_status_row_on_the_account_selection_guard_path(monkeypatch):
+    """NOT a plain partial read: the only account that answered is empty and the
+    heavy one failed, so the lane's account-selection guard returns rc=1 (and
+    emails). The row is still written, on that early exit."""
+    rc, rows, notified = _drive(monkeypatch, positions_by_id={"cc": [], "individual": None})
+    assert rc == 1 and len(notified) == 1
+    assert len(rows) == 1
+    assert rows[0]["snapshot_saved"] is False
+    assert rows[0]["positions_read_ok"] is False
+    assert rows[0]["positions_sig"] is None
+
+
+def test_status_row_on_a_true_partial_read_leaves_the_lane_as_it_was(monkeypatch):
+    """One account unreadable but the main one has positions: no snapshot is saved
+    (partial-read invariant), no guard fires, and the row records that the read
+    was partial without changing rc or the failure emails."""
+    pos = {"cc": None, "individual": [_pos("DELL", 20.0)]}
+    rc_base, _, notified_base = _drive(monkeypatch, positions_by_id=pos, record=False)
+    rc, rows, notified = _drive(monkeypatch, positions_by_id=pos)
+    assert rc == rc_base
+    assert [n[1] for n in notified] == [n[1] for n in notified_base]
+    assert len(rows) == 1
+    assert rows[0]["positions_read_ok"] is False
+    assert rows[0]["snapshot_saved"] is False
+    assert rows[0]["positions_sig"] is None
+
+
+def test_status_row_records_a_snapshot_that_failed_to_save(monkeypatch):
+    rc, rows, _ = _drive(monkeypatch, snapshot_result=False)
+    assert rows[0]["snapshot_saved"] is False
+    assert rows[0]["positions_read_ok"] is True
+    assert rows[0]["positions_sig"] is not None
+
+
+def test_status_row_on_the_list_accounts_failed_path(monkeypatch):
+    rc, rows, notified = _drive(monkeypatch, accounts=None)
+    assert rc == 1 and len(notified) == 1
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["accounts_ok"] is False and row["n_accounts"] is None
+    assert row["any_holdings_unavailable"] is None
+    assert row["connections_ok"] is True and row["any_disabled"] is False
+    assert row["snapshot_saved"] is None            # never attempted, not "failed"
+    assert row["positions_read_ok"] is None
+    assert "could not list connected accounts" in row["error"]
+
+
+def test_status_row_on_the_no_accounts_path(monkeypatch):
+    rc, rows, _ = _drive(monkeypatch, accounts=[])
+    assert rc == 0
+    assert len(rows) == 1
+    assert rows[0]["accounts_ok"] is True and rows[0]["n_accounts"] == 0
+    assert rows[0]["snapshot_saved"] is None        # never attempted, not "failed"
+    assert rows[0]["positions_read_ok"] is None
+
+
+def test_status_row_on_the_every_read_failed_path(monkeypatch):
+    rc, rows, notified = _drive(monkeypatch, positions_by_id={"cc": None, "individual": None})
+    assert rc == 1 and len(notified) == 1
+    assert len(rows) == 1
+    assert rows[0]["positions_read_ok"] is False and rows[0]["snapshot_saved"] is False
+    assert "positions read failed" in rows[0]["error"]
+
+
+def test_status_row_when_connections_cannot_be_read_is_none_not_clean(monkeypatch):
+    rc, rows, _ = _drive(monkeypatch, connections=None)
+    assert rows[0]["connections_ok"] is False
+    assert rows[0]["any_disabled"] is None
+
+
+def test_a_disabled_connection_is_recorded_and_changes_nothing_else(monkeypatch):
+    rc_ok, _, notified_ok = _drive(monkeypatch)
+    rc, rows, notified = _drive(monkeypatch, connections=[{"disabled": True,
+                                                           "disabled_date": "2026-11-10"}])
+    assert rows[0]["any_disabled"] is True and rows[0]["disabled_date"] == "2026-11-10"
+    # C1 records only: the lane's rc and failure emails are exactly what they were
+    # (this driver's balance read is stubbed to fail, so both are the same non-clean values).
+    assert rc == rc_ok
+    assert [n[1] for n in notified] == [n[1] for n in notified_ok]
+
+
+def test_a_failing_status_write_leaves_the_lane_rc_unchanged(monkeypatch, capsys):
+    rc_ok, _, _ = _drive(monkeypatch)
+    for result in (False, RuntimeError("table does not exist")):
+        rc, rows, _ = _drive(monkeypatch, save_result=result)
+        assert rc == rc_ok
+        assert len(rows) == 1
+    assert "broker: connection status NOT saved" in capsys.readouterr().out
+
+
+def test_a_raising_list_connections_cannot_fail_the_lane(monkeypatch):
+    def _boom():
+        raise RuntimeError("sdk exploded")
+
+    rc_ok, _, _ = _drive(monkeypatch)
+    rows = []
+    monkeypatch.setattr(cr.snaptrade_client, "list_connections", _boom)
+    monkeypatch.setattr(cr.db, "save_broker_connection_status",
+                        lambda row: rows.append(row) or True)
+    rc = cr._run_broker(cr.datetime.now(cr._ET), force=True)
+    assert rc == rc_ok
+    assert rows == []   # nothing built, nothing written, and nothing raised
+
+
+def test_not_configured_writes_no_status_row(monkeypatch):
+    rc, rows, _ = _drive(monkeypatch, configured=False)
+    assert rc == 0
+    assert rows == []

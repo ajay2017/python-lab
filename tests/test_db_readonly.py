@@ -212,3 +212,93 @@ def test_llm_narrative_caches_are_all_guarded():
         "save_thesis_erosion_cache",
     ):
         assert guarded.get(name) is True, f"{name} lost its read-only guard"
+
+
+# ─── #34c C1: broker_connection_status writer / reader ───────────────────────
+class _FakeTable:
+    def __init__(self, log, rows=None, raises=None):
+        self.log, self.rows, self.raises = log, rows, raises
+
+    def insert(self, row):
+        self.log.append(("insert", row))
+        return self
+
+    def select(self, cols):
+        self.log.append(("select", cols))
+        return self
+
+    def order(self, col, desc=False):
+        self.log.append(("order", col, desc))
+        return self
+
+    def limit(self, n):
+        self.log.append(("limit", n))
+        return self
+
+    def execute(self):
+        if self.raises is not None:
+            raise self.raises
+        return types.SimpleNamespace(data=self.rows)
+
+
+class _FakeClient:
+    def __init__(self, table):
+        self._table = table
+
+    def table(self, name):
+        self._table.log.append(("table", name))
+        return self._table
+
+
+def test_save_broker_connection_status_is_a_noop_under_readonly(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: True)
+
+    def _must_not_be_called():
+        raise AssertionError("a read-only viewer must never reach the client")
+
+    monkeypatch.setattr(db, "_client", _must_not_be_called)
+    sys.modules.pop("streamlit", None)
+    db.set_readonly(True)
+    assert db.save_broker_connection_status({"checked_at": "2026-11-21T00:00:00+00:00"}) is False
+
+
+def test_save_broker_connection_status_inserts_one_row(monkeypatch):
+    log = []
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(_FakeTable(log)))
+    sys.modules.pop("streamlit", None)
+    assert db.save_broker_connection_status({"n_accounts": 5}) is True
+    assert ("table", "broker_connection_status") in log
+    assert ("insert", {"n_accounts": 5}) in log
+
+
+def test_save_broker_connection_status_never_raises(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client",
+                        lambda: _FakeClient(_FakeTable([], raises=RuntimeError("no such table"))))
+    sys.modules.pop("streamlit", None)
+    assert db.save_broker_connection_status({"n_accounts": 5}) is False
+    assert db.save_broker_connection_status("not a dict") is False
+    monkeypatch.setattr(db, "has_db", lambda: False)
+    assert db.save_broker_connection_status({"n_accounts": 5}) is False
+
+
+def test_load_latest_broker_connection_status_newest_first_and_limit_one(monkeypatch):
+    log = []
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client",
+                        lambda: _FakeClient(_FakeTable(log, rows=[{"n_accounts": 5}])))
+    assert db.load_latest_broker_connection_status() == {"n_accounts": 5}
+    assert ("order", "checked_at", True) in log
+    assert ("limit", 1) in log
+
+
+def test_load_latest_broker_connection_status_is_none_when_offline_missing_or_empty(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client",
+                        lambda: _FakeClient(_FakeTable([], raises=RuntimeError("no such table"))))
+    assert db.load_latest_broker_connection_status() is None
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(_FakeTable([], rows=[])))
+    assert db.load_latest_broker_connection_status() is None
+    monkeypatch.setattr(db, "has_db", lambda: False)
+    assert db.load_latest_broker_connection_status() is None

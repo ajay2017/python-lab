@@ -7852,6 +7852,48 @@ def save_broker_position_snapshot(positions: dict, account_ids=None,
         return False
 
 
+# ── broker_connection_status (#34c C1, docs/plans/broker-connection-alarm-34c.md) ──
+# Append-only: one row per broker cron run, written by `_run_broker` with
+# SnapTrade's own connection / refresh health. Capture only; no reader decides
+# anything from it yet. DDL: docs/sql/broker-connection-status.sql (applied by hand).
+
+def save_broker_connection_status(row: dict) -> bool:
+    """Insert one `broker_connection_status` row. Bookkeeping: False on any
+    failure (no DB, table missing, a write error, a non-dict row), never raises.
+    Read-only-viewer gated like `save_broker_position_snapshot` (costs the
+    headless cron nothing)."""
+    if is_readonly(): return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    if not isinstance(row, dict):
+        return False
+    try:
+        _client().table("broker_connection_status").insert(dict(row)).execute()
+        return True
+    except Exception as e:
+        _record_db_error(str(e)[:120])
+        return False
+
+
+def load_latest_broker_connection_status() -> dict | None:
+    """The newest `broker_connection_status` row (by `checked_at`), or None.
+
+    None means UNKNOWN: DB offline, the table not yet created, or no run has
+    recorded a row. It must never be read as "connection healthy"."""
+    if not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("broker_connection_status")
+            .select("*").order("checked_at", desc=True).limit(1).execute().data
+        )
+        if not rows:
+            return None
+        return dict(rows[0])
+    except Exception:
+        return None
+
+
 # ── App Settings — reference_tables / reference_table_history (Commit 1 of ──
 # 3, 2026-09-01, data layer only). Ships INERT until the DDL in
 # docs/sql/app_settings_ddl.sql is applied by hand — same "ships inert"

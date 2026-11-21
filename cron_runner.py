@@ -70,6 +70,7 @@ from datetime import datetime, timedelta
 
 import pytz
 
+from stock_analyzer import broker_connection
 from stock_analyzer import broker_sync
 from stock_analyzer import db
 from stock_analyzer import effective_capital as _effective_capital
@@ -3661,6 +3662,43 @@ def _run_maintenance(now_et, force: bool) -> int:
     return rc
 
 
+def _record_broker_connection_status(now_et, *, accounts,
+                                     positions_read_ok, snapshot_saved,
+                                     positions_sig, error=None) -> None:
+    """#34c C1: append one `broker_connection_status` row for this run (SnapTrade's
+    own connection / refresh health; docs/plans/broker-connection-alarm-34c.md).
+
+    Capture only, and bookkeeping like the config stamp in `_run_broker` ③: it can
+    never change the lane's rc, raise or fail the lane. One extra SnapTrade GET
+    (`list_connections`). `run_started_at` is the lane's `now_et`; `checked_at` is
+    taken here, once the row is built, so a snapshot saved earlier in the run
+    always has `captured_at <= checked_at`. The row is built by the pure
+    `broker_connection.summarize_status`."""
+    try:
+        connections = snaptrade_client.list_connections()
+        row = broker_connection.summarize_status(
+            accounts=accounts,
+            connections=connections,
+            run_started_at=now_et,
+            checked_at=datetime.now(_ET),
+            positions_read_ok=positions_read_ok,
+            snapshot_saved=snapshot_saved,
+            positions_sig=positions_sig,
+            error=error,
+        )
+        summary = broker_connection.log_summary(row)
+        if db.save_broker_connection_status(row):
+            _log(f"broker: connection status saved ({summary})")
+        else:
+            _log(f"broker: connection status NOT saved ({summary}) — DDL "
+                 "docs/sql/broker-connection-status.sql not applied, or the "
+                 "write failed; ignored, bookkeeping only")
+    except Exception as exc:
+        _log("broker: connection status NOT saved (UNCAUGHT — "
+             f"{broker_connection.scrub_error(exc) or type(exc).__name__}; "
+             "ignored, bookkeeping only)")
+
+
 def _run_broker(now_et, force: bool) -> int:
     """SnapTrade broker sync (Robinhood) — the 7th cron lane
     (docs/plans/snaptrade-broker-integration.md). Balance sync + transaction
@@ -3705,9 +3743,15 @@ def _run_broker(now_et, force: bool) -> int:
         _LAST_LANE_FAILURE_DETAIL = _detail
         _log(f"broker: {_detail}")
         _notify_broker_failure(now_et, _detail)
+        _record_broker_connection_status(
+            now_et, accounts=None, positions_read_ok=None,
+            snapshot_saved=None, positions_sig=None, error=_detail)
         return 1
     if not accounts:
         _log("broker: SnapTrade connected but no brokerage accounts linked — nothing to sync.")
+        _record_broker_connection_status(
+            now_et, accounts=accounts, positions_read_ok=None,
+            snapshot_saved=None, positions_sig=None)
         return 0
 
     # Single-user app connecting one Robinhood account — sync the first;
@@ -3769,6 +3813,9 @@ def _run_broker(now_et, force: bool) -> int:
         _LAST_LANE_FAILURE_DETAIL = _detail
         _log(f"broker: {_detail}")
         _notify_broker_failure(now_et, _detail)
+        _record_broker_connection_status(
+            now_et, accounts=accounts, positions_read_ok=False,
+            snapshot_saved=False, positions_sig=None, error=_detail)
         return 1
 
     account_id = _best_id
@@ -3804,6 +3851,8 @@ def _run_broker(now_et, force: bool) -> int:
     # also matches what the live Account panel already does for the same
     # condition; the persistence path must not be weaker than the path it
     # mirrors, or the two surfaces disagree about the same underlying fault.
+    _snapshot_saved = False             # for the connection-status row below
+    _snapshot_sig: str | None = None    # positions signature of the map this run built
     try:
         if _pos_read_failed:
             _log(f"broker: position snapshot NOT saved — "
@@ -3832,12 +3881,14 @@ def _run_broker(now_et, force: bool) -> int:
                 for _tk, _kd in _kinds.items():
                     if _tk not in _snap_kinds:
                         _snap_kinds[_tk] = _kd
+            _snapshot_sig = broker_connection.positions_sig(_snap_positions)
             if db.save_broker_position_snapshot(
                 _snap_positions,
                 account_ids=sorted(_pos_by_account),
                 all_accounts_ok=True,
                 kinds=_snap_kinds,
             ):
+                _snapshot_saved = True
                 _log(f"broker: position snapshot saved — {len(_snap_positions)} ticker(s) "
                      f"across {len(_pos_by_account)} account(s)")
             else:
@@ -3848,6 +3899,14 @@ def _run_broker(now_et, force: bool) -> int:
                 _log("broker: position snapshot not saved (DDL not applied yet, or DB write failed).")
     except Exception as exc:
         _log(f"broker/snapshot: UNCAUGHT — {str(exc)[:160]}")
+
+    # #34c C1: one connection-status row per run, written here (right after the
+    # snapshot save, so `captured_at <= checked_at`) so it also covers the guard
+    # return and the DB-outage return below. Bookkeeping: never changes rc.
+    _record_broker_connection_status(
+        now_et, accounts=accounts,
+        positions_read_ok=not _pos_read_failed, snapshot_saved=_snapshot_saved,
+        positions_sig=_snapshot_sig)
 
     # Guard (2026-08-24 review): refuse balance/transaction sync when account
     # selection is ambiguous. If EVERY account that responded shows 0

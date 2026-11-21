@@ -56,6 +56,7 @@ def _run(monkeypatch, *, trades, classified=None, backfill_ok=None, close_result
     monkeypatch.setattr(cr.broker_sync, "map_balances_to_cash",
                         lambda raw: {"cash_balance": 1.0, "note": "test"})
     monkeypatch.setattr(cr.db, "save_broker_position_snapshot", lambda *_a, **_k: True)
+    monkeypatch.setattr(cr.db, "save_broker_connection_status", lambda *_a, **_k: False)
     monkeypatch.setattr(cr.db, "save_account_cash", lambda *_a, **_k: True)
     monkeypatch.setattr(cr.db, "save_snaptrade_config", lambda *_a, **k: _config(**k))
     monkeypatch.setattr(cr.db, "load_snaptrade_income_events", lambda *_a, **_k: [])
