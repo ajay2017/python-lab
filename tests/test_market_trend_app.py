@@ -6,6 +6,8 @@ wiring is pinned by AST:
   * the failure path: the raising fetch is wrapped by the None-returning cache;
   * the renderer compares nothing against a trend threshold and uses no raw HTML;
   * the Macro branch renders the table BEFORE the `port_df.empty` gate (owner Q10);
+  * (C2b) the page is two tabs: the trend (summary line, then tables) in the first,
+    the macro signals (the `port_df.empty` gate and the load button) in the second;
   * `_fetch_sector_returns` still has its readers (Home's leading sectors and
     Performance Diagnostics), since the trend section must not replace it.
 """
@@ -76,7 +78,8 @@ def _qualified_calls(fn: ast.AST) -> set[str]:
 # ── fetch layers and the renderer ────────────────────────────────────────────
 
 def test_the_three_trend_functions_are_module_level():
-    for name in ("_trend_result_ok", "_cached_market_trend", "_render_trend_table"):
+    for name in ("_trend_result_ok", "_cached_market_trend", "_render_trend_table",
+                 "_render_trend_summary"):
         _module_func(name)
 
 
@@ -109,8 +112,9 @@ def test_cached_market_trend_calls_the_raising_fetch_inside_a_try():
         isinstance(v, ast.Constant) and v.value is None for v in handler_returns)
 
 
-def test_render_trend_table_has_no_raw_html_and_no_threshold_names():
-    fn = _module_func("_render_trend_table")
+@pytest.mark.parametrize("fn_name", ["_render_trend_table", "_render_trend_summary"])
+def test_trend_renderers_have_no_raw_html_and_no_threshold_names(fn_name):
+    fn = _module_func(fn_name)
     for n in ast.walk(fn):
         if isinstance(n, ast.keyword):
             assert n.arg != "unsafe_allow_html"
@@ -214,6 +218,103 @@ def test_renderer_builds_both_frames_before_any_streamlit_call_and_dates_above_t
         for c in ast.walk(fn))]
     first_table = min(ln for ln, attr in st_calls if attr == "dataframe")
     assert dated and max(dated) < first_table
+
+
+# ── C2b: two tabs, the summary line, the full-height tables ──────────────────
+
+_TREND_TAB = "📈 Market and sector trend"
+_SIG_TAB = "📡 Macro signals"
+
+
+def _tab_withs(branch: ast.If) -> tuple[ast.With, ast.With]:
+    """The `with <tab>:` blocks of the Macro branch's st.tabs unpacking, in order."""
+    unpack = [
+        n for n in branch.body if isinstance(n, ast.Assign)
+        and isinstance(n.value, ast.Call) and _call_name(n.value) == "tabs"
+    ]
+    assert len(unpack) == 1, "the Macro branch must unpack one st.tabs call"
+    names = [e.id for e in unpack[0].targets[0].elts]
+    assert len(names) == 2
+    withs = []
+    for nm in names:
+        found = [w for w in branch.body if isinstance(w, ast.With) and any(
+            isinstance(i.context_expr, ast.Name) and i.context_expr.id == nm
+            for i in w.items)]
+        assert len(found) == 1, f"no top-level `with {nm}:` block"
+        withs.append(found[0])
+    return withs[0], withs[1]
+
+
+def _walk_with(w: ast.With):
+    for stmt in w.body:
+        yield from ast.walk(stmt)
+
+
+def test_macro_branch_has_the_two_tabs_in_order():
+    branch = _page_branch("🌐 Macro")
+    tabs = [n for n in _walk_body(branch)
+            if isinstance(n, ast.Call) and _call_name(n) == "tabs"]
+    assert len(tabs) == 1
+    arg = tabs[0].args[0]
+    assert isinstance(arg, ast.List)
+    assert [e.value for e in arg.elts] == [_TREND_TAB, _SIG_TAB]
+
+
+def test_trend_fetch_summary_and_table_sit_in_the_first_tab_summary_first():
+    branch = _page_branch("🌐 Macro")
+    first, second = _tab_withs(branch)
+    in_first = list(_walk_with(first))
+    in_second = list(_walk_with(second))
+    for name in ("_cached_market_trend", "_render_trend_summary", "_render_trend_table"):
+        assert len(_calls_to(in_first, name)) == 1, name
+        assert not _calls_to(in_second, name), f"{name} leaked into the signals tab"
+    summary = _calls_to(in_first, "_render_trend_summary")[0]
+    table = _calls_to(in_first, "_render_trend_table")[0]
+    assert summary.lineno < table.lineno
+    assert "book_empty" in {k.arg for k in summary.keywords}
+    # both renders share one try, so a bug in either cannot take the page down
+    tries = [t for t in in_first if isinstance(t, ast.Try)]
+    assert any(
+        {id(summary), id(table)} <= {id(c) for b in t.body for c in ast.walk(b)}
+        for t in tries)
+
+
+def test_the_book_gate_and_the_load_button_sit_in_the_second_tab():
+    branch = _page_branch("🌐 Macro")
+    first, second = _tab_withs(branch)
+
+    def gates(nodes):
+        return [n for n in nodes if isinstance(n, ast.If)
+                and isinstance(n.test, ast.Attribute) and n.test.attr == "empty"
+                and isinstance(n.test.value, ast.Name) and n.test.value.id == "port_df"]
+
+    def load_buttons(nodes):
+        return [n for n in nodes if isinstance(n, ast.keyword) and n.arg == "key"
+                and isinstance(n.value, ast.Constant) and n.value.value == "_macro_load_btn"]
+
+    assert gates(list(_walk_with(second))) and not gates(list(_walk_with(first)))
+    assert load_buttons(list(_walk_with(second))) and not load_buttons(list(_walk_with(first)))
+
+
+def test_render_trend_summary_is_display_only_and_takes_book_empty():
+    fn = _module_func("_render_trend_summary")
+    assert "book_empty" in {a.arg for a in fn.args.args}
+    calls = _qualified_calls(fn)
+    assert "market_trend.chip_groups" in calls
+    assert "market_trend.table_rows" in calls
+    # exactly one markdown line is drawn
+    st_md = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute) and n.func.attr == "markdown"]
+    assert len(st_md) == 1
+
+
+def test_render_trend_table_dataframes_both_pass_height():
+    fn = _module_func("_render_trend_table")
+    frames = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute) and n.func.attr == "dataframe"]
+    assert len(frames) == 2
+    for c in frames:
+        assert "height" in {k.arg for k in c.keywords}
 
 
 # ── the heatmap fetch keeps its readers ──────────────────────────────────────

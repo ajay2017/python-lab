@@ -4654,6 +4654,43 @@ def _trend_pct(v, unit: str = "%") -> str:
     return f"{sign}{abs(f):.1f}{unit}"
 
 
+def _render_trend_summary(result: dict, weights, book_empty: bool = False) -> None:
+    """One line above the trend tables: the indices' labels, then the Falling /
+    Weakening / Rising sector funds with the book's share in each held one. Display
+    only: every label and group comes from market_trend (no threshold is compared
+    here). Plain text through st.markdown (bold markdown only, no `$`, no raw HTML).
+    book_empty reads like _render_trend_table's: no weights, so no "(you N%)"."""
+    _w = {} if book_empty else weights
+    groups = market_trend.chip_groups(result, _w)
+    rows = market_trend.table_rows(result, _w)
+    _idx_syms = {x["symbol"] for x in result["indices"]}
+
+    def _pct(p) -> str:
+        return "<1%" if 0 < p < 0.5 else f"{int(p + 0.5)}%"
+
+    def _held(g: dict) -> bool:
+        return g["held_pct"] is not None and g["held_pct"] > 0
+
+    def _named(g: dict) -> str:
+        return f"{g['name']} (you {_pct(g['held_pct'])})" if _held(g) else g["name"]
+
+    parts = []
+    for r in rows:
+        if r["symbol"] in _idx_syms and r["label"] is not None:
+            parts.append(f"{r['name']} {r['label_text']}"
+                         + (f", {r['drawdown_word']}" if r["drawdown_word"] else ""))
+    parts.append("**Falling:** " + (", ".join(_named(g) for g in groups["falling"]) or "none"))
+    weak = groups["weakening"]
+    if weak:
+        _yours = [f"{g['name']} {_pct(g['held_pct'])}" for g in weak if _held(g)]
+        parts.append(f"**Weakening:** {len(weak)}"
+                     + (f" (yours: {', '.join(_yours)})" if _yours else ""))
+    else:
+        parts.append("**Weakening:** none")
+    parts.append("**Rising:** " + (", ".join(_named(g) for g in groups["rising"]) or "none"))
+    st.markdown(" · ".join(parts))
+
+
 def _render_trend_table(result: dict, weights, book_empty: bool = False) -> None:
     """Render market_trend.table_rows as an indices table and a sectors table.
     Display only: every label / figure / colour key comes from the module's row
@@ -4724,8 +4761,12 @@ def _render_trend_table(result: dict, weights, book_empty: bool = False) -> None
         f"As of the {market_trend.fmt_session(result['as_of'])} close. Labels describe closes up "
         "to then. Not a forecast, and they change no pick, size or stop."
     )
-    st.dataframe(idx_frame, hide_index=True, width='stretch')
-    st.dataframe(sec_frame, hide_index=True, width='stretch')
+    # height = every row plus the header (Streamlit's 35 px default each), so neither
+    # table scrolls inside itself and the Falling rows at the top stay in view
+    st.dataframe(idx_frame, hide_index=True, width='stretch',
+                 height=(len(idx_rows) + 1) * 35 + 3)
+    st.dataframe(sec_frame, hide_index=True, width='stretch',
+                 height=(len(sec_rows) + 1) * 35 + 3)
     st.caption(weight_note)
     if result["not_checked"]:
         st.caption("Not checked: " + ", ".join(result["not_checked"]) + " (see the Trend column).")
@@ -24896,256 +24937,260 @@ elif page == "🏆 Health":
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "🌐 Macro":
     st.title("🌐 Macro")
-    st.caption(
-        "Detects the current macro regime (rising/falling rates, risk-on/off) from live ETF proxies "
-        "and shows which holdings are in the tailwind or headwind. "
-        "Institutional practice uses macro regime overlays to tilt sector weights 3–5% above/below benchmark."
-    )
+    st.caption("Each index's and sector fund's trend from recent closes, and the macro regime read from rate and volatility proxies.")
+    _mac_tab_trend, _mac_tab_sig = st.tabs(["📈 Market and sector trend", "📡 Macro signals"])
 
-    # Market and sector trend: shows before 🏠 Home has loaded the book (only
-    # "Your weight" waits); the rest of the page keeps its wait below.
-    st.markdown("#### 📈 Market and sector trend")
-    with st.spinner("Loading index and sector-fund prices…"):
-        _trend_res = _cached_market_trend(market_trend.as_of_session(_now_et()).isoformat())
-    if _trend_res is None:
-        st.info(
-            "ℹ️ Trend unavailable: the index and sector-fund prices couldn't be loaded. "
-            "No reading is shown rather than a calm-looking one. It retries within 5 minutes."
+    with _mac_tab_trend:
+        # Market and sector trend: shows before 🏠 Home has loaded the book (only
+        # "Your weight" waits); the 📡 Macro signals tab keeps its own wait.
+        with st.spinner("Loading index and sector-fund prices…"):
+            _trend_res = _cached_market_trend(market_trend.as_of_session(_now_et()).isoformat())
+        if _trend_res is None:
+            st.info(
+                "ℹ️ Trend unavailable: the index and sector-fund prices couldn't be loaded. "
+                "No reading is shown rather than a calm-looking one. It retries within 5 minutes."
+            )
+        else:
+            try:
+                _trend_pdf = _get_or_offline(st.session_state, "_port_df_enriched")
+                # the post-trade "liquidated" outcome publishes an EMPTY DataFrame
+                _trend_book_empty = _trend_pdf is not None and getattr(_trend_pdf, "empty", False)
+                _trend_w = market_trend.held_weights(_trend_pdf)
+                _render_trend_summary(_trend_res, _trend_w, book_empty=_trend_book_empty)
+                _render_trend_table(_trend_res, _trend_w, book_empty=_trend_book_empty)
+            except Exception as _te:
+                print(f"[market_trend] render failed: {type(_te).__name__}: {_te}")
+                st.caption("Trend table couldn't be drawn this run.")
+
+    with _mac_tab_sig:
+        st.caption(
+            "Detects the current macro regime (rising/falling rates, risk-on/off) from live ETF proxies "
+            "and shows which holdings are in the tailwind or headwind. "
+            "Institutional practice uses macro regime overlays to tilt sector weights 3–5% above/below benchmark."
         )
-    else:
-        try:
-            _trend_pdf = _get_or_offline(st.session_state, "_port_df_enriched")
-            # the post-trade "liquidated" outcome publishes an EMPTY DataFrame
-            _trend_book_empty = _trend_pdf is not None and getattr(_trend_pdf, "empty", False)
-            _trend_w = market_trend.held_weights(_trend_pdf)
-            _render_trend_table(_trend_res, _trend_w, book_empty=_trend_book_empty)
-        except Exception as _te:
-            print(f"[market_trend] render failed: {type(_te).__name__}: {_te}")
-            st.caption("Trend table couldn't be drawn this run.")
-    st.markdown("---")
 
-    port_df = st.session_state.get("_port_df_enriched", pd.DataFrame())
-    if port_df.empty:
-        _render_portfolio_not_loaded(show_home_button=True, key_suffix="macro")
-    else:
-        _render_portfolio_stale_banner(key_suffix="macro")
-        if st.button("📡 Load macro signals (TLT · SPY · VIX)", key="_macro_load_btn"):
-            _macro_raw = {}
-            for _sym, _period in [("TLT", "3mo"), ("SPY", "3mo"), ("^VIX", "5d")]:
-                try:
-                    with st.spinner(f"Loading {_sym}…"):
-                        _h = fetch_price_history(_sym, period=_period)
-                    if not _h.empty and "Close" in _h.columns:
-                        _cl = _h["Close"].dropna()
-                        if len(_cl) >= 2:
-                            if _sym == "^VIX":
-                                _macro_raw["vix"] = float(_cl.iloc[-1])
-                            elif float(_cl.iloc[0]) > 0:
-                                _macro_raw[_sym.lower() + "_ret"] = round(
-                                    float((_cl.iloc[-1] / _cl.iloc[0] - 1) * 100), 1
-                                )
-                except Exception:
-                    pass
-            st.session_state["_macro_raw"] = _macro_raw
+        port_df = st.session_state.get("_port_df_enriched", pd.DataFrame())
+        if port_df.empty:
+            _render_portfolio_not_loaded(show_home_button=True, key_suffix="macro")
+        else:
+            _render_portfolio_stale_banner(key_suffix="macro")
+            if st.button("📡 Load macro signals (TLT · SPY · VIX)", key="_macro_load_btn"):
+                _macro_raw = {}
+                for _sym, _period in [("TLT", "3mo"), ("SPY", "3mo"), ("^VIX", "5d")]:
+                    try:
+                        with st.spinner(f"Loading {_sym}…"):
+                            _h = fetch_price_history(_sym, period=_period)
+                        if not _h.empty and "Close" in _h.columns:
+                            _cl = _h["Close"].dropna()
+                            if len(_cl) >= 2:
+                                if _sym == "^VIX":
+                                    _macro_raw["vix"] = float(_cl.iloc[-1])
+                                elif float(_cl.iloc[0]) > 0:
+                                    _macro_raw[_sym.lower() + "_ret"] = round(
+                                        float((_cl.iloc[-1] / _cl.iloc[0] - 1) * 100), 1
+                                    )
+                    except Exception:
+                        pass
+                st.session_state["_macro_raw"] = _macro_raw
 
-        if st.session_state.get("_macro_raw"):
-            _mr = st.session_state["_macro_raw"]
-            _macro_missing = [
-                label for key, label in [("tlt_ret", "TLT"), ("spy_ret", "SPY"), ("vix", "VIX")]
-                if key not in _mr
-            ]
-            if _macro_missing:
-                st.warning(
-                    f"⚠️ Couldn't load {', '.join(_macro_missing)} this session — the "
-                    "regime read below would be incomplete, so it's withheld rather than "
-                    "filled in with a fabricated neutral value. Reload macro signals above."
-                )
-            else:
-                # Direct indexing, not .get(default) — _macro_missing above
-                # already confirmed all 3 keys are present; a silent
-                # fallback here would reintroduce the fabricated-neutral
-                # bug this block exists to close.
-                _tlt = _mr["tlt_ret"]
-                _spy = _mr["spy_ret"]
-                _vix = _mr["vix"]
-                regime = detect_macro_regime_legacy(_tlt, _spy, _vix)
-
-                _regime_colors = {
-                    "rising_rates":  "#ffbb33",
-                    "falling_rates": "#00C851",
-                    "risk_off":      "#ff4444",
-                    "risk_on":       "#00C851",
-                    "neutral":       "#888888",
-                }
-                _rc = _regime_colors.get(regime["combined"], "#888888")
-                st.markdown(
-                    f"<div style='background:{_rc}22;border-left:4px solid {_rc};"
-                    f"padding:10px 14px;border-radius:4px;margin-bottom:8px'>"
-                    f"<b style='color:{_rc};font-size:1.1em'>Current Regime (ETF-proxy read): {regime['label']}</b>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                st.caption(
-                    "ℹ️ This is an independent ETF-proxy read (TLT/SPY/VIX only) — a "
-                    "deliberate secondary lens, not the same regime signal shown on "
-                    "🏠 Home, Risk Analysis, or Regime Fit (which use a separate, "
-                    "FRED-based 7-signal classifier). The two can legitimately disagree."
-                )
-
-                _s1, _s2, _s3 = st.columns(3)
-                _sig = regime["signals"]
-                _s1.metric("Rates (TLT 3mo)", f"{_tlt:+.1f}%",
-                           help=_sig.get("Rates (TLT)", ""))
-                _s2.metric("Volatility (VIX)", f"{_vix:.0f}",
-                           delta="risk-off" if _vix >= RISK_OFF_VIX_LEVEL else "risk-on" if _vix <= RISK_ON_VIX_LEVEL else "neutral",
-                           delta_color="inverse" if _vix >= RISK_OFF_VIX_LEVEL else "normal",
-                           help=_sig.get("Volatility (VIX)", ""))
-                st.metric("Market (SPY 3mo)", f"{_spy:+.1f}%",
-                           help=_sig.get("Market (SPY)", ""))
-
-                _fav = REGIME_FAVORED[regime["combined"]]
-                st.markdown("---")
-                st.markdown("**Sector Rotation Playbook for this Regime**")
-                st.caption(_fav["reason"])
-                _pb1, _pb2 = st.columns(2)
-                with _pb1:
-                    if _fav["overweight"]:
-                        st.markdown("🟢 **Overweight**")
-                        for _s in _fav["overweight"]:
-                            rs = RATE_SENSITIVITY.get(_s, 0)
-                            st.markdown(f"- {_s} &nbsp; *(rate sensitivity {rs:+.2f})*",
-                                        unsafe_allow_html=True)
-                    else:
-                        st.markdown("🟢 **Overweight** — none flagged")
-                with _pb2:
-                    if _fav["underweight"]:
-                        st.markdown("🔴 **Underweight / Reduce**")
-                        for _s in _fav["underweight"]:
-                            rs = RATE_SENSITIVITY.get(_s, 0)
-                            st.markdown(f"- {_s} &nbsp; *(rate sensitivity {rs:+.2f})*",
-                                        unsafe_allow_html=True)
-                    else:
-                        st.markdown("🔴 **Underweight** — none flagged")
-
-                st.markdown("---")
-                st.markdown("**Your Portfolio — Macro Alignment**")
-                expo_df = portfolio_macro_exposure(port_df, regime)
-                if not expo_df.empty:
-                    _nt = int((expo_df["Macro Alignment"] == "Tailwind ↑").sum())
-                    _nh = int((expo_df["Macro Alignment"] == "Headwind ↓").sum())
-                    _nn = int((expo_df["Macro Alignment"] == "Neutral ↔").sum())
-                    _headwind_weight = expo_df.loc[
-                        expo_df["Macro Alignment"] == "Headwind ↓", "Weight (%)"
-                    ].sum()
-
-                    _ec1, _ec2, _ec3, _ec4 = st.columns(4)
-                    _ec1.metric("Tailwind positions", _nt,  help="Sector favored in current regime")
-                    _ec2.metric("Neutral positions",  _nn)
-                    _ec3.metric("Headwind positions", _nh,  help="Sector disfavored in current regime")
-                    _ec4.metric("% in headwind sectors", f"{_headwind_weight:.0f}%",
-                                help="Combined weight of positions facing macro headwinds")
-
-                    # Positions whose sector has no structural rate label carry
-                    # NaN (not a fabricated 0.0). Exclude them from the CHART
-                    # rather than plotting them: a NaN x-value makes the bar
-                    # silently vanish, which is a worse lie than the old "+0.00"
-                    # — the position would look absent, not unknown. They stay
-                    # in the table below, rendered "—", and are named here.
-                    _expo_unrated = expo_df[expo_df["Rate Sensitivity"].isna()]
-                    _expo_sorted = (
-                        expo_df[expo_df["Rate Sensitivity"].notna()]
-                        .sort_values("Rate Sensitivity")
+            if st.session_state.get("_macro_raw"):
+                _mr = st.session_state["_macro_raw"]
+                _macro_missing = [
+                    label for key, label in [("tlt_ret", "TLT"), ("spy_ret", "SPY"), ("vix", "VIX")]
+                    if key not in _mr
+                ]
+                if _macro_missing:
+                    st.warning(
+                        f"⚠️ Couldn't load {', '.join(_macro_missing)} this session — the "
+                        "regime read below would be incomplete, so it's withheld rather than "
+                        "filled in with a fabricated neutral value. Reload macro signals above."
                     )
-                    _bar_colors = [
-                        "#00C851" if a == "Tailwind ↑" else "#ff4444" if a == "Headwind ↓" else "#888888"
-                        for a in _expo_sorted["Macro Alignment"]
-                    ]
-                    _labels = [
-                        f"{row['Ticker']} ({row['Weight (%)']:.0f}%)"
-                        for _, row in _expo_sorted.iterrows()
-                    ]
-                    # Degenerate all-unrated book: go.Bar with empty x/y renders a
-                    # blank axis, which reads as "no positions" rather than "no
-                    # rate labels". Unreachable today (NVDA/LLY are mapped), but
-                    # cheap to state honestly. The caption below still names them
-                    # and the table still lists them.
-                    if _expo_sorted.empty:
-                        st.info(
-                            "No position has a structural rate-sensitivity label, "
-                            "so there is nothing to chart — see the table below."
-                        )
-                    else:
-                        rs_fig = go.Figure(go.Bar(
-                            x=_expo_sorted["Rate Sensitivity"],
-                            y=_labels,
-                            orientation="h",
-                            marker_color=_bar_colors,
-                            text=[f"{v:+.2f}" for v in _expo_sorted["Rate Sensitivity"]],
-                            textposition="outside",
-                        ))
-                        rs_fig.add_vline(x=0, line_color="white", line_dash="dot", line_width=1)
-                        rs_fig.update_layout(
-                            title="Rate Sensitivity by Position (right = rate beneficiary)",
-                            template="plotly_dark", height=max(280, 35 * len(_expo_sorted)),
-                            xaxis_title="Rate Sensitivity Score",
-                            margin=dict(l=0, r=60, t=40, b=0),
-                        )
-                        st.plotly_chart(rs_fig, width="stretch")
-                    # Sits directly under the chart, BEFORE the colour legend, so
-                    # it reads as a qualification of the chart rather than as
-                    # commentary on the legend.
-                    if not _expo_unrated.empty:
-                        st.caption(
-                            "Not charted (no structural rate label for their sector): "
-                            + _safe_html(", ".join(
-                                f"{t} · {s}" for t, s in zip(
-                                    _expo_unrated["Ticker"], _expo_unrated["Sector"])
-                            ))
-                            + " — shown as “—” in the table below rather than "
-                              "assigned a neutral score the app never computed."
-                        )
+                else:
+                    # Direct indexing, not .get(default) — _macro_missing above
+                    # already confirmed all 3 keys are present; a silent
+                    # fallback here would reintroduce the fabricated-neutral
+                    # bug this block exists to close.
+                    _tlt = _mr["tlt_ret"]
+                    _spy = _mr["spy_ret"]
+                    _vix = _mr["vix"]
+                    regime = detect_macro_regime_legacy(_tlt, _spy, _vix)
+
+                    _regime_colors = {
+                        "rising_rates":  "#ffbb33",
+                        "falling_rates": "#00C851",
+                        "risk_off":      "#ff4444",
+                        "risk_on":       "#00C851",
+                        "neutral":       "#888888",
+                    }
+                    _rc = _regime_colors.get(regime["combined"], "#888888")
+                    st.markdown(
+                        f"<div style='background:{_rc}22;border-left:4px solid {_rc};"
+                        f"padding:10px 14px;border-radius:4px;margin-bottom:8px'>"
+                        f"<b style='color:{_rc};font-size:1.1em'>Current Regime (ETF-proxy read): {regime['label']}</b>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
                     st.caption(
-                        "🟢 Green = sector benefits from current macro regime  |  "
-                        "⬜ Gray = neutral  |  "
-                        "🔴 Red = sector faces headwind in current regime"
+                        "ℹ️ This is an independent ETF-proxy read (TLT/SPY/VIX only) — a "
+                        "deliberate secondary lens, not the same regime signal shown on "
+                        "🏠 Home, Risk Analysis, or Regime Fit (which use a separate, "
+                        "FRED-based 7-signal classifier). The two can legitimately disagree."
                     )
 
-                    def _align_col(val):
-                        if "Tailwind" in str(val):  return "color:#00C851;font-weight:bold"
-                        if "Headwind" in str(val):  return "color:#ff4444"
-                        return "color:#888888"
+                    _s1, _s2, _s3 = st.columns(3)
+                    _sig = regime["signals"]
+                    _s1.metric("Rates (TLT 3mo)", f"{_tlt:+.1f}%",
+                               help=_sig.get("Rates (TLT)", ""))
+                    _s2.metric("Volatility (VIX)", f"{_vix:.0f}",
+                               delta="risk-off" if _vix >= RISK_OFF_VIX_LEVEL else "risk-on" if _vix <= RISK_ON_VIX_LEVEL else "neutral",
+                               delta_color="inverse" if _vix >= RISK_OFF_VIX_LEVEL else "normal",
+                               help=_sig.get("Volatility (VIX)", ""))
+                    st.metric("Market (SPY 3mo)", f"{_spy:+.1f}%",
+                               help=_sig.get("Market (SPY)", ""))
 
-                    def _rate_col(val):
-                        if isinstance(val, float):
-                            if val >= 0.3:  return "color:#00C851"
-                            if val <= -0.4: return "color:#ff4444"
-                        return ""
+                    _fav = REGIME_FAVORED[regime["combined"]]
+                    st.markdown("---")
+                    st.markdown("**Sector Rotation Playbook for this Regime**")
+                    st.caption(_fav["reason"])
+                    _pb1, _pb2 = st.columns(2)
+                    with _pb1:
+                        if _fav["overweight"]:
+                            st.markdown("🟢 **Overweight**")
+                            for _s in _fav["overweight"]:
+                                rs = RATE_SENSITIVITY.get(_s, 0)
+                                st.markdown(f"- {_s} &nbsp; *(rate sensitivity {rs:+.2f})*",
+                                            unsafe_allow_html=True)
+                        else:
+                            st.markdown("🟢 **Overweight** — none flagged")
+                    with _pb2:
+                        if _fav["underweight"]:
+                            st.markdown("🔴 **Underweight / Reduce**")
+                            for _s in _fav["underweight"]:
+                                rs = RATE_SENSITIVITY.get(_s, 0)
+                                st.markdown(f"- {_s} &nbsp; *(rate sensitivity {rs:+.2f})*",
+                                            unsafe_allow_html=True)
+                        else:
+                            st.markdown("🔴 **Underweight** — none flagged")
 
-                    _disp_cols = ["Icon", "Ticker", "Sector", "Weight (%)", "Rate Sensitivity", "Macro Alignment"]
-                    _styled_expo = (
-                        expo_df[_disp_cols].style
-                        .map(_align_col, subset=["Macro Alignment"])
-                        .map(_rate_col,  subset=["Rate Sensitivity"])
-                        # na_rep: without it a NaN rate score renders as the bare
-                        # string "nan" instead of an honest em-dash.
-                        .format({"Weight (%)": "{:.1f}%", "Rate Sensitivity": "{:+.2f}"},
-                                na_rep="—")
-                    )
-                    st.dataframe(_styled_expo, width='stretch')
+                    st.markdown("---")
+                    st.markdown("**Your Portfolio — Macro Alignment**")
+                    expo_df = portfolio_macro_exposure(port_df, regime)
+                    if not expo_df.empty:
+                        _nt = int((expo_df["Macro Alignment"] == "Tailwind ↑").sum())
+                        _nh = int((expo_df["Macro Alignment"] == "Headwind ↓").sum())
+                        _nn = int((expo_df["Macro Alignment"] == "Neutral ↔").sum())
+                        _headwind_weight = expo_df.loc[
+                            expo_df["Macro Alignment"] == "Headwind ↓", "Weight (%)"
+                        ].sum()
 
-                    if _headwind_weight > MACRO_HEADWIND_WARN_PCT:
-                        _heads = expo_df[expo_df["Macro Alignment"] == "Headwind ↓"]["Sector"].unique().tolist()
-                        st.warning(
-                            f"⚠️ **{_headwind_weight:.0f}% of your portfolio is in macro headwind sectors** "
-                            f"({', '.join(_heads)}) given the *{regime['label']}* environment. "
-                            f"Best practice would recommend trimming these and rotating to "
-                            f"{', '.join(_fav['overweight'][:2]) if _fav['overweight'] else 'defensive sectors'}."
+                        _ec1, _ec2, _ec3, _ec4 = st.columns(4)
+                        _ec1.metric("Tailwind positions", _nt,  help="Sector favored in current regime")
+                        _ec2.metric("Neutral positions",  _nn)
+                        _ec3.metric("Headwind positions", _nh,  help="Sector disfavored in current regime")
+                        _ec4.metric("% in headwind sectors", f"{_headwind_weight:.0f}%",
+                                    help="Combined weight of positions facing macro headwinds")
+
+                        # Positions whose sector has no structural rate label carry
+                        # NaN (not a fabricated 0.0). Exclude them from the CHART
+                        # rather than plotting them: a NaN x-value makes the bar
+                        # silently vanish, which is a worse lie than the old "+0.00"
+                        # — the position would look absent, not unknown. They stay
+                        # in the table below, rendered "—", and are named here.
+                        _expo_unrated = expo_df[expo_df["Rate Sensitivity"].isna()]
+                        _expo_sorted = (
+                            expo_df[expo_df["Rate Sensitivity"].notna()]
+                            .sort_values("Rate Sensitivity")
                         )
-                    elif _nt > _nh:
-                        st.success(
-                            f"✅ **Your portfolio is well-positioned for {regime['label']}** — "
-                            f"{_nt} of {len(expo_df)} positions are in macro-favored sectors."
+                        _bar_colors = [
+                            "#00C851" if a == "Tailwind ↑" else "#ff4444" if a == "Headwind ↓" else "#888888"
+                            for a in _expo_sorted["Macro Alignment"]
+                        ]
+                        _labels = [
+                            f"{row['Ticker']} ({row['Weight (%)']:.0f}%)"
+                            for _, row in _expo_sorted.iterrows()
+                        ]
+                        # Degenerate all-unrated book: go.Bar with empty x/y renders a
+                        # blank axis, which reads as "no positions" rather than "no
+                        # rate labels". Unreachable today (NVDA/LLY are mapped), but
+                        # cheap to state honestly. The caption below still names them
+                        # and the table still lists them.
+                        if _expo_sorted.empty:
+                            st.info(
+                                "No position has a structural rate-sensitivity label, "
+                                "so there is nothing to chart — see the table below."
+                            )
+                        else:
+                            rs_fig = go.Figure(go.Bar(
+                                x=_expo_sorted["Rate Sensitivity"],
+                                y=_labels,
+                                orientation="h",
+                                marker_color=_bar_colors,
+                                text=[f"{v:+.2f}" for v in _expo_sorted["Rate Sensitivity"]],
+                                textposition="outside",
+                            ))
+                            rs_fig.add_vline(x=0, line_color="white", line_dash="dot", line_width=1)
+                            rs_fig.update_layout(
+                                title="Rate Sensitivity by Position (right = rate beneficiary)",
+                                template="plotly_dark", height=max(280, 35 * len(_expo_sorted)),
+                                xaxis_title="Rate Sensitivity Score",
+                                margin=dict(l=0, r=60, t=40, b=0),
+                            )
+                            st.plotly_chart(rs_fig, width="stretch")
+                        # Sits directly under the chart, BEFORE the colour legend, so
+                        # it reads as a qualification of the chart rather than as
+                        # commentary on the legend.
+                        if not _expo_unrated.empty:
+                            st.caption(
+                                "Not charted (no structural rate label for their sector): "
+                                + _safe_html(", ".join(
+                                    f"{t} · {s}" for t, s in zip(
+                                        _expo_unrated["Ticker"], _expo_unrated["Sector"])
+                                ))
+                                + " — shown as “—” in the table below rather than "
+                                  "assigned a neutral score the app never computed."
+                            )
+                        st.caption(
+                            "🟢 Green = sector benefits from current macro regime  |  "
+                            "⬜ Gray = neutral  |  "
+                            "🔴 Red = sector faces headwind in current regime"
                         )
+
+                        def _align_col(val):
+                            if "Tailwind" in str(val):  return "color:#00C851;font-weight:bold"
+                            if "Headwind" in str(val):  return "color:#ff4444"
+                            return "color:#888888"
+
+                        def _rate_col(val):
+                            if isinstance(val, float):
+                                if val >= 0.3:  return "color:#00C851"
+                                if val <= -0.4: return "color:#ff4444"
+                            return ""
+
+                        _disp_cols = ["Icon", "Ticker", "Sector", "Weight (%)", "Rate Sensitivity", "Macro Alignment"]
+                        _styled_expo = (
+                            expo_df[_disp_cols].style
+                            .map(_align_col, subset=["Macro Alignment"])
+                            .map(_rate_col,  subset=["Rate Sensitivity"])
+                            # na_rep: without it a NaN rate score renders as the bare
+                            # string "nan" instead of an honest em-dash.
+                            .format({"Weight (%)": "{:.1f}%", "Rate Sensitivity": "{:+.2f}"},
+                                    na_rep="—")
+                        )
+                        st.dataframe(_styled_expo, width='stretch')
+
+                        if _headwind_weight > MACRO_HEADWIND_WARN_PCT:
+                            _heads = expo_df[expo_df["Macro Alignment"] == "Headwind ↓"]["Sector"].unique().tolist()
+                            st.warning(
+                                f"⚠️ **{_headwind_weight:.0f}% of your portfolio is in macro headwind sectors** "
+                                f"({', '.join(_heads)}) given the *{regime['label']}* environment. "
+                                f"Best practice would recommend trimming these and rotating to "
+                                f"{', '.join(_fav['overweight'][:2]) if _fav['overweight'] else 'defensive sectors'}."
+                            )
+                        elif _nt > _nh:
+                            st.success(
+                                f"✅ **Your portfolio is well-positioned for {regime['label']}** — "
+                                f"{_nt} of {len(expo_df)} positions are in macro-favored sectors."
+                            )
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 2 — MARKET SCANNER
@@ -46498,7 +46543,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
 - **📋 Watchlist** — names you're tracking, with enter-now flags. Defaults to a **🎯 Actionable** filter (just the Enter Now / Near Entry names) rather than showing everything at once — other chips (Hold / Waiting / Remove / All), a ticker search box, and a sort dropdown are there to look further. Old, forgotten names that just became actionable get a "👁️ actionable again" callout. A name that says Enter Now but that you **sold today** shows a "Sold Today" warning instead of the entry card; it comes back the next day if the setup still qualifies. A well-scored name whose R:R is below 2:1 shows as **Near Entry**, and its card says R:R is below the 2:1 minimum and, when its target is an analyst target, the price it would need to pull back to for R:R to reach 2:1: set a price alert there (an estimate, not a buy order; if price gets there the app re-checks everything before calling an entry). The entry zone on this page is built around the price the card shows, so the 2:1 R:R check is what stops you overpaying. A **Ready to Enter** card can carry a soft caption noting the sector was classified only from the data provider's own label (the ticker isn't on the curated sector map) — the sector-cap check still ran, just against a less exact bucket.
 - **🧵 Thesis** — read-only consolidation of five features per ticker: your saved **Thesis** (what you believed at entry), **F-1 Review** (AI verdict: Intact / Weakening / Broken), **Thesis Red Team** (erosion score + counter-evidence), **Multi-Agent Debate** (Bull/Bear/Judge verdict), **Analyst Coverage** (saved research + consensus), and **Pre-Mortem** (your stated risk case + breached triggers). Every evidence line carries a **provenance tag** (📊 fact / 🧮 derived / 🏦 analyst opinion / 🤖 AI inference / 🖊 your words) so you always know what kind of claim you're looking at. Missing data is disclosed honestly (e.g. "No debate on record," "Erosion not computed today") rather than silently omitted. A **tension banner** surfaces when the engine composite, F-1 verdict, analyst consensus, and debate verdict genuinely disagree with each other — awareness only, never a gate. **"What changed since last review"** now shows a real diff comparing your two most recent evidence snapshots, reporting material composite moves, erosion shifts, analyst price-target cuts, newly-saved research, market-regime changes, and F-1 verdict changes; when insufficient history exists or no change crossed a threshold, it discloses that honestly instead. Awareness only; never gates or recommends.
-- **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
+- **🌐 Macro** — two tabs. **📈 Market and sector trend** (opens first, and works before 🏠 Home has loaded your book) labels the S&P 500, the Nasdaq and each sector fund **Rising**, **Weakening**, **Falling** or **Steady** from the closes up to the last completed trading day (the caption names that close; the index tiles elsewhere are live, this is not). A sector fund is Weakening when it is below its 50-day average or its 4-week return trails the S&P 500's by more than 3 points, and Falling when both hold for 3 trading days in a row; Rising means above a 50-day average that is itself rising, with neither Weakening sign. The S&P 500 and Nasdaq use their 200-day average in place of the S&P comparison, so they can't read Rising while below it, and say "correction" or "bear market" when 10% or 20% below their 52-week closing high. A summary line names the Falling and Rising sectors with your share in each, then two tables give the 4-week return, the gap to the S&P 500, how long it has been above or below its 50-day average, the drop from the high, the label, your weight (from Home's last build) and the 1-week / 3-month / 6-month returns. The labels describe what has happened, never a forecast, and change no pick, size or stop. 🧭 Market-Risk Posture reads SPY with dividends included, so near the 200-day line the S&P row here can read "below" for a few days while Posture is still clear; when they differ, this page is the more cautious one. **📡 Macro signals** (after Home has loaded your book): press **Load macro signals** for the ETF-proxy regime read (rates from TLT, volatility from VIX, market from SPY over 3 months), the Sector Rotation Playbook for that regime, and how your holdings line up with it (tailwind / neutral / headwind).
 - **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Discretion Value, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel ("What This Means For You") that turns the data into short **watch / caution observations** about your own history, never size-up/skip instructions (the live gates own entry and sizing). **Scope, stated on a line under the title:** only gated BUY calls (New Position / Add to Winner / Watchlist Enter Now) scored under the *current* composite weights; awareness-only Buy Candidate rows, rows scored under older weights (or with no recorded weights version), and ETFs are excluded and counted. **Every count is distinct tickers**, each at its first surfacing (your acted row if you bought it) — a name the scanner re-surfaced for 20 days counts once, not 20 times. The **personal threshold** on Score Calibration is the lowest composite floor where every band at or above it with enough tickers beat SPY *both* on average *and* in at least half of its tickers; thinner bands above it are listed as "not counted". Outcomes run from the call to today's price, and acted outcomes are marked from your fill to today, as if still held — not realized P&L. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Its Day+1 / Day+5 / Day+20 are fixed horizons (1, 5 and 20 trading days after the call). Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates. **Read the coverage line at the top before trusting any figure on this page.** It states how many matured recommendations could actually be scored and — for those that could not — exactly why, one reason at a time: sold positions (excluded by design, since realized P&L spans a holding period no single market window can benchmark), recommendations with no current price, ones with no entry price logged, and ones the SPY benchmark couldn't cover. The missing-price bucket is the one worth watching: a failed price lookup tends to happen on delisted, acquired or renamed tickers, so those exclusions are **not random** and the names are listed so you can see them. If more matured recommendations were dropped than scored, an amber note says so — every average on the page describes only the ones that could be scored.
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, a **🧭 Sector Gaps** pointer (sectors you're underweight/unheld that could genuinely diversify this book, linking to the full Diversification Advisor), and Analytics (relative strength, sector rotation, rankings, and a **Portfolio vs. S&P 500** real-sector benchmark tilt — uses each holding's actual market sector, not this app's thematic groupings) for your current holdings.
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
