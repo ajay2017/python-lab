@@ -1274,6 +1274,12 @@ _GATE_FILES = {
     # connection alarm emails; a wrong call hides a dead Robinhood connection or cries
     # wolf. Added while it only records (C1), so the later decision logic is gated.
     "stock_analyzer/broker_connection.py",
+    # Added 2026-11-21 (market and sector trend C1, docs/plans/market-sector-trend.md):
+    # decides the Rising / Weakening / Falling / Steady label shown for each index
+    # and sector fund (and the correction / bear-market words); a wrong call tells
+    # the owner a falling market is fine, or contradicts Market-Risk Posture.
+    # Display only today; gated from the start so a later rule edit gets review.
+    "stock_analyzer/market_trend.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

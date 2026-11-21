@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market and sector trend mockup</title>
+<style>
+:root{--bg:#0e1117;--side:#262730;--panel:#111827;--line:#1f2937;--line2:#31333f;--text:#fafafa;--muted:#9ca3af;
+  --red:#ef4444;--redbg:#3f1d24;--amber:#facc15;--amberbg:#3b3a1a;--green:#22c55e;--greenbg:#12301f;--blue:#60a5fa;--accent:#ff4b4b;--infobg:#172a46}
+*{box-sizing:border-box}
+body{margin:0;background:#05070b;color:var(--text);font:15px/1.5 "Source Sans 3","Source Sans Pro",system-ui,sans-serif}
+.wrap{max-width:1240px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:24px;margin:0 0 4px}
+.lead{color:var(--muted);margin:0 0 10px;max-width:900px}
+.sample{display:inline-block;background:#3b3a1a;color:#fde68a;border-radius:6px;padding:4px 10px;font-size:13px;margin:0 0 14px}
+.controls{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:0 0 14px}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden;flex-wrap:wrap}
+.seg button{background:transparent;color:var(--muted);border:0;padding:6px 12px;font:inherit;font-size:14px;cursor:pointer}
+.seg button.on{background:#1f2937;color:var(--text)}
+.lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-right:6px}
+/* simulated app window */
+.screen{height:700px;border:1px solid var(--line2);border-radius:10px;overflow:hidden;display:flex;background:var(--bg);margin:0 auto;position:relative}
+.screen.laptop{width:100%}.screen.phone{width:390px}
+.sidebar{width:200px;background:var(--side);padding:14px 12px;flex:none;font-size:13.5px;color:#d1d5db}
+.screen.phone .sidebar{display:none}
+.sidebar .nav div{padding:5px 8px;border-radius:6px}.sidebar .nav div.on{background:#3a3b46;color:#fff}
+.main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+.scroll{flex:1;overflow:auto;padding:16px 20px}
+.screen.phone .scroll{padding:12px}
+.cc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:10px}
+.cc .t{font-size:18px;font-weight:700}
+.ghost{background:#141821;border:1px solid var(--line2);border-radius:10px;padding:14px;margin-top:12px;color:#6b7280;font-size:14px;min-height:90px}
+h2{font-size:22px;margin:18px 0 8px}
+/* dock */
+.dock{flex:none;border-top:1px solid var(--line2);background:#0b0e14}
+.tabs{display:flex;gap:2px;align-items:stretch;border-bottom:1px solid var(--line2);padding:0 10px;overflow-x:auto}
+.dtitle{color:#6b7280;font-size:12px;align-self:center;margin-right:8px}
+.tab{background:none;border:0;color:var(--muted);font:inherit;font-size:13.5px;padding:8px 10px;cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent}
+.tab.on{color:var(--text);border-bottom-color:var(--accent)}
+.tab .n{display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;font-size:11.5px;margin-left:4px;background:#374151;color:#e5e7eb}
+.tab .n.a{background:#713f12;color:#fde68a}
+.pane{height:170px;overflow:auto;padding:10px 14px;font-size:14px}
+.bar{border-radius:8px;padding:9px 13px;margin-bottom:8px;font-size:14px}
+.bar.amber{background:var(--amberbg);color:#fde68a}.bar.info{background:var(--infobg);color:#bfdbfe}
+.bar.red{background:var(--redbg);color:#fca5a5}
+.cap{color:var(--muted);font-size:12.5px;margin:2px 0 6px}
+.jump{color:var(--blue);cursor:pointer;text-decoration:underline}
+.btn{display:inline-block;border:1px solid var(--line2);border-radius:8px;padding:3px 10px;font-size:13px;color:#e5e7eb;cursor:pointer;background:#1a1d26}
+.btn:hover{border-color:#6b7280}
+/* markets pane */
+.idx{display:flex;gap:10px;margin-bottom:8px}
+.screen.phone .idx{flex-direction:column;gap:6px}
+.idx>div{flex:1;border-radius:6px;padding:5px 10px 6px;text-align:center;line-height:1.3}
+.idx .dn{background:rgba(220,38,38,.10);border:1px solid #cc2222;border-left:3px solid #cc2222}
+.idx .up{background:rgba(0,180,70,.10);border:1px solid #00a040;border-left:3px solid #00a040}
+.idx b{display:block;font-size:10px;color:#aaa;letter-spacing:.09em}
+.idx .v{font-weight:700}.idx .dn .c{color:#f87171;font-size:12px}.idx .up .c{color:#4ade80;font-size:12px}
+.idx .tr{margin-top:3px;padding-top:3px;border-top:1px dashed #374151;font-size:11.5px;color:#d1d5db}
+.new{outline:2px dashed #60a5fa;outline-offset:2px;border-radius:6px}
+.lab{display:inline-block;font-size:11px;font-weight:700;border-radius:9px;padding:0 7px;letter-spacing:.02em}
+.lab.F{background:#7f1d1d;color:#fecaca}.lab.W{background:#713f12;color:#fde68a}.lab.R{background:#14532d;color:#bbf7d0}
+.srow{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0}
+.srow .k{width:84px;flex:none;font-size:12px;color:var(--muted)}
+.chip{display:inline-block;font-size:12.5px;padding:1px 8px;border-radius:10px;border:1px solid var(--line2);color:#e5e7eb}
+.chip.F{border-color:#b91c1c;color:#fca5a5}.chip.W{border-color:#a16207;color:#fde68a}.chip.R{border-color:#15803d;color:#86efac}
+.chip .h{font-size:10.5px;background:#e5e7eb;color:#111;border-radius:6px;padding:0 4px;margin-left:4px;font-weight:700}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:11.5px;color:#9ca3af}
+/* dialog */
+.overlay{position:absolute;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:5;padding:12px}
+.overlay.open{display:flex}
+.dlg{background:#0e1117;border:1px solid var(--line2);border-radius:12px;max-width:920px;width:100%;max-height:92%;overflow:auto;padding:16px 18px}
+.dlg h3{margin:0 0 4px;font-size:19px;display:flex;justify-content:space-between}
+.dlg .x{cursor:pointer;color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;margin-top:8px}
+th{text-align:left;color:var(--muted);font-weight:600;font-size:12px;border-bottom:1px solid var(--line2);padding:6px 8px;white-space:nowrap}
+td{border-bottom:1px solid var(--line);padding:6px 8px;white-space:nowrap}
+td.num{text-align:right;font-family:ui-monospace,Consolas,monospace}
+td.neg{color:#f87171}td.pos{color:#4ade80}
+tr.held td:first-child{border-left:3px solid #e5e7eb}
+.tblwrap{overflow-x:auto}
+/* notes below */
+.notes{max-width:1000px;margin:22px auto 0}
+.notes h3{font-size:18px;margin:18px 0 6px}
+.notes ol,.notes ul{margin:4px 0 0 0;padding-left:22px}
+.notes li{margin:5px 0}
+.q{color:#fde68a;font-weight:700}
+.sug{color:#86efac}
+.legend{font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Market and sector trend: option 1</h1>
+  <p class="lead">Option 1 adds a trend reading to the <b>📈 Markets</b> dock tab (overall indices plus every sector fund). The full table's home is <b>🌐 Macro</b> (owner decision 2026-11-21); the dock opens the same table as a dialog from any page, and the old 🔥 Sector Heatmap tab becomes a pointer to it. Option 2 (a ⚠️ Notices line naming how much of your book sits in falling sectors) was <b>dropped by the owner 2026-11-21</b>, so ⚠️ Notices is unchanged. It is display only: nothing is bought, sold, blocked or resized. Blue dashed outlines mark what is new.</p>
+  <div class="sample">⚠ Sample figures and tickers for layout only. They are not real market data or your real holdings.</div>
+
+  <div class="controls">
+    <span><span class="lbl">Page</span><span class="seg" id="segPage"><button class="on" data-v="home">🏠 Home</button><button data-v="other">📡 Signals (any other page)</button><button data-v="macro">🌐 Macro (table's home)</button><button data-v="overview">🥧 Portfolio Overview (old heatmap)</button></span></span>
+    <span><span class="lbl">Market state</span><span class="seg" id="segState"><button class="on" data-v="falling">Your sectors falling</button><button data-v="clear">None of yours falling</button><button data-v="offline">Trend data offline</button></span></span>
+    <span><span class="lbl">Width</span><span class="seg" id="segWidth"><button class="on" data-v="laptop">Laptop</button><button data-v="phone">Phone</button></span></span>
+  </div>
+
+  <div class="screen laptop" id="screen">
+    <div class="sidebar">
+      <div style="font-weight:700;margin-bottom:10px">DRISHTA</div>
+      <div class="nav" id="nav">
+        <div class="on" data-p="home">🏠 Home</div><div>💰 Account</div><div>📄 Reports</div><div>📈 Analysis</div><div>📋 Watchlist</div><div data-p="macro">🌐 Macro</div><div data-p="overview">🥧 Portfolio Overview</div><div data-p="other">📡 Signals &amp; Advice</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="scroll" id="page"></div>
+      <div class="dock">
+        <div class="tabs">
+          <span class="dtitle">Dock</span>
+          <button class="tab on" data-t="notices">⚠️ Notices <span class="n" id="ncount">3</span></button>
+          <button class="tab" data-t="prices">💹 Live Prices</button>
+          <button class="tab" data-t="markets">📈 Markets</button>
+        </div>
+        <div class="pane" id="pane"></div>
+      </div>
+      <div class="overlay" id="overlay"><div class="dlg" id="dlg"></div></div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <h3>How the labels are worked out (sample rule; the cut-offs are your call)</h3>
+    <ul class="legend">
+      <li><span class="lab F">Falling</span> below its 50-day average <b>and</b> behind the S&amp;P 500 by more than <i>X</i> points over 4 weeks, holding for <i>N</i> sessions in a row.</li>
+      <li><span class="lab W">Weakening</span> exactly one of those two legs.</li>
+      <li><span class="lab R">Rising</span> above its 50-day average <b>and</b> that average is rising.</li>
+      <li>Anything else reads <b>Steady</b> and isn't listed in the dock (it is in the full table).</li>
+      <li>"From high" is the drop from the 52-week high. The words <i>correction</i> (−10%) and <i>bear market</i> (−20%) appear only on the S&amp;P 500 / Nasdaq rows, with those cut-offs in <code>constants.py</code>.</li>
+    </ul>
+
+    <h3>Decisions for you</h3>
+    <ol>
+      <li><span class="q">Q1 Label rule and cut-offs.</span> The rule above, with <i>X</i> and <i>N</i> set by you. <span class="sug">Suggested: X = 3 points, N = 3 sessions</span> (stops a label flickering day to day). They go in <code>constants.py</code>, so this is a policy call.</li>
+      <li><s><span class="q">Q2 How loud the Notices line is.</span></s> Not needed: option 2 dropped 2026-11-21.</li>
+      <li><s><span class="q">Q3 Count Weakening in the Notices line?</span></s> Not needed: option 2 dropped 2026-11-21.</li>
+      <li><span class="q">Q4 Which indices get a trend line.</span> <span class="sug">Suggested: S&amp;P 500 and Nasdaq only</span>; the Dow tile stays as today.</li>
+      <li><span class="q">Q5 The software fund IGV backs three app sectors</span> (AI &amp; Cloud, AI &amp; Data, Enterprise Tech). <span class="sug">Suggested: one row "Software (IGV)" that lists the three</span>, as shown, instead of three identical rows.</li>
+      <li><span class="q">Q6 Full table as a dialog or a popover.</span> <span class="sug">Suggested: dialog</span> (computed only when opened; a popover would compute on every rerun).</li>
+      <li><span class="q">Q7 Morning email.</span> <span class="sug">Suggested: not now.</span> The email line comes with option 3 (alert only when a sector changes label), so the email doesn't repeat the same line daily.</li>
+      <li><span class="q">Q8 Home for the full table.</span> <b>Decided 2026-11-21: 🌐 Macro</b>, at the top of the page. The 🔥 Sector Heatmap tab (🥧 Portfolio Overview → 📈 Analytics) becomes a one-line pointer, so the app keeps one sector table. The dock's dialog is the same table from the same function.</li>
+      <li><span class="q">Q9 Keep the heatmap's 1-week / 3-month / 6-month columns?</span> <span class="sug">Suggested: yes</span>, at the right of the table (shown), so nothing the heatmap showed is lost in the move.</li>
+      <li><span class="q">Q10 🌐 Macro before 🏠 Home has loaded your book.</span> Today the whole Macro page waits for the portfolio. <span class="sug">Suggested: show the trend table anyway</span> (it is market data), with the "Your weight" column reading "open 🏠 Home first" until Home has built. The rest of the page keeps its current wait.</li>
+    </ol>
+
+    <h3>What this does not do</h3>
+    <ul class="legend">
+      <li>No forecast and no probability: every figure describes what has already happened.</li>
+      <li>No change to any pick, add, trim, size or gate. That is option 4 (shadow first) and needs its own design and review.</li>
+      <li>Data: the sector funds are already downloaded for the 📊 Portfolio Analysis heatmap (6 months today). The 52-week high needs that download stretched to 1 year, plus a 1-year Nasdaq history (SPY's already exists).</li>
+      <li>When the data can't be loaded, the dock says so and Notices carries a quiet "not checked" note, never a calm-looking reading (the cache publishes <code>None</code>).</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+const S = {page:"home", state:"falling", tab:"notices", width:"laptop"};
+
+/* ---- sample data (NOT real) ---- */
+const IDX = [
+  {k:"DOW", v:"44,120.55", c:"▼ −0.41%  (−181 pts)", up:false, tr:null},
+  {k:"S&P 500", v:"6,212.80", c:"▲ +0.62%  (+38 pts)", up:true, tr:{lab:"W", txt:"−7.8% from high · below 50-day · above 200-day"}},
+  {k:"NASDAQ", v:"20,345.10", c:"▲ +0.88%  (+178 pts)", up:true, tr:{lab:"F", txt:"−13.6% from high · correction · below 50-day · below 200-day"}},
+];
+const SECT = [
+  // name, fund, 4wk %, vs S&P pts, vs50 sessions (neg = below for N sessions), from high %, label, your weight %, 1W %, 3M %, 6M %
+  ["Semiconductors","SOXX",-11.4,-6.9,-14,-21.3,"F",22,-3.2,-6.5,4.1],
+  ["Software (AI & Cloud · AI & Data · Enterprise Tech)","IGV",-9.2,-4.7,-11,-17.0,"F",9,-2.4,-8.8,-3.0],
+  ["Cybersecurity","CIBR",-8.1,-3.6,-9,-14.2,"F",0,-1.9,-5.1,1.2],
+  ["Consumer Tech","XLY",-5.9,-1.4,-6,-9.8,"W",6,-1.1,-2.0,3.5],
+  ["Communications","XLC",-5.2,-0.7,-4,-8.1,"W",0,-0.8,-1.4,5.2],
+  ["EV & Auto","DRIV",-6.3,-1.8,-3,-12.5,"W",0,-2.0,-4.3,-1.8],
+  ["Financials","XLF",-3.1,1.4,5,-4.4,"S",8,0.3,1.8,6.0],
+  ["Industrials","XLI",-2.8,1.7,3,-5.0,"S",0,0.1,0.9,4.4],
+  ["Defense","ITA",-1.2,3.3,9,-3.1,"S",0,0.6,3.1,9.2],
+  ["Healthcare","XLV",1.9,6.4,18,-1.2,"R",5,1.2,4.0,2.7],
+  ["Utilities","XLU",2.6,7.1,22,-0.8,"R",0,0.9,5.3,8.1],
+  ["Consumer Staples & Retail","XRT",0.4,4.9,7,-3.9,"R",0,0.2,1.1,-0.6],
+  ["Energy","XLE",1.1,5.6,12,-2.6,"R",0,0.7,2.4,1.5],
+  ["Materials","XLB",-2.2,2.3,-2,-6.7,"S",0,-0.4,-0.5,2.1],
+  ["Clean Energy","ICLN",-4.0,0.5,-5,-11.9,"S",0,-1.5,-3.9,6.8],
+  ["Real Estate","XLRE",-1.0,3.5,4,-4.8,"S",0,0.2,1.5,0.9],
+];
+const SHORT = {"Software (AI & Cloud · AI & Data · Enterprise Tech)":"Software"};
+const LABTXT = {F:"Falling",W:"Weakening",R:"Rising",S:"Steady"};
+
+function pct(x){return (x>0?"+":x<0?"−":"")+Math.abs(x).toFixed(1)+"%"}
+function pts(x){return (x>0?"+":x<0?"−":"")+Math.abs(x).toFixed(1)+" pts"}
+
+function pageHtml(){
+  if(S.page==="home") return `
+    <div class="cc"><div class="t">🧭 Command Center</div><div class="cap">(unchanged, page content as today)</div></div>
+    <h2>📋 Today's Brief</h2><div class="ghost">Today's Brief cards (unchanged)</div><div class="ghost">Grow Today (unchanged)</div>`;
+  if(S.page==="macro") return `
+    <h2 style="margin-top:4px">🌐 Macro</h2>
+    <div class="cap">(page caption, unchanged)</div>
+    <div class="new" style="padding:4px 2px">
+      <h3 style="margin:10px 0 2px;font-size:18px">📈 Market and sector trend</h3>
+      ${S.state==="offline"
+        ? `<div class="bar info">ℹ️ Trend unavailable: the index and sector-fund prices couldn't be loaded. No reading is shown rather than a calm-looking one.</div>`
+        : tableHtml()}
+    </div>
+    <div class="ghost" style="margin-top:16px">📡 Load macro signals (TLT · SPY · VIX) → regime read, Sector Rotation Playbook, Your Portfolio — Macro Alignment (all unchanged)</div>`;
+  if(S.page==="overview") return `
+    <h2 style="margin-top:4px">🥧 Portfolio Overview</h2>
+    <div class="cap">📊 Overview · ⚖️ Rebalancing · 💰 Tax · 📈 Performance · <b style="color:#fafafa">📈 Analytics</b></div>
+    <div class="cap">💪 Relative Strength · <b style="color:#fafafa">🔥 Sector Heatmap</b> · 🏛️ vs S&amp;P 500 (Real Sector) · 🔄 Rankings</div>
+    <div class="bar info new" style="margin-top:10px">ℹ️ The sector table moved to <b>🌐 Macro → 📈 Market and sector trend</b>. It keeps the 1-week to 6-month returns and adds a trend label and your weight per sector. <span class="btn" data-goto="macro">Open 🌐 Macro</span></div>
+    <div class="cap">(the 🔥 Load Sector Heatmap button and heatmap are removed; the other three sub-tabs are unchanged)</div>`;
+  return `<h2>📡 Signals &amp; Advice</h2><div class="ghost">Page content (unchanged)</div><div class="ghost"></div>`;
+}
+
+function exposureLine(){
+  return `<div class="bar amber new">📉 <b>31% of your book is in falling sectors:</b> Semiconductors 22% (NVDA, AMD, MRVL) and Software 9% (CRM, NOW). Semiconductors is down 11.4% over 4 weeks, 6.9 pts behind the S&amp;P 500, and has been below its 50-day average for 14 sessions. <span class="jump" data-go="markets">See 📈 Markets</span></div>
+    <div class="cap new">Describes what has already happened, not a forecast. It changes no pick, size or stop.</div>`;
+}
+
+function noticesHtml(){
+  // Option 2 dropped by the owner 2026-11-21: Notices is unchanged on every page.
+  return `<div class="bar info">ℹ️ 2 notes, nothing needs a look.</div>
+    <div class="cap">(⚠️ Notices is unchanged: the sector-exposure line (option 2) was dropped 2026-11-21. The trend reading lives in 📈 Markets and on 🌐 Macro.)</div>`;
+}
+function noticesHtmlOption2Dropped(){
+  if(S.page==="home"){
+    let top, body="";
+    if(S.state==="falling"){
+      top = `<div class="bar amber">⚠️ Needs a look: <b class="new" style="padding:0 3px">Falling sectors you hold</b> · 2 more notes</div>`;
+      body = exposureLine();
+    } else if(S.state==="clear"){
+      top = `<div class="bar info">ℹ️ 2 notes, nothing needs a look.</div>`;
+      body = `<div class="cap">(No sector-trend line: none of your sectors is Falling. Nothing is shown rather than an "all clear" line.)</div>`;
+    } else {
+      top = `<div class="bar info">ℹ️ 3 notes, nothing needs a look.</div>`;
+      body = `<div class="bar info new">ℹ️ Sector trend not checked: the sector-fund prices couldn't be loaded. Your exposure to falling sectors is unknown right now, not zero.</div>`;
+    }
+    return top + body + `<div class="cap">(the other existing notices follow here, unchanged)</div>`;
+  }
+  // other page: digest line from Home's last build
+  let need = S.state==="falling" ? `⚠️ Needs a look: <b class="new" style="padding:0 3px">Falling sectors you hold</b> · 2 more notes`
+           : S.state==="clear" ? `2 notes` : `3 notes`;
+  return `<div class="bar ${S.state==="falling"?"amber":"info"}">🏠 Home at 9:42 AM ET: 🔴 1 Act Today · ${need}</div>
+    <span class="btn">Open 🏠 Home</span> <span class="cap">Home's last build this session.</span>`;
+}
+
+function marketsHtml(){
+  const tiles = IDX.map(i=>{
+    const tr = (S.state==="offline"||!i.tr) ? (i.tr?`<div class="tr new" style="color:#9ca3af">trend not checked</div>`:"")
+      : `<div class="tr new"><span class="lab ${i.tr.lab}">${LABTXT[i.tr.lab]}</span> ${i.tr.txt}</div>`;
+    return `<div class="${i.up?"up":"dn"}"><b>${i.k}</b><span class="v">${i.v}</span><div class="c">${i.c}</div>${tr}</div>`;
+  }).join("");
+  let sect;
+  if(S.state==="offline"){
+    sect = `<div class="bar info new">ℹ️ Sector trend unavailable: the sector-fund prices couldn't be loaded. No reading is shown rather than a calm-looking one.</div>`;
+  } else {
+    const rows = S.state==="clear" ? SECT.map(r=> r[7]>0 && r[6]==="F" ? [...r.slice(0,6),"S",r[7]] : r) : SECT;
+    const grp = l => rows.filter(r=>r[6]===l).sort((a,b)=>b[7]-a[7]||a[2]-b[2])
+      .map(r=>`<span class="chip ${l}">${SHORT[r[0]]||r[0]} <span style="color:#9ca3af">${r[1]} ${pct(r[2])}</span>${r[7]>0?`<span class="h">you ${r[7]}%</span>`:""}</span>`).join(" ") || `<span class="cap">none</span>`;
+    sect = `<div class="new" style="padding:2px 0">
+      <div class="srow"><span class="k"><span class="lab F">Falling</span></span>${grp("F")}</div>
+      <div class="srow"><span class="k"><span class="lab W">Weakening</span></span>${grp("W")}</div>
+      <div class="srow"><span class="k"><span class="lab R">Rising</span></span>${grp("R")}</div></div>`;
+  }
+  return `<div class="idx">${tiles}</div>${sect}
+    <div class="foot"><span>📡 09:42 ET · prices auto-refresh every 60s · trend as of yesterday's close</span>
+    ${S.state==="offline"?"":`<span class="btn new" id="openTbl">Full trend table ↗</span>`}</div>`;
+}
+
+function pricesHtml(){ return `<div class="cap">(💹 Live Prices: unchanged)</div>`; }
+
+/* ONE table builder: the 🌐 Macro section and the dock dialog both call it (same function in the app too). */
+function tableHtml(){
+  const c = x => `<td class="num ${x<0?"neg":"pos"}">${pct(x)}</td>`;
+  const rows = SECT.slice().sort((a,b)=>"FWSR".indexOf(a[6])-"FWSR".indexOf(b[6]) || b[7]-a[7] || a[2]-b[2]).map(r=>{
+    const vs50 = r[4]<0 ? `below, ${-r[4]} sessions` : `above, ${r[4]} sessions`;
+    return `<tr class="${r[7]>0?"held":""}"><td>${r[0]}</td><td>${r[1]}</td>
+      ${c(r[2])}<td class="num ${r[3]<0?"neg":"pos"}">${pts(r[3])}</td>
+      <td>${vs50}</td><td class="num neg">${pct(r[5])}</td><td><span class="lab ${r[6]}">${LABTXT[r[6]]}</span></td>
+      <td class="num">${r[7]>0?r[7]+"%":"–"}</td>${c(r[8])}${c(r[9])}${c(r[10])}</tr>`;}).join("");
+  const head = first => `<tr><th>${first}</th><th>Fund</th><th>4-week</th><th>vs S&amp;P 500</th><th>vs 50-day average</th><th>From 52-wk high</th><th>Trend</th><th>Your weight</th><th>1-week</th><th>3-month</th><th>6-month</th></tr>`;
+  return `<div class="cap">As of yesterday's close. A white left edge marks a sector you hold. Sample figures.</div>
+    <div class="tblwrap"><table>
+      ${head("Index")}
+      <tr><td>S&amp;P 500</td><td>^GSPC</td>${c(-4.5)}<td class="num">–</td><td>below, 8 sessions</td><td class="num neg">−7.8%</td><td><span class="lab W">Weakening</span></td><td></td>${c(-1.4)}${c(-2.9)}${c(3.6)}</tr>
+      <tr><td>Nasdaq</td><td>^IXIC</td>${c(-8.3)}<td class="num neg">−3.8 pts</td><td>below, 12 sessions</td><td class="num neg">−13.6% · correction</td><td><span class="lab F">Falling</span></td><td></td>${c(-2.6)}${c(-5.7)}${c(1.9)}</tr>
+    </table>
+    <table>
+      ${head("Sector")}
+      ${rows}
+    </table></div>
+    <div class="cap" style="margin-top:8px">Your weight = the share of your book in that sector, from 🏠 Home's last build. Falling sectors you hold: 31% of your book. Trend labels describe what has happened; they are not a forecast.</div>`;
+}
+function dialogHtml(){
+  return `<h3><span>📈 Market and sector trend</span><span class="x" id="closeTbl">✕</span></h3>
+    <div class="cap">Same table as on 🌐 Macro. <span class="btn" data-goto="macro" id="dlgMacro">Open 🌐 Macro</span></div>
+    ${tableHtml()}`;
+}
+
+function render(){
+  document.getElementById("page").innerHTML = pageHtml();
+  const pane = document.getElementById("pane");
+  pane.innerHTML = S.tab==="notices"?noticesHtml(): S.tab==="markets"?marketsHtml(): pricesHtml();
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("on",t.dataset.t===S.tab));
+  const nc = document.getElementById("ncount");
+  nc.textContent = "2";
+  nc.className = "n";
+  document.getElementById("screen").className = "screen "+S.width;
+  document.querySelectorAll("#nav div").forEach(d=>d.classList.toggle("on", d.dataset.p===S.page));
+  const ot=document.getElementById("openTbl"); if(ot) ot.onclick=openTbl;
+  pane.querySelectorAll("[data-go]").forEach(e=>e.onclick=()=>{S.tab=e.dataset.go;render();});
+  document.querySelectorAll("#page [data-goto]").forEach(e=>e.onclick=()=>goPage(e.dataset.goto));
+}
+function goPage(p){
+  S.page=p; document.getElementById("overlay").classList.remove("open");
+  document.querySelectorAll("#segPage button").forEach(x=>x.classList.toggle("on",x.dataset.v===p));
+  document.getElementById("page").scrollTop=0; render();
+}
+function openTbl(){const o=document.getElementById("overlay");document.getElementById("dlg").innerHTML=dialogHtml();o.classList.add("open");
+  document.getElementById("closeTbl").onclick=()=>o.classList.remove("open");
+  document.getElementById("dlgMacro").onclick=()=>goPage("macro");}
+document.querySelectorAll("#nav div[data-p]").forEach(d=>{d.style.cursor="pointer";d.onclick=()=>goPage(d.dataset.p);});
+document.getElementById("overlay").onclick=e=>{if(e.target.id==="overlay")e.target.classList.remove("open");};
+function seg(id,key){document.querySelectorAll("#"+id+" button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#"+id+" button").forEach(x=>x.classList.remove("on"));b.classList.add("on");S[key]=b.dataset.v;
+  if(S.state==="offline") document.getElementById("overlay").classList.remove("open"); render();});}
+seg("segPage","page");seg("segState","state");seg("segWidth","width");
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{S.tab=t.dataset.t;render();});
+render();
+</script>
+</body>
+</html>

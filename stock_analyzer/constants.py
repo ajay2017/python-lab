@@ -698,6 +698,19 @@ MACRO_LEGACY_TLT_RET_PCT = 3.0   # |TLT 3mo return| beyond this = rising/falling
 MACRO_LEGACY_SPY_RET_PCT = 5.0   # |SPY 3mo return| beyond this = bull/bear trend signal
 RISK_OFF_TRIM_PCT       = 25.0   # suggested modest reduction per named position (or tighten the stop instead).
 
+# ── Market and sector trend (display only; docs/plans/market-sector-trend.md) ──
+# Labels the S&P 500, the Nasdaq and every sector fund Rising / Weakening /
+# Falling / Steady for DISPLAY. Changes no pick, size or gate. The index 200-day
+# leg reuses RISK_OFF_TREND_MA above (no separate constant).
+TREND_MA_SESSIONS             = 50     # "50-day average" (owner 2026-11-21).
+TREND_RETURN_SESSIONS         = 20     # "4-week" = 4 x 5 NYSE sessions; counted in sessions so a holiday doesn't shorten the window.
+TREND_LAG_SPX_PTS             = 3.0    # Falling's relative leg: 4-week return trails the S&P 500's by MORE than this many points (owner).
+TREND_CONFIRM_SESSIONS        = 3      # Falling needs both legs on this many sessions in a row (owner; stops a label flickering).
+TREND_MA_SLOPE_SESSIONS       = 5      # "50-day average rising" = above its value this many sessions earlier; one trading week smooths day-to-day sign flips (owner U3).
+TREND_HIGH_LOOKBACK_SESSIONS  = 252    # 52-week high = standard trading-year session count, on closing prices (owner U6).
+TREND_CORRECTION_PCT          = -10.0  # index rows only: this far (or more) below the 52-week closing high reads "correction" (owner).
+TREND_BEAR_PCT                = -20.0  # index rows only: this far (or more) below the 52-week closing high reads "bear market" (owner).
+
 # Cross-asset regime signals — thresholds for the Cross-Asset Pulse card (Risk tab).
 # Each signal is independent; score = count of stressed signals (0–5).
 CROSS_ASSET_HYG_TREND_DAYS     = 20    # lookback window (days) for HYG linear trend
