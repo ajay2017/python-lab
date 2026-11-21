@@ -453,8 +453,49 @@ def test_format_prompt_best_worst_only_when_truthy():
         worst={"ticker": "BBB", "outcome_pct": -5.0, "alpha_pct": -3.0, "acted_on": False},
     )
     text2 = ir._format_prompt(package)
-    assert "Best outcome: AAA" in text2
-    assert "Worst outcome: BBB" in text2
+    assert "Best outcome (single call): AAA" in text2
+    assert "Worst outcome (single call): BBB" in text2
+    assert "Best / worst below are each ONE call, not a per-name figure." in text2
+    assert "Best / worst below" not in text
+
+
+def test_format_prompt_labels_the_averages_per_call():
+    text = ir._format_prompt(_base_package())
+    assert "These averages are PER CALL, not per name" in text
+    assert "  Avg outcome per call — acted: +5.0% · missed: -1.0%" in text
+    alpha = next(ln for ln in text.splitlines()
+                 if ln.startswith("  Avg ALPHA vs SPY per call"))
+    assert "acted: +3.0% (the same figure as the reader's \"Names you bought\" tile)" in alpha
+    assert "missed: -2.0% (every not-acted call" in alpha
+    assert "NOT the \"Names you skipped\" tile's figure" in alpha
+
+
+def test_format_prompt_quotes_the_skipped_tile_figure_from_the_viz():
+    text = ir._format_prompt(_base_package(viz={"avg_skipped_names_alpha": 2.4}))
+    line = next(ln for ln in text.splitlines()
+                if ln.startswith("  \"Names you skipped\" tile"))
+    assert "names never bought within a call's window: +2.4%." in line
+    assert "Quote THIS figure for the skipped names' alpha" in line
+
+
+def test_format_prompt_skipped_tile_none_says_none_yet():
+    text = ir._format_prompt(_base_package(viz={"avg_skipped_names_alpha": None}))
+    line = next(ln for ln in text.splitlines()
+                if ln.startswith("  \"Names you skipped\" tile"))
+    assert "none yet (no matured skipped names)" in line
+    assert "+" not in line.split(":", 1)[1]
+
+
+def test_format_prompt_no_skipped_tile_line_without_the_viz_key():
+    for pkg in (_base_package(), _base_package(viz=None), _base_package(viz={"flow": {}})):
+        assert "\"Names you skipped\" tile —" not in ir._format_prompt(pkg)
+
+
+def test_system_prompt_asks_for_the_tile_figures_and_single_call_wording():
+    text = ir._system_prompt()
+    assert "quoting the two tile figures given in the data" in text
+    assert "never the per-call missed alpha in place of the skipped tile's figure" in text
+    assert "the best/worst single calls, saying each is one call" in text
 
 
 def test_format_prompt_band_verdict_weekly_sections_only_when_nonempty():

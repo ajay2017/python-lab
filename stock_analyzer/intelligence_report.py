@@ -65,7 +65,7 @@ Write EXACTLY three sections with these bold headers and nothing before the firs
 How well did the ENGINE pick this period? Use the composite-band and verdict breakdowns: did higher-composite / Confirmed recommendations actually convert and beat SPY? The per-band / per-verdict "engine alpha" figures given to you are across ALL graded names in that band (acted or not) — the exact numbers shown in the band chart the reader sees; quote those, never an acted-only subset, so your text matches the chart. Where did quality cluster or weaken (e.g. a band or sector)? If the engine's high-conviction band underperformed a lower band, you MAY flag that the entry threshold is worth the investor's own review — but NEVER state a new threshold number, NEVER recommend a specific change, and NEVER tell the investor to change a gate; that is their policy decision alone. If there are too few matured recommendations to grade, say exactly that in one sentence and move on.
 
 **Signal discipline**
-Did the investor ACT on what the engine surfaced, and did acting help? Use the action rate, acted-vs-missed average outcome and alpha, and the best/worst named outcomes. Was money left on the table by ignoring signals, or did acting add value? Be specific and factual; name tickers from the data.
+Did the investor ACT on what the engine surfaced, and did acting help? Use the action rate; the bought and skipped names' average alpha, quoting the two tile figures given in the data (never the per-call missed alpha in place of the skipped tile's figure); the per-call averages where useful, saying they are per call; and the best/worst single calls, saying each is one call. Was money left on the table by ignoring signals, or did acting add value? Be specific and factual; name tickers from the data.
 
 **Pattern & focus**
 One systematic behavioural pattern grounded only in this data (examples: "you acted on the highest-composite picks but skipped the rest," "your missed names outperformed the ones you acted on this month," "you acted on buys but not trims"), then ONE concrete thing to focus on next month.
@@ -449,12 +449,32 @@ def _format_prompt(package: dict) -> str:
         f"Band and verdict engine alpha price every call from its call-day price, "
         f"whether or not you bought; the acted averages use your fill price, up to "
         f"{n_days} after the call.",
-        "Average outcomes across matured positions (alpha = return minus SPY, same window):",
+        "Average outcomes across matured calls (alpha = return minus SPY, same window). "
+        "These averages are PER CALL, not per name: a name with several calls counts "
+        "once for each matured call. Say \"per call\" whenever you quote one.",
         f"  Action rate: {package['action_rate']:.0f}%" if package.get("action_rate") is not None else "  Action rate: N/A",
-        f"  Avg outcome — acted: {_pct(package.get('avg_acted_pct'))} · missed: {_pct(package.get('avg_missed_pct'))}",
-        f"  Avg ALPHA vs SPY — acted: {_pct(package.get('avg_acted_alpha'))} · missed: {_pct(package.get('avg_missed_alpha'))}",
-        f"  Skipped-minus-acted average return gap (raw return, NOT alpha; skipped minus acted; positive = the skipped names did better): {_pct(package.get('missed_alpha'))}",
+        f"  Avg outcome per call — acted: {_pct(package.get('avg_acted_pct'))} · missed: {_pct(package.get('avg_missed_pct'))}",
+        f"  Avg ALPHA vs SPY per call — acted: {_pct(package.get('avg_acted_alpha'))} "
+        "(the same figure as the reader's \"Names you bought\" tile) · missed: "
+        f"{_pct(package.get('avg_missed_alpha'))} (every not-acted call, including "
+        "not-acted calls on names the investor bought on another call; NOT the "
+        "\"Names you skipped\" tile's figure)",
+        f"  Skipped-minus-acted average return gap per call (raw return, NOT alpha; skipped minus acted; positive = the skipped names did better): {_pct(package.get('missed_alpha'))}",
     ]
+    # The "Names you skipped" tile's own figure (frozen in the viz snapshot): every
+    # matured call of a name never bought within a call's window. The per-call
+    # "missed" alpha above also counts not-acted calls of bought names, so the two
+    # differ; the report's text must quote the tile's figure for the skipped names.
+    _viz = package.get("viz")
+    if isinstance(_viz, dict) and "avg_skipped_names_alpha" in _viz:
+        _skip = _viz.get("avg_skipped_names_alpha")
+        lines.append(
+            "  \"Names you skipped\" tile — avg ALPHA vs SPY over every matured call of the "
+            "names never bought within a call's window: "
+            + (f"{_pct(_skip)}. Quote THIS figure for the skipped names' alpha, never the "
+               "per-call missed figure above."
+               if _skip is not None else
+               "none yet (no matured skipped names). Do not quote a skipped names' alpha."))
     # A skipped name the investor bought outside the decision window was HELD:
     # "missed" there is the cue that made a report say skipping it avoided a loss.
     held_outside = {str(it.get("ticker")) for it in
@@ -467,12 +487,18 @@ def _format_prompt(package: dict) -> str:
             return "skipped — bought outside the window, held"
         return "missed"
 
+    if package.get("best") or package.get("worst"):
+        lines.append(
+            "  Best / worst below are each ONE call, not a per-name figure. The reader's "
+            "skipped-names chart plots each name from its EARLIEST matured call, so the "
+            "same name can show a different figure there; when you quote one, say it was "
+            "that name's best or worst call.")
     if package.get("best"):
         b = package["best"]
-        lines.append(f"  Best outcome: {b['ticker']} {_pct(b['outcome_pct'])} (alpha {_pct(b.get('alpha_pct'))}, {_tag(b)})")
+        lines.append(f"  Best outcome (single call): {b['ticker']} {_pct(b['outcome_pct'])} (alpha {_pct(b.get('alpha_pct'))}, {_tag(b)})")
     if package.get("worst"):
         w = package["worst"]
-        lines.append(f"  Worst outcome: {w['ticker']} {_pct(w['outcome_pct'])} (alpha {_pct(w.get('alpha_pct'))}, {_tag(w)})")
+        lines.append(f"  Worst outcome (single call): {w['ticker']} {_pct(w['outcome_pct'])} (alpha {_pct(w.get('alpha_pct'))}, {_tag(w)})")
 
     if package.get("band_rows"):
         lines.append("")
