@@ -23651,16 +23651,23 @@ elif page == "🥧 Portfolio Overview":
                         delta_arrow="up" if _net_alpha_dollar >= 0 else "down",
                         help=f"Total extra $ earned (or lost) vs holding SPY at identical weights over {_perf_period}",
                     )
+                    # Label-only deltas: delta_arrow="off" (an ↑ beside "lagging
+                    # SPY" read as good news), and a short Generators delta so the
+                    # narrow tile doesn't cut it off; the full rule is in `help`.
                     _dp2.metric("Alpha Generators",  _n_generators,
-                                f"beat SPY by {PERF_ALPHA_BAND_PCT:g}%+ and clearly beat their sector fund",
-                                delta_color="off")
+                                f"beat SPY {PERF_ALPHA_BAND_PCT:g}%+ and their sector",
+                                delta_color="off", delta_arrow="off",
+                                help=(f"Beat SPY by {PERF_ALPHA_BAND_PCT:g}% or more over "
+                                      f"{_perf_period} and clearly beat their sector fund too "
+                                      "(see the legend under the chart)."))
                     _dp3.metric("Alpha Destroyers",  _n_destroyers,
-                                f"lagging SPY ≥ {PERF_ALPHA_BAND_PCT:g}%", delta_color="off")
+                                f"lagging SPY ≥ {PERF_ALPHA_BAND_PCT:g}%",
+                                delta_color="off", delta_arrow="off")
                     _dp4.metric(
                         "Skill Ratio",
                         f"{_skill_pct}%",
                         f"{_n_beating}/{_n_total} positions beating SPY",
-                        delta_color="off",
+                        delta_color="off", delta_arrow="off",
                         help="% of positions generating positive alpha vs S&P 500",
                     )
                     # Positions with no row (history too short or stale for the
