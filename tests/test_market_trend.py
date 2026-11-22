@@ -827,3 +827,9 @@ def test_tile_line_from_a_real_read():
     line = mt.tile_line(res["indices"][0])
     assert line.startswith("Weakening · −20.0% from high · bear market")  # one session below both: day 1
     assert "below 50-day · below 200-day" in line
+
+
+def test_pct_text_is_the_one_public_rounding_rule():
+    assert mt.pct_text is mt._pct_text
+    assert mt.pct_text(0.3) == "<1%"
+    assert mt.pct_text(22.5) == "23%"

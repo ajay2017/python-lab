@@ -519,6 +519,8 @@ def _pct_text(pct: float) -> str:
         return "<1%"
     return f"{int(math.floor(pct + 0.5))}%"
 
+pct_text = _pct_text  # public: the app's chips and summary line share this one rounding rule
+
 
 def _weight_text(r: dict, weights) -> str:
     if r["symbol"] in _INDEX_NAMES:

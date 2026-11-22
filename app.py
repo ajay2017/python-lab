@@ -4665,14 +4665,11 @@ def _render_trend_summary(result: dict, weights, book_empty: bool = False) -> No
     rows = market_trend.table_rows(result, _w)
     _idx_syms = {x["symbol"] for x in result["indices"]}
 
-    def _pct(p) -> str:
-        return "<1%" if 0 < p < 0.5 else f"{int(p + 0.5)}%"
-
     def _held(g: dict) -> bool:
         return g["held_pct"] is not None and g["held_pct"] > 0
 
     def _named(g: dict) -> str:
-        return f"{g['name']} (you {_pct(g['held_pct'])})" if _held(g) else g["name"]
+        return f"{g['name']} (you {market_trend.pct_text(g['held_pct'])})" if _held(g) else g["name"]
 
     parts = []
     for r in rows:
@@ -4682,7 +4679,7 @@ def _render_trend_summary(result: dict, weights, book_empty: bool = False) -> No
     parts.append("**Falling:** " + (", ".join(_named(g) for g in groups["falling"]) or "none"))
     weak = groups["weakening"]
     if weak:
-        _yours = [f"{g['name']} {_pct(g['held_pct'])}" for g in weak if _held(g)]
+        _yours = [f"{g['name']} {market_trend.pct_text(g['held_pct'])}" for g in weak if _held(g)]
         parts.append(f"**Weakening:** {len(weak)}"
                      + (f" (yours: {', '.join(_yours)})" if _yours else ""))
     else:
@@ -4811,7 +4808,11 @@ def _fetch_factor_etf_returns() -> dict:
 
 # ── Market index strip — shown on every page ─────────────────────────────────
 @st.fragment(run_every=60)
-def _index_strip():
+def _index_strip(trend_lines: dict | None = None, trend_note: str = ""):
+    # trend_lines / trend_note (market-sector-trend C3) come from the dock's FULL run:
+    # Streamlit reuses a fragment's last full-run arguments on each 60 s tick, so this
+    # body must never call _cached_market_trend / _trend_result_ok (no download inside
+    # the tick). trend_lines: tile short name -> {"text", "label"}.
     # A failed index read must never take the page down: this runs at the top of
     # every page, and a fragment's exception on a FULL run stops the whole script
     # (2026-10-31: Yahoo's batch index download returned empty on Railway and the
@@ -4836,6 +4837,15 @@ def _index_strip():
         sign       = "+" if up else ""
         price_str  = f"{idx['price']:,.2f}"
         change_str = f"{arrow} {sign}{idx['change_pct']:.2f}%  ({sign}{abs(idx['change']):.0f} pts)"
+        trend_html = ""
+        _tl = (trend_lines or {}).get(idx["short"])
+        if _tl:
+            _tl_clr = {"falling": "#f87171", "weakening": "#fbbf24",
+                       "rising": "#4ade80"}.get(_tl.get("label"), "#d1d5db")
+            trend_html = (
+                f"<div style='font-size:0.66em;font-weight:600;color:{_tl_clr};margin-top:3px;"
+                f"padding-top:3px;border-top:1px dashed #374151'>{_safe_html(_tl['text'])}</div>"
+            )
         tiles += (
             f"<div style='flex:1;background:{bg};"
             f"border:1px solid {border};border-left:3px solid {border};"
@@ -4844,15 +4854,99 @@ def _index_strip():
             f"letter-spacing:0.09em;text-transform:uppercase;margin-bottom:1px'>{idx['short']}</div>"
             f"<div style='font-size:1.05em;font-weight:700;color:{price_clr}'>{price_str}</div>"
             f"<div style='font-size:0.72em;font-weight:600;color:{val_clr};margin-top:1px'>{change_str}</div>"
+            f"{trend_html}"
             f"</div>"
         )
     ts = indices[0]["fetched_at"] if indices else ""
+    foot = (f"📡 {ts} · prices live, every 60s · {_safe_html(trend_note)}" if trend_note
+            else f"📡 {ts} · auto-refreshes every 60s")
     st.markdown(
         f"<div style='display:flex;gap:10px;align-items:stretch;margin-top:8px;margin-bottom:2px'>{tiles}</div>"
         f"<div style='font-size:0.68em;color:#9ca3af;text-align:right;margin-top:2px'>"
-        f"📡 {ts} · auto-refreshes every 60s</div>",
+        f"{foot}</div>",
         unsafe_allow_html=True,
     )
+
+
+# ── Dock 📈 Markets tab: trend lines, chips, and the full-table dialog ────────
+# (market-sector-trend C3). All FULL-run code: the fragment above only draws what it
+# is handed. Display only: every label, group and line comes from market_trend.
+@st.dialog("📈 Market and sector trend", width="large")
+def _trend_dialog(result):
+    """The same summary line and tables as 🌐 Macro (one renderer each, never a
+    copy), computed only when opened. A bug in either can't take the page down."""
+    try:
+        _trend_pdf = _get_or_offline(st.session_state, "_port_df_enriched")
+        # the post-trade "liquidated" outcome publishes an EMPTY DataFrame
+        _trend_book_empty = _trend_pdf is not None and getattr(_trend_pdf, "empty", False)
+        _trend_w = market_trend.held_weights(_trend_pdf)
+        _render_trend_summary(result, _trend_w, book_empty=_trend_book_empty)
+        _render_trend_table(result, _trend_w, book_empty=_trend_book_empty)
+    except Exception as _te:
+        print(f"[market_trend] dialog render failed: {type(_te).__name__}: {_te}")
+        st.caption("Trend table couldn't be drawn this run.")
+    if st.button("Open 🌐 Macro", key="_trend_dlg_open_macro"):
+        st.session_state["_pending_page"] = "🌐 Macro"   # never nav_page directly
+        st.rerun()
+
+
+def _trend_tile_lines(result):
+    """{tile short name: {"text", "label"}} for the S&P 500 and NASDAQ tiles, from
+    the trend result's index rows; None when the trend wasn't read (no lines)."""
+    if result is None:
+        return None
+    out = {}
+    for _short, _sym in (("S&P 500", "^GSPC"), ("NASDAQ", "^IXIC")):
+        for _row in result["indices"]:
+            if _row["symbol"] == _sym:
+                _txt = market_trend.tile_line(_row)
+                if _txt is not None:
+                    out[_short] = {"text": _txt, "label": _row["label"]}
+    return out
+
+
+def _trend_note(result) -> str:
+    """The dock footer's dated trend note; '' when the trend wasn't read."""
+    if result is None:
+        return ""
+    return f"trend at {market_trend.fmt_session(result['as_of'])} close"
+
+
+def _render_trend_chips(result) -> None:
+    """The dock's Falling / Weakening / Rising sector chips (Streamlit badges), a
+    not-checked caption, and the button that opens the full table dialog. None =
+    the prices couldn't be loaded: one caption and nothing else (never a calm-
+    looking empty list)."""
+    if result is None:
+        st.caption("Trend not checked: the index and sector-fund prices couldn't be loaded. "
+                   "It's checked again on your next page load after 5 minutes.")
+        return
+    _trend_pdf = _get_or_offline(st.session_state, "_port_df_enriched")
+    _trend_book_empty = _trend_pdf is not None and getattr(_trend_pdf, "empty", False)
+    _trend_w = market_trend.held_weights(_trend_pdf)
+    groups = market_trend.chip_groups(result, {} if _trend_book_empty else _trend_w)
+
+    def _chip(g: dict, colour: str) -> str:
+        held = g["held_pct"] is not None and g["held_pct"] > 0
+        return f":{colour}-badge[{g['name']}{' · you ' + market_trend.pct_text(g['held_pct']) if held else ''}]"
+
+    lines = []
+    for _key, _title, _colour in (("falling", "Falling", "red"),
+                                  ("weakening", "Weakening", "orange"),
+                                  ("rising", "Rising", "green")):
+        chips = " ".join(_chip(g, _colour) for g in groups[_key])
+        lines.append(f"**{_title}:** " + (chips or "none"))
+    st.markdown("  \n".join(lines))
+    # Always dated here: the fragment's footer is absent when the index read fails, and
+    # on Home's first run this draws before the book is published (no "you N%" yet).
+    _cap = f"At the {market_trend.fmt_session(result['as_of'])} close · not a forecast."
+    if _trend_w is None and not _trend_book_empty:
+        _cap += ' Your share ("you N%") shows once 🏠 Home has built your portfolio this session.'
+    st.caption(_cap)
+    if result["not_checked"]:
+        st.caption(f"Not checked: {', '.join(result['not_checked'])}")
+    if st.button("Full trend table ↗", key="_trend_dock_tbl_btn"):
+        _trend_dialog(result)
 
 # ── Live price strip — fragment auto-refreshes every 60 s ────────────
 # Lives in the dock's 💹 Live Prices tab on EVERY page (home dock C1 / C1b; it was
@@ -5086,7 +5180,23 @@ with st.container(key=home_dock.DOCK_KEY):
         # ── Markets tab (every page) ──
         with _dock_tab_markets:
             with st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False):
-                _index_strip()
+                # No spinner: the dock runs on every page, so an hourly cache miss waits
+                # like the sector download did. The fragment gets the lines as arguments.
+                # A bug in the trend pieces must not take every page down: the tiles
+                # still draw (without lines), the chips fall back to one caption.
+                _dock_trend, _dock_lines, _dock_note = None, None, ""
+                try:
+                    _dock_trend = _cached_market_trend(market_trend.as_of_session(_now_et()).isoformat())
+                    _dock_lines, _dock_note = _trend_tile_lines(_dock_trend), _trend_note(_dock_trend)
+                except Exception as _dk_te:
+                    print(f"[market_trend] dock lines failed: {type(_dk_te).__name__}: {_dk_te}")
+                    _dock_trend, _dock_lines, _dock_note = None, None, ""
+                _index_strip(_dock_lines, _dock_note)
+                try:
+                    _render_trend_chips(_dock_trend)
+                except Exception as _dk_ce:
+                    print(f"[market_trend] dock chips failed: {type(_dk_ce).__name__}: {_dk_ce}")
+                    st.caption("Trend chips couldn't be drawn this run.")
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — MY PORTFOLIO
@@ -24948,7 +25058,7 @@ elif page == "🌐 Macro":
         if _trend_res is None:
             st.info(
                 "ℹ️ Trend unavailable: the index and sector-fund prices couldn't be loaded. "
-                "No reading is shown rather than a calm-looking one. It retries within 5 minutes."
+                "No reading is shown rather than a calm-looking one. It's checked again on your next page load after 5 minutes."
             )
         else:
             try:
@@ -46533,7 +46643,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
         with st.expander("🗺️ The pages, at a glance", expanded=False):
             st.markdown(
                 """
-- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **A dock pinned to the bottom of the window** has three tabs, and its title bar folds it down to one line. **⚠️ Notices** opens each time Home loads or reruns (a tab you pick stays during the 60-second refresh). At its top, a **notices line** names anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or gives a quiet note count on an otherwise clean day; below it sit the data and system notices that used to be in the collapsed "⚠️ Alerts" box (Day Shock, the price cross-check, broker drift, Journal vs Robinhood, System Trust, a data outage with its Retry button, and the rest). **💹 Live Prices** shows your held positions and refreshes every 60 seconds, and **📈 Markets** shows the index tiles. What to act on today is in 📋 Today's Brief's own 🔴 Act Today section and its Today's Actions card, not in the dock. Protective banners that must not be folded away (such as unreadable manual stops or the held-stop basis) stay in the page itself, not in the dock. **On every other page the dock has the same three tabs.** Its ⚠️ Notices tab shows one line from 🏠 Home's last build (the time, the 🔴 Act Today count and the Needs-a-look line) with an **Open 🏠 Home** button. It says so when Home's latest build didn't finish (or hasn't run) this session, for example when you left Home before it finished loading, and marks the line "may be out of date" after a trade or holdings update or when it is from an earlier day. Its 💹 Live Prices tab shows your held positions once Home has loaded them this session. In 🏠 Home's ⚠️ Notices tab, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip (on a weekend, a holiday or before the 9:30 open it says "in the last session" with that session's date, because the live move then is the last completed session's) — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected. A **second, separate pause** works alongside it: when two names you hold sit at *danger-tier* correlation (≥0.80) — a standing near-duplicate exposure rather than a newly-formed one — Grow Today's add-to-winner is paused on **both** names, and a "🔗 Add Paused — Standing Correlated Pair" block names the partner and the correlation. This one has **no acknowledge step**: unlike the cluster pause above, a Structural Scan does not clear it, and neither does trimming the weaker name (trimming doesn't change how correlated two stocks are). It lasts while the pair stays that correlated and you hold both. It fires whether or not a trim card exists for that pair on 📡 Signals & Advice — the correlation is the trigger, so a data outage that hides the trim card can't quietly switch the pause off. Still pure suppression: no trim is recommended, and the hard caps are untouched. **And if a holding's price history couldn't be loaded at all**, a 🔍 line under Grow Today names it: that holding was left out of both correlation checks entirely, so no pairing involving it could be detected. It is deliberately *not* treated as a reason to pause anything — but it is also never silently counted as "checked and fine," which is what used to happen.
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. **A dock pinned to the bottom of the window** has three tabs, and its title bar folds it down to one line. **⚠️ Notices** opens each time Home loads or reruns (a tab you pick stays during the 60-second refresh). At its top, a **notices line** names anything that needs a look (e.g. "⚠️ Needs a look: **Broker drift**") or gives a quiet note count on an otherwise clean day; below it sit the data and system notices that used to be in the collapsed "⚠️ Alerts" box (Day Shock, the price cross-check, broker drift, Journal vs Robinhood, System Trust, a data outage with its Retry button, and the rest). **💹 Live Prices** shows your held positions and refreshes every 60 seconds, and **📈 Markets** shows the index tiles; under the S&P 500 and NASDAQ tiles a line gives each one's trend label (see 🌐 Macro below), and under the tiles the sector funds are listed as Falling / Weakening / Rising chips ("you N%" on the ones you hold, once Home has built your portfolio), dated to the close they describe, with a **Full trend table ↗** button that opens the same summary and tables as 🌐 Macro (and an **Open 🌐 Macro** button). What to act on today is in 📋 Today's Brief's own 🔴 Act Today section and its Today's Actions card, not in the dock. Protective banners that must not be folded away (such as unreadable manual stops or the held-stop basis) stay in the page itself, not in the dock. **On every other page the dock has the same three tabs.** Its ⚠️ Notices tab shows one line from 🏠 Home's last build (the time, the 🔴 Act Today count and the Needs-a-look line) with an **Open 🏠 Home** button. It says so when Home's latest build didn't finish (or hasn't run) this session, for example when you left Home before it finished loading, and marks the line "may be out of date" after a trade or holdings update or when it is from an earlier day. Its 💹 Live Prices tab shows your held positions once Home has loaded them this session. In 🏠 Home's ⚠️ Notices tab, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip (on a weekend, a holiday or before the 9:30 open it says "in the last session" with that session's date, because the live move then is the last completed session's) — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Unlike Day Shock, this one is NOT purely informational: it pauses Grow Today's "add-to-winner" suggestion on the held tickers at that new pair's endpoints until you review it in a fresh Structural Scan (or the correlation naturally drops back down) — it never recommends a trim, and your existing single-name/sector caps are completely unaffected. A **second, separate pause** works alongside it: when two names you hold sit at *danger-tier* correlation (≥0.80) — a standing near-duplicate exposure rather than a newly-formed one — Grow Today's add-to-winner is paused on **both** names, and a "🔗 Add Paused — Standing Correlated Pair" block names the partner and the correlation. This one has **no acknowledge step**: unlike the cluster pause above, a Structural Scan does not clear it, and neither does trimming the weaker name (trimming doesn't change how correlated two stocks are). It lasts while the pair stays that correlated and you hold both. It fires whether or not a trim card exists for that pair on 📡 Signals & Advice — the correlation is the trigger, so a data outage that hides the trim card can't quietly switch the pause off. Still pure suppression: no trim is recommended, and the hard caps are untouched. **And if a holding's price history couldn't be loaded at all**, a 🔍 line under Grow Today names it: that holding was left out of both correlation checks entirely, so no pairing involving it could be detected. It is deliberately *not* treated as a reason to pause anything — but it is also never silently counted as "checked and fine," which is what used to happen.
 - **🧾 Summary** — the cockpit: one screen that answers "is the book safe, what must I do today, and is anything drifting" without visiting another page. Six zones, in order of urgency. **① Book Safety** (top, colour-coded) — leverage ×, margin cushion, distance to a margin call, and whether your share counts still match the broker. Awareness only; it never changes a recommendation. It shows a grey **"not verified"** rather than green when your cash balance hasn't been loaded — an unmeasured book and a debt-free book are not the same thing, and it won't guess. Broker drift likewise distinguishes **In sync** (checked, matches), **Clean, dated** (matched when last captured, but that snapshot is old), **Trades pending** (differences explained by trades you logged since), and **Not checked** (unknown). When leverage is elevated above your own reference level **and** equity has fallen meaningfully from its recent high, a note states the measured split — how much of the rise came from equity shrinking versus the margin loan itself growing — plus how much smaller the book (or how much more cash) would bring leverage back to your reference. It never tells you to sell or trim anything; it states the two facts together because nothing else in the app does. **② Today** — 5 KPI tiles: Portfolio Value (+ 45-day sparkline), Unrealized P&L, Today's P&L (Home's Tier-B figure when available, else an honestly-labelled held-mark), **Today's Movers** (the 3 biggest moves either way; a name with no quote is reported unpriced, never as a flat 0%), and Avg Score against the buy threshold. The movers tile **renames itself "Last session's movers"** on a weekend, a holiday, or before the open — the change is measured against the previous close, so it only means "today" once today's session has begun. **③ Act Today** — bucketed as **EXIT · TRIM · WATCH** so you can tell an alarm's *nature* at a glance, then **one row per item** (badge · ticker · why · composite score), worst first. Below it a purple banner names any tickers under an active reduce/exit call whose ADD suggestions are being suppressed app-wide. Same source as Home, so it can never under-report. When there's a live EXIT or TRIM item and this engine's own protective track record is measurably running early, a small note appears above the rows stating the measured number (e.g. "historically run early... average N pp... worth confirming before you act, not a reason to ignore the call") — a factual disclosure of a real, tracked pattern, never a reason by itself to override the call. **④ Portfolio Health** — four cards: Risk Posture (falls back to counting the protective calls in today's Brief when the fragility dial can't be computed, and says "not computed" rather than an all-clear if that's missing too), Thesis Integrity (**names** the weakening tickers, not just a count), Diversification, and Active Vetoes. All four say "not checked" rather than "none" when they genuinely don't know. **⑤ Horizon** — three cards: 🎯 Engine Track Record (whether acting on the app's calls has beaten the S&P, offence and defence, alongside what the calls you *skipped* returned so the headline can't read as pure skill), 🔔 Catalyst Watch (which holdings report and when, flagged 🚫 when the name is also under a reduce call), and 📋 Portfolio Thesis (this week's five standing claims, each marked held or shifted). The full ledger with last week's comparison stays in the collapsed expander below. **"Alert level" there is not the same thing as "Risk Posture" above it** — alert level counts danger-level alerts, risk posture reads the market regime, so the two can legitimately differ. **⑥ Top Positions** — your 6 largest by weight: score coloured by the same Buy/Hold/Sell bands the rest of the app uses, a weight bar scaled to your single-name cap, an inline EXIT/TRIM/CAP badge, and ⚡ on a same-day shock. A footer counts how many rose, fell, or had no quote. The full Holdings table is one click away in an expander. Reads what Home already computed this session — visit 🏠 Home first if this page says it needs today's Brief. **The 🧭 "Is this account earning extra?" card** sits on this page too: the dollars you are ahead of or behind the same money left in SPY since tracking began (from your baseline row; the card's starting-point line names it), the borrowed-money net for complete months whose margin interest has posted (paid, cost, too close to call, or incomplete), and the tax already triggered by this year's sales. Its figures are as of the last close, and the same lines arrive in the Sunday weekly debrief email.
 - **🧑‍⚖️ The Judge** — **BETA, audit authority only: it never gates a recommendation.** Collects each advisor's opinion on a ticker, weights them by their own past accuracy once they clear a minimum sample, and flags **coherence gaps** — a name under an active protective veto that no other risk surface is currently flagging. It reports; it never suppresses or changes a call.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above).
