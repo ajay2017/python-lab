@@ -4618,37 +4618,51 @@ def _parallel_fetch_bundles(tickers, period: str = "1mo", max_workers: int = 4) 
     return out
 
 
-# ── Sector ETF multi-period returns (for heatmap) ────────────────────────────
+# ── Sector ETF multi-period returns (Home's leading sectors, Performance Diagnostics) ──
 @st.cache_data(ttl=3600)
-def _fetch_sector_returns() -> pd.DataFrame:
-    """Batch-download all sector ETFs, compute 1W/1M/3M/6M returns."""
+def _sector_returns_ok() -> pd.DataFrame:
+    """Batch-download all sector ETFs, compute 1W/1M/3M/6M returns. RAISES on a
+    failed download or an empty result, so st.cache_data never stores a failure
+    for the hour (SectorRetsEmptyCached). A single bad fund is skipped."""
     import yfinance as yf
     from stock_analyzer.data import _retry
     unique_etfs = list(dict.fromkeys(SECTOR_ETF.values()))
-    try:
-        raw = _retry(
-            yf.download, unique_etfs,
-            period="6mo", auto_adjust=True, progress=False, threads=True,
-        )
-        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
-        close = close.dropna(how="all")
-        periods = {"1W": 5, "1M": 21, "3M": 63, "6M": 126}
-        rows = []
-        for etf in unique_etfs:
-            try:
-                col = (close[etf] if etf in close.columns else close.iloc[:, 0]).dropna()
-                if len(col) < 2:
-                    continue
-                row = {"ETF": etf}
-                for label, n in periods.items():
-                    idx = min(n, len(col) - 1)
-                    row[label] = round((float(col.iloc[-1]) / float(col.iloc[-idx - 1]) - 1) * 100, 2)
-                rows.append(row)
-            except Exception:
+    raw = _retry(
+        yf.download, unique_etfs,
+        period="6mo", auto_adjust=True, progress=False, threads=True,
+    )
+    if raw is None or raw.empty:
+        raise RuntimeError("empty download")
+    close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
+    close = close.dropna(how="all")
+    periods = {"1W": 5, "1M": 21, "3M": 63, "6M": 126}
+    rows = []
+    for etf in unique_etfs:
+        try:
+            col = (close[etf] if etf in close.columns else close.iloc[:, 0]).dropna()
+            if len(col) < 2:
                 continue
-        return pd.DataFrame(rows)
-    except Exception:
-        return pd.DataFrame()
+            row = {"ETF": etf}
+            for label, n in periods.items():
+                idx = min(n, len(col) - 1)
+                row[label] = round((float(col.iloc[-1]) / float(col.iloc[-idx - 1]) - 1) * 100, 2)
+            rows.append(row)
+        except Exception:
+            continue
+    if not rows:
+        raise RuntimeError("no sector fund returns could be built")
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_sector_returns() -> pd.DataFrame | None:
+    """_sector_returns_ok with the failure turned into None (cached 5 min only, so
+    a bad fetch retries soon). None = couldn't read; never an empty-looking frame."""
+    try:
+        return _sector_returns_ok()
+    except Exception as _e:
+        print(f"[sector_returns] sector fund read failed: {type(_e).__name__}: {_e}")
+        return None
 
 
 # ── Market and sector trend (🌐 Macro; docs/plans/market-sector-trend.md) ────
@@ -7446,7 +7460,14 @@ if page == "🏠 Home":
             # Leading / lagging sectors from 1-week returns
             _sect_df_ctx  = _fetch_sector_returns()
             _lead_sectors: list[dict] = []
-            if not _sect_df_ctx.empty and "1W" in _sect_df_ctx.columns:
+            # None (failed read) or a frame without "1W" = leading sectors NOT
+            # checked: the Brief's _sector_bonus can't apply to any candidate, and
+            # the card / _leading_sectors_cache say so instead of "none leading".
+            _lead_checked = (
+                _sect_df_ctx is not None and not _sect_df_ctx.empty
+                and "1W" in _sect_df_ctx.columns
+            )
+            if _lead_checked:
                 _sect_sorted = _sect_df_ctx.sort_values("1W", ascending=False)
                 for _, _sr in _sect_sorted.head(3).iterrows():
                     _etf = str(_sr["ETF"])
@@ -7472,6 +7493,9 @@ if page == "🏠 Home":
                 "sp500_pct":       _sp_pct,
                 "nasdaq_pct":      _nq_pct,
                 "leading_sectors": _lead_sectors,
+                # False = the sector-fund read failed (additive; absent on old
+                # bundles, read with .get(..., True)).
+                "leading_checked": _lead_checked,
                 # S&P row actually read (a missing row left _sp_pct at 0.0).
                 "tone_available":  _sp_row is not None,
                 # When this read happened (ET): the Watchlist's Protect banner
@@ -7479,7 +7503,7 @@ if page == "🏠 Home":
                 "tone_read_at":    _now_et(),
             }
         except Exception:
-            _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "tone_available": False}
+            _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "leading_checked": False, "tone_available": False}
 
         # Auto-fetch composite scores for top scanner picks so Grow Today conviction
         # labels are accurate without requiring a manual Refresh Signals click.
@@ -7672,7 +7696,7 @@ if page == "🏠 Home":
                 # caption false after a brief crash (shared-entry-check chunk-2
                 # follow-up 5). Fall back only when it never became a dict.
                 if not isinstance(_market_context, dict):
-                    _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "tone_available": False}
+                    _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "leading_checked": False, "tone_available": False}
 
         # Daily new-position budget post-pass — BEFORE the rec-log capture below,
         # so the app-written new_pick / add_winner rows carry the budget-adjusted
@@ -7732,11 +7756,16 @@ if page == "🏠 Home":
             # match the fuller SECTOR_UNIVERSE bucket name "AI & Data
             # Platforms", since sector_hot is exact-match, not substring like
             # _sector_bonus -- a known, separate, NOT-yet-fixed naming gap.
-            st.session_state["_leading_sectors_cache"] = sorted({
-                alias
-                for ls in (_gt_today.get("leading_sectors") or [])
-                for alias in (ls.get("aliases") or [ls.get("sector", "")])
-            })
+            # None (not []) when the sector-fund read failed: "couldn't check",
+            # not "checked, nothing leading" (SectorRetsEmptyCached).
+            st.session_state["_leading_sectors_cache"] = (
+                sorted({
+                    alias
+                    for ls in (_gt_today.get("leading_sectors") or [])
+                    for alias in (ls.get("aliases") or [ls.get("sector", "")])
+                })
+                if _market_context.get("leading_checked", True) else None
+            )
 
             # Publish held positions under an active Reduce/Exit call so OTHER
             # pages reconcile against the Brief (CLAUDE.md coordination: read,
@@ -9548,6 +9577,10 @@ if page == "🏠 Home":
             for ls in _market_context.get("leading_sectors", [])[:2]
         ) if _market_context.get("leading_sectors") else ""
     )
+    # The sector-fund read failed: say so rather than drop the line silently.
+    # `.get(..., True)` -- an older bundle without the key reads as checked.
+    if not _market_context.get("leading_checked", True):
+        _lead_str = " · Leading sectors not checked (sector prices unavailable; the Brief's next refresh retries)"
     # Compute last trading day for the date label when market is closed
     from datetime import timedelta as _dbtd
     _db_now_et  = _dt.now(_pytz.timezone("America/New_York"))
@@ -23466,7 +23499,15 @@ elif page == "🥧 Portfolio Overview":
                 # Build sector ETF returns dict from cached data
                 _sect_df = _fetch_sector_returns()
                 _sect_rets_dict: dict = {}
-                if not _sect_df.empty:
+                if _sect_df is None:
+                    # compute_attribution then leaves every sector return blank.
+                    st.caption(
+                        "Sector fund prices couldn't be read, so Alpha vs Sector is blank "
+                        "and no position can be classed an Alpha Generator: one that would "
+                        "be shows as Sector Rider this time. Alpha vs SPY, Dollar Alpha "
+                        "and the other categories are unaffected."
+                    )
+                if _sect_df is not None and not _sect_df.empty:
                     for _, _sr in _sect_df.iterrows():
                         _sect_rets_dict[str(_sr["ETF"])] = {
                             "1W": _sr.get("1W"), "1M": _sr.get("1M"),
