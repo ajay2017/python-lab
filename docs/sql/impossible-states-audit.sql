@@ -76,7 +76,10 @@
 --   E1  0, E2 0  (2026-10-19, owner SQL: 438 / 1,273 rows).
 --   E3  11  (2026-10-20, owner SQL, 11 of 184): every one a SELL marked
 --           followed_signal='yes' against a Buy/Strong Buy signal_seen,
---           06-03..10-16. FROZEN at 11. (The comment inside Q0's E arm still
+--           06-03..10-16. FROZEN at 11. Raised 11 -> 12 on 2026-11-22
+--           (owner SQL): TER SELL 2026-11-17, sold on the exit signal while
+--           signal_seen read "Strong Buy · Composite 79/100" -- the same
+--           "followed my own rule/stop" pattern. (The comment inside Q0's E arm still
 --           says 'never run' -- refresh it at the next Q0 edit; changing it
 --           now would change Q0_VERSION and force a re-apply.)
 --   Every other check: 0.

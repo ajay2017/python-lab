@@ -72,8 +72,10 @@ _RESIDUAL: "dict[str, tuple[str, int]]" = {
     # E3 first run 2026-10-20 (owner SQL): 11 of 184 -- all SELLs marked
     # followed_signal='yes' against a Buy/Strong Buy signal_seen, 06-03..10-16
     # (ADBE, AVGO, ISRG, NOW, FSLR, EOG, GD, SPOT, AAPL, MRVL, MSFT). One
-    # pattern: "followed" read as "followed my own rule/stop". A 12th = new row.
-    "E3": (FROZEN, 11),
+    # pattern: "followed" read as "followed my own rule/stop". Raised 11 -> 12
+    # on 2026-11-22 (owner SQL): TER SELL 11-17, sold on the exit signal while
+    # the composite read Strong Buy 79 -- the same pattern. A 13th = new row.
+    "E3": (FROZEN, 12),
 }
 
 # Must equal scripts/gen_impossible_states_function.py::q0_version() (a test

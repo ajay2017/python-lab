@@ -93,6 +93,14 @@ TICKER_SECTORS = {
     "DBX": "Enterprise Tech", "INTU": "Enterprise Tech", "BILL": "Enterprise Tech",
     "PLTR": "AI & Data", "AI": "AI & Data", "MDB": "AI & Data", "SNOW": "AI & Data",
     "PATH": "AI & Data", "IONQ": "AI & Data",
+    # ANT (Anthropic, AI frontier lab) added 2026-11-22: HELD since its IPO
+    # (2026-11-19) with no entry, so it resolved to "Other" (the Saturday
+    # data-quality email, owner-confirmed on Portfolio Overview), which
+    # skips the sector ceiling and the macro sector gate for it. AI & Data,
+    # not AI & Cloud, by owner choice: pure-play AI software, and it shares
+    # the sector ceiling with SNOW (the stricter grouping). Not added to the
+    # scan universe.
+    "ANT": "AI & Data",
     # Data / observability / search infra — same correlated cluster as SNOW/MDB.
     "ESTC": "AI & Data", "GTLB": "AI & Data",   # CFLT removed 2026-08-16 (delisted)
     # U/APP added 2026-09-01, same Software & Cloud gap as above. Both

@@ -63,7 +63,7 @@ def test_any_row_on_a_zero_check_warns(cid):
     assert out[0]["key"] == f"impossible_states_{cid}" and out[0]["count"] == 1
 
 
-@pytest.mark.parametrize("cid,base", [("C3", 2), ("C7", 3), ("C8", 4), ("C9", 5), ("D5", 3), ("E3", 11)])
+@pytest.mark.parametrize("cid,base", [("C3", 2), ("C7", 3), ("C8", 4), ("C9", 5), ("D5", 3), ("E3", 12)])
 def test_frozen_check_warns_only_above_its_baseline(cid, base):
     assert ist.policy_for(cid) == (ist.FROZEN, base)
     assert _sev(ist.classify(_rows(**{cid: base}))) == ["ok"]
@@ -93,10 +93,11 @@ def test_recompute_checks_are_zero_policy(cid):
 
 
 def test_e3_is_frozen_at_its_first_count():
-    # 2026-10-20 owner SQL: 11 of 184, all SELLs marked "yes" against a Buy.
-    assert ist.policy_for("E3") == (ist.FROZEN, 11)
-    assert _sev(ist.classify(_rows(E3=11))) == ["ok"]
-    assert _sev(ist.classify(_rows(E3=12))) == ["warn"]
+    # 2026-10-20 owner SQL: 11 of 184, all SELLs marked "yes" against a Buy;
+    # raised to 12 on 2026-11-22 (TER SELL 11-17 on the exit signal, same pattern).
+    assert ist.policy_for("E3") == (ist.FROZEN, 12)
+    assert _sev(ist.classify(_rows(E3=12))) == ["ok"]
+    assert _sev(ist.classify(_rows(E3=13))) == ["warn"]
 
 
 def test_shape_mismatch_does_not_stop_the_other_checks():

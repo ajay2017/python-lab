@@ -2032,3 +2032,14 @@ def test_alerts_danger_pt_cut_shows_under_rating_flag():
 def test_alerts_rating_flag_adds_no_danger_count():
     result = alerts(_one_holding_port_df("AAA"), _rev_held(-4, 0, 4))
     assert sum(1 for a in result if a["level"] == "danger") == 0
+
+
+def test_ticker_sectors_ant_held_since_ipo_is_ai_and_data():
+    """ANT (Anthropic) was held from its 2026-11-19 IPO with no entry and
+    resolved to "Other", which skips the sector ceiling and the macro sector
+    gate (2026-11-21 data-quality email). Owner chose AI & Data (shares the
+    ceiling with SNOW). A cached provider "Other" must not win."""
+    from stock_analyzer.portfolio import TICKER_SECTORS, resolve_sector
+
+    assert TICKER_SECTORS["ANT"] == "AI & Data"
+    assert resolve_sector("ANT", "Other") == "AI & Data"
