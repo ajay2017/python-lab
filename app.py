@@ -413,6 +413,7 @@ from stock_analyzer.util import safe_text as _safe_text
 from stock_analyzer.util import md_bold_to_html as _md_bold
 from stock_analyzer.util import factor_tilt_state as _factor_tilt_state
 from stock_analyzer.sold_today import tickers_sold_on
+from stock_analyzer.perf_backtest import backtest_vs_spy
 from stock_analyzer.util import sizing_cap_lines as _sizing_cap_lines
 from stock_analyzer.util import sizing_unavailable_caption as _sizing_unavailable_caption
 from stock_analyzer.util import get_or_offline as _get_or_offline
@@ -23430,33 +23431,16 @@ elif page == "🥧 Portfolio Overview":
                             _c.index = _c.index.tz_localize(None)
                         _closes[_t] = _c
 
-                if _closes:
-                    _common = _spy_close.index
-                    for _s in _closes.values():
-                        _common = _common.intersection(_s.index)
-                    _common = sorted(_common)[-_n_days:]
-
-                    _weights_s = port_df.set_index("Ticker")["Weight (%)"] / 100
-                    _port_ret  = pd.Series(0.0, index=_common)
-                    _total_w   = 0.0
-                    for _t, _c in _closes.items():
-                        _w = float(_weights_s.get(_t, 0))
-                        if _w <= 0:
-                            continue
-                        _aligned = _c.reindex(_common).ffill().bfill()
-                        if _aligned.empty or _aligned.iloc[0] == 0:
-                            continue
-                        _port_ret += (_aligned / _aligned.iloc[0] - 1) * 100 * _w
-                        _total_w  += _w
-                    if _total_w > 0:
-                        _port_ret = _port_ret / _total_w
-
-                    _spy_s   = _spy_close.reindex(_common).ffill().bfill()
-                    _spy_ret = (_spy_s / _spy_s.iloc[0] - 1) * 100
-
-                    _port_final = float(_port_ret.iloc[-1])
-                    _spy_final  = float(_spy_ret.iloc[-1])
-                    _alpha      = _port_final - _spy_final
+                _weights_d = (port_df.set_index("Ticker")["Weight (%)"] / 100).to_dict()
+                _bt = (backtest_vs_spy(_closes, _weights_d, _spy_close, _n_days)
+                       if _closes else None)
+                if _bt is not None and _bt["ok"]:
+                    _common     = _bt["dates"]
+                    _port_ret   = _bt["port_ret"]
+                    _spy_ret    = _bt["spy_ret"]
+                    _port_final = _bt["port_final"]
+                    _spy_final  = _bt["spy_final"]
+                    _alpha      = _bt["alpha"]
                     _beating    = _alpha >= 0
                     _port_clr   = "#00C851" if _beating else "#ff6b6b"
                     _fill_clr   = "rgba(0,200,81,0.08)" if _beating else "rgba(255,100,100,0.08)"
@@ -23472,6 +23456,30 @@ elif page == "🥧 Portfolio Overview":
                                 delta_color="normal" if _beating else "inverse",
                                 # A word delta always draws ↑ under "auto".
                                 delta_arrow="up" if _beating else "down")
+                    if _bt["left_out"]:
+                        _lo_names = ", ".join(r["ticker"] for r in _bt["left_out"])
+                        _lo_details = ", ".join(
+                            f"{r['ticker']} "
+                            + ("no price data" if r["sessions"] == 0
+                               else f"{r['sessions']} session{'s' if r['sessions'] != 1 else ''}")
+                            for r in _bt["left_out"]
+                        )
+                        st.caption(
+                            f"{_lo_names} left out: shorter price history than the "
+                            f"{_perf_period} window ({_lo_details}); the other holdings "
+                            "are reweighted to 100% of the backtest."
+                        )
+                    if _bt["window_short"]:
+                        st.caption(
+                            f"SPY history covers only {_bt['spy_window_sessions']} sessions, "
+                            f"fewer than the {_perf_period} window."
+                        )
+                    _trim_k = _bt["start_trimmed_sessions"]
+                    if _trim_k > 0:
+                        st.caption(
+                            f"The window starts {_trim_k} session{'s' if _trim_k != 1 else ''} "
+                            f"later than a full {_perf_period}: the latest holding history begins then."
+                        )
 
                     # ── Chart ────────────────────────────────────────────────────
                     _perf_fig = go.Figure()
@@ -23511,8 +23519,17 @@ elif page == "🥧 Portfolio Overview":
                         "Assumes constant allocation throughout the selected period. "
                         "For your actual historical Alpha (not a backtest), see 🧾 Summary."
                     )
-                else:
+                elif _bt is None:
                     st.info("No price history available to build the chart.")
+                elif _bt["reason"] == "none_included":
+                    st.info(
+                        f"No holding has price history covering the {_perf_period} window, "
+                        "so the backtest can't be drawn. Try a shorter period."
+                    )
+                else:
+                    st.warning(
+                        "Performance chart unavailable: S&P 500 price history couldn't be read."
+                    )
             except Exception as _e:
                 st.warning(f"Performance chart unavailable: {_e}")
 
