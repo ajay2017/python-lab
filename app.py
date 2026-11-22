@@ -355,7 +355,7 @@ from stock_analyzer.beta_repair import (
 )
 from stock_analyzer.concentration import assess_add_concentration
 from stock_analyzer.scanner import (
-    scan_sectors, scan_movers,
+    scan_sectors, scan_movers_checked,
     _rsi_points as _scanner_rsi_points,
     _trend_points as _scanner_trend_points,
     _momentum_1m_points as _scanner_mom_1m_points,
@@ -4520,8 +4520,13 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     return load_bundle(ticker, period, spy_df=_spy, rfr=_get_rfr())
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def _cached_scan_movers(exclude_key: tuple, min_gain: float, universe_items: tuple):
-    """Cached wrapper around scan_movers over the discovery universe.
+def _scan_movers_ok(exclude_key: tuple, min_gain: float, universe_items: tuple):
+    """Cached wrapper around scan_movers_checked over the discovery universe.
+
+    RAISES when the scan could not read prices (a failed download), so
+    st.cache_data never stores a failure for 30 minutes (ScanMoversEmptyCached,
+    2026-11-22). An empty frame here means prices were read and no gainer
+    cleared the bar. `_cached_scan_movers` below turns the raise into None.
 
     exclude_key is a sorted tuple (hashable for the cache) of tickers already
     covered elsewhere — the curated SECTOR_UNIVERSE plus held + watchlist.
@@ -4538,7 +4543,22 @@ def _cached_scan_movers(exclude_key: tuple, min_gain: float, universe_items: tup
     """
     universe = {bucket: list(tickers) for bucket, tickers in universe_items}
     tickers = discovery_tickers(exclude=set(exclude_key), universe=universe)
-    return scan_movers(tickers, min_day_gain_pct=min_gain)
+    return scan_movers_checked(tickers, min_day_gain_pct=min_gain)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_scan_movers(exclude_key: tuple, min_gain: float, universe_items: tuple):
+    """Five-minute None-on-failure wrapper over `_scan_movers_ok`.
+
+    Returns a DataFrame (empty = checked, no movers today) or None (the price
+    download failed: couldn't check). A failure is cached for 5 minutes only,
+    so the Brief's next refresh retries it instead of waiting out the 30-min
+    success TTL (template: `_fetch_sector_returns`)."""
+    try:
+        return _scan_movers_ok(exclude_key, min_gain, universe_items)
+    except Exception as _e:
+        print(f"[movers] discovery scan failed: {type(_e).__name__}: {_e}")
+        return None
 
 
 def _parallel_load_all(tickers, period: str = "6mo", max_workers: int = DATA_LOAD_MAX_WORKERS) -> dict:
@@ -7182,6 +7202,10 @@ if page == "🏠 Home":
         _market_context    = _b["_market_context"]
         _grow_composites   = _b["_grow_composites"]
         _movers_candidates = _b["_movers_candidates"]
+        # `.get(..., True)`: a bundle memoized before the schema bump lacks the
+        # key and reads as checked (same convention as `leading_checked`);
+        # None = the movers block didn't run for that build.
+        _movers_checked    = _b.get("_movers_checked", True)
         _daily_brief       = _b["_daily_brief"]
         # G-25 — restore the SAME live-cluster computation the MISS path
         # computed once (never a second independent recomputation); the
@@ -7225,6 +7249,10 @@ if page == "🏠 Home":
         st.session_state["_grow_composites"]          = _grow_composites
         st.session_state["_grow_composites_coverage"] = _b["_grow_composites_coverage"]
         st.session_state["_movers_candidates"]        = _movers_candidates
+        if _movers_checked is None:
+            st.session_state.pop("_movers_checked", None)
+        else:
+            st.session_state["_movers_checked"]       = _movers_checked
         st.session_state["_grow_today_sectors_cache"] = _b["_grow_today_sectors_cache"]
         st.session_state["_leading_sectors_cache"]    = _b["_leading_sectors_cache"]
         st.session_state["_daily_brief_offline"]      = _b["_daily_brief_offline"]
@@ -7618,6 +7646,12 @@ if page == "🏠 Home":
                 _movers_df = _cached_scan_movers(
                     tuple(sorted(_mv_exclude)), MOVER_MIN_DAY_GAIN_PCT, _mv_universe_items,
                 )
+                # Three-state (ScanMoversEmptyCached): True = prices were read
+                # (an empty frame = a quiet day, none found); False = the
+                # discovery download failed (None) so no mover was considered.
+                # The candidate list below stays a list either way (decision
+                # unchanged: no movers); Grow Today discloses the False case.
+                st.session_state["_movers_checked"] = _movers_df is not None
                 if _movers_df is not None and not _movers_df.empty:
                     for _, _mrow in _movers_df.head(MOVER_SHORTLIST_SIZE).iterrows():
                         _mt = str(_mrow["Ticker"]).upper()
@@ -7650,7 +7684,13 @@ if page == "🏠 Home":
                     st.session_state._grow_composites = _grow_composites
                 st.session_state["_movers_candidates"] = _movers_candidates
             except Exception:
+                st.session_state["_movers_checked"] = False
                 st.session_state["_movers_candidates"] = []
+        else:
+            # No scanner results -> the movers block did not run this build, so
+            # an earlier run's flag must not claim the discovery list was
+            # (or wasn't) read for this one.
+            st.session_state.pop("_movers_checked", None)
 
         # Build Daily Briefing (synthesises all intelligence — computed once before tabs).
         #
@@ -8281,6 +8321,7 @@ if page == "🏠 Home":
                 "_daily_brief": _daily_brief_raw,
                 "_grow_composites":   st.session_state.get("_grow_composites", {}),
                 "_movers_candidates": st.session_state.get("_movers_candidates", []),
+                "_movers_checked": st.session_state.get("_movers_checked"),
                 "_grow_composites_coverage": st.session_state.get("_grow_composites_coverage", {}),
                 "_risk_high_alerts_cache":   st.session_state.get("_risk_high_alerts_cache"),
                 "_grow_today_sectors_cache": st.session_state.get("_grow_today_sectors_cache"),
@@ -10343,7 +10384,10 @@ if page == "🏠 Home":
             _wl_reach    = st.session_state.get("watchlist", []) or []
             _wl_extra_n  = len([t for t in _wl_reach if str(t).upper() not in _tracked_set])
             _disc_extra_n = len(discovery_tickers(exclude=_tracked_set, universe=_ru_discovery_universe))
-            _movers_ran  = "_movers_candidates" in st.session_state
+            # True only when the discovery scan actually read prices (a quiet
+            # day counts); a failed download or a skipped block leaves it out
+            # of the reach count (ScanMoversEmptyCached).
+            _movers_ran  = st.session_state.get("_movers_checked") is True
             _cov         = st.session_state.get("_grow_composites_coverage") or {}
             _finalists_n = len(_cov.get("intended", []) or [])
 
@@ -10360,6 +10404,14 @@ if page == "🏠 Home":
                 )
             else:
                 st.caption(f"🔭 Screened {_reach_src} names — run Refresh Signals for a fresh pass.")
+            # The movers block only runs when scanner results exist (the same
+            # condition as this branch), so the disclosure lives in it.
+            if st.session_state.get("_movers_checked") is False:
+                st.caption(
+                    "⚠️ Breakout movers not checked: the price download for the discovery list "
+                    "failed, so no mover could be considered for today's picks. The Brief's next "
+                    "refresh retries it (🔄 Refresh Signals retries it at once)."
+                )
 
             # ── Reach-funnel Sankey — the SAME real numbers drawn to scale ──
             # universe → reached composite scoring → New Positions to Initiate.

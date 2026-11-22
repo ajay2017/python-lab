@@ -458,6 +458,87 @@ def test_scan_movers_empty_ticker_list_skips_network_call(monkeypatch):
     assert fake.calls == 0
 
 
+# ─── scan_movers_checked — a failed read raises, a quiet day does not ──────
+# ScanMoversEmptyCached (2026-11-22): scan_movers returned an empty frame for a
+# failed download AND for a quiet day, and the app cached either for 30 min.
+
+class _RaisingYF:
+    def __init__(self):
+        self.calls = 0
+
+    def download(self, tickers, **kwargs):
+        self.calls += 1
+        raise ConnectionError("yahoo down")
+
+
+def test_scan_movers_checked_download_raises_runtime_error(monkeypatch):
+    fake = _RaisingYF()
+    monkeypatch.setattr(scanner, "yf", fake)
+    with pytest.raises(RuntimeError, match="download failed"):
+        scanner.scan_movers_checked(["AAA", "BBB"])
+    assert fake.calls == 1
+
+
+def test_scan_movers_checked_empty_download_raises(monkeypatch):
+    monkeypatch.setattr(scanner, "yf", _FakeYF(pd.DataFrame()))
+    with pytest.raises(RuntimeError, match="no data"):
+        scanner.scan_movers_checked(["AAA", "BBB"])
+
+
+def test_scan_movers_checked_none_download_raises(monkeypatch):
+    monkeypatch.setattr(scanner, "yf", _FakeYF(None))
+    with pytest.raises(RuntimeError):
+        scanner.scan_movers_checked(["AAA", "BBB"])
+
+
+def test_scan_movers_checked_every_requested_ticker_missing_raises(monkeypatch):
+    # Data came back, but for other tickers only: nothing requested was read.
+    monkeypatch.setattr(scanner, "yf", _FakeYF(_fake_multi_download(["ZZZ1", "ZZZ2"])))
+    with pytest.raises(RuntimeError, match="no price frame"):
+        scanner.scan_movers_checked(["AAA", "BBB"])
+
+
+def test_scan_movers_checked_every_ticker_frame_empty_raises(monkeypatch):
+    # Every requested column present but all-NaN: dropna leaves empty frames.
+    df = _fake_multi_download(["AAA", "BBB"])
+    df[:] = float("nan")
+    monkeypatch.setattr(scanner, "yf", _FakeYF(df))
+    with pytest.raises(RuntimeError, match="no price frame"):
+        scanner.scan_movers_checked(["AAA", "BBB"])
+
+
+def test_scan_movers_checked_quiet_day_returns_empty_without_raising(monkeypatch):
+    # Prices read, no ticker clears the gain bar: checked, none found.
+    monkeypatch.setattr(scanner, "yf", _FakeYF(_fake_multi_download(["AAA", "BBB"])))
+    result = scanner.scan_movers_checked(["AAA", "BBB"])
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
+
+
+def test_scan_movers_checked_returns_the_gainer(monkeypatch):
+    df = _fake_multi_download(["AAA", "BBB"], n=70)
+    df.loc[df.index[-1], ("Close", "AAA")] = df[("Close", "AAA")].iloc[-2] * 1.10
+    monkeypatch.setattr(scanner, "yf", _FakeYF(df))
+    result = scanner.scan_movers_checked(["AAA", "BBB"])
+    assert list(result["Ticker"]) == ["AAA"]
+    assert result.loc[0, "Day Change %"] == pytest.approx(10.0)
+
+
+def test_scan_movers_checked_empty_ticker_list_is_empty_no_network_call(monkeypatch):
+    fake = _FakeYF(pd.DataFrame())
+    monkeypatch.setattr(scanner, "yf", fake)
+    result = scanner.scan_movers_checked([])
+    assert result.empty
+    assert fake.calls == 0
+
+
+def test_scan_movers_wrapper_swallows_a_failed_download(monkeypatch):
+    monkeypatch.setattr(scanner, "yf", _RaisingYF())
+    result = scanner.scan_movers(["AAA", "BBB"])
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
+
+
 # ─── Macro-gate coverage invariant ──────────────────────────────────────────
 # The bug this guards (found 2026-08-16): daily_briefing's macro gate resolves a
 # candidate's sector via portfolio.resolve_sector(ticker, <sector-universe bucket
@@ -630,3 +711,24 @@ def test_scan_sectors_dedups_by_symbol_not_issuer(monkeypatch):
         "scan_sectors must treat GOOG and GOOGL as two distinct symbols, "
         "neither silently dropped nor merged"
     )
+
+
+def test_scan_movers_checked_single_ticker_multiindex_is_parsed(monkeypatch):
+    # yfinance 1.x returns (Price, Ticker) MultiIndex columns for a one-element
+    # list too; the ticker's slice must be read, not the whole frame (review
+    # of ScanMoversEmptyCached, 2026-11-22).
+    df = _fake_multi_download(["AAA"], n=70)
+    df.loc[df.index[-1], ("Close", "AAA")] = df[("Close", "AAA")].iloc[-2] * 1.10
+    monkeypatch.setattr(scanner, "yf", _FakeYF(df))
+    result = scanner.scan_movers_checked(["AAA"])
+    assert list(result["Ticker"]) == ["AAA"]
+    assert result.loc[0, "Day Change %"] == pytest.approx(10.0)
+
+
+def test_scan_movers_checked_single_ticker_flat_columns_still_parsed(monkeypatch):
+    df = _fake_multi_download(["AAA"], n=70)
+    df.loc[df.index[-1], ("Close", "AAA")] = df[("Close", "AAA")].iloc[-2] * 1.10
+    flat = df.xs("AAA", axis=1, level=1)
+    monkeypatch.setattr(scanner, "yf", _FakeYF(flat))
+    result = scanner.scan_movers_checked(["AAA"])
+    assert list(result["Ticker"]) == ["AAA"]

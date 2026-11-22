@@ -210,10 +210,12 @@ def scan_sectors(
     results = []
     for ticker in all_tickers:
         try:
-            if len(all_tickers) == 1:
-                df = raw
-            elif isinstance(raw.columns, pd.MultiIndex):
+            # MultiIndex first: yfinance 1.x keeps (Price, Ticker) columns for a
+            # one-element list too (same parse as scan_movers_checked).
+            if isinstance(raw.columns, pd.MultiIndex):
                 df = raw.xs(ticker, axis=1, level=1).dropna()
+            elif len(all_tickers) == 1:
+                df = raw
             else:
                 continue
             if df.empty:
@@ -248,23 +250,29 @@ def _day_change_pct(close: pd.Series) -> float | None:
     return (float(c.iloc[-1]) / prev - 1) * 100
 
 
-def scan_movers(tickers: list[str], min_day_gain_pct: float = MOVER_MIN_DAY_GAIN_PCT,
-                period: str = "3mo") -> pd.DataFrame:
+def scan_movers_checked(tickers: list[str], min_day_gain_pct: float = MOVER_MIN_DAY_GAIN_PCT,
+                        period: str = "3mo") -> pd.DataFrame:
     """
-    Scan a broad ticker list for today's biggest 1-day GAINERS.
+    Scan a broad ticker list for today's biggest 1-day GAINERS, and RAISE when
+    the scan could not read prices (ScanMoversEmptyCached, 2026-11-22).
 
     Distinct from scan_sectors (which ranks by composite momentum score across
     the curated universe). This is the discovery net: it ranks by today's
     single-day % change so a fresh breakout in an untracked name surfaces.
 
     Returns a DataFrame ranked by "Day Change %" descending, filtered to
-    gainers ≥ min_day_gain_pct. Columns mirror scan_sectors output (so the
+    gainers >= min_day_gain_pct. Columns mirror scan_sectors output (so the
     composite-gate + sizing code can treat the rows uniformly) PLUS a
     "Day Change %" column. Sector is tagged "Mover" since these come from the
     discovery universe, not a sector bucket.
 
-    Empty DataFrame on any failure — discovery is best-effort, never blocks
-    the rest of the brief.
+    Two different empties, kept apart on purpose:
+      * an empty DataFrame (no raise) = prices were read and no ticker cleared
+        the gain bar (a quiet day), or the ticker list was empty;
+      * RuntimeError = `yf.download` raised, returned nothing, or no requested
+        ticker yielded a non-empty price frame (nothing could be checked).
+    A cache wrapper that lets the RuntimeError propagate never stores a
+    failure; `scan_movers` below is the best-effort wrapper that swallows it.
     """
     tickers = [str(t).upper().strip() for t in (tickers or []) if str(t).strip()]
     if not tickers:
@@ -275,20 +283,28 @@ def scan_movers(tickers: list[str], min_day_gain_pct: float = MOVER_MIN_DAY_GAIN
             tickers, period=period,
             auto_adjust=True, progress=False, threads=True,
         )
-    except Exception:
-        return pd.DataFrame()
+    except Exception as e:
+        raise RuntimeError(f"movers price download failed: {type(e).__name__}: {e}") from e
+
+    if raw is None or raw.empty:
+        raise RuntimeError("movers price download returned no data")
 
     results = []
+    read_any = False  # at least one ticker yielded a non-empty price frame
     for ticker in tickers:
         try:
-            if len(tickers) == 1:
-                df = raw
-            elif isinstance(raw.columns, pd.MultiIndex):
+            # yfinance 1.x returns (Price, Ticker) MultiIndex columns even for a
+            # one-element list, so read the ticker's slice whenever the columns
+            # are a MultiIndex; flat columns only for a single ticker.
+            if isinstance(raw.columns, pd.MultiIndex):
                 df = raw.xs(ticker, axis=1, level=1).dropna()
+            elif len(tickers) == 1:
+                df = raw
             else:
                 continue
             if df.empty:
                 continue
+            read_any = True
             day_chg = _day_change_pct(df["Close"])
             if day_chg is None or day_chg < min_day_gain_pct:
                 continue
@@ -301,6 +317,9 @@ def scan_movers(tickers: list[str], min_day_gain_pct: float = MOVER_MIN_DAY_GAIN
         except Exception:
             continue
 
+    if not read_any:
+        raise RuntimeError("movers scan read no price frame for any ticker")
+
     if not results:
         return pd.DataFrame()
 
@@ -311,3 +330,21 @@ def scan_movers(tickers: list[str], min_day_gain_pct: float = MOVER_MIN_DAY_GAIN
     )
     out.insert(0, "Rank", range(1, len(out) + 1))
     return out
+
+
+def scan_movers(tickers: list[str], min_day_gain_pct: float = MOVER_MIN_DAY_GAIN_PCT,
+                period: str = "3mo") -> pd.DataFrame:
+    """
+    Scan a broad ticker list for today's biggest 1-day GAINERS.
+
+    Best-effort wrapper over `scan_movers_checked` (see it for the ranking and
+    column contract).
+
+    Empty DataFrame on any failure — discovery is best-effort, never blocks
+    the rest of the brief. A caller that must tell "failed" from "no movers
+    today" (the app's cache layer) uses `scan_movers_checked` instead.
+    """
+    try:
+        return scan_movers_checked(tickers, min_day_gain_pct=min_day_gain_pct, period=period)
+    except Exception:
+        return pd.DataFrame()
