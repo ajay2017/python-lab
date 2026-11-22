@@ -4982,15 +4982,17 @@ def _trend_note(result) -> str:
     return f"trend at {market_trend.fmt_session(result['as_of'])} close"
 
 
-def _render_trend_chips(result) -> None:
-    """The dock's Falling / Weakening / Rising sector chips (Streamlit badges), a
-    not-checked caption, and the button that opens the full table dialog. None =
-    the prices couldn't be loaded: one caption and nothing else (never a calm-
-    looking empty list)."""
+def _render_trend_chip_text(result) -> bool:
+    """The dock's Falling / Weakening / Rising sector chips (Streamlit badges), the
+    dated caption and a not-checked caption: text only, NO widget, so it can be drawn
+    into an st.empty() slot twice in one run (Home's first run draws the dock before
+    the book is published, then redraws the slot once it is). None = the prices
+    couldn't be loaded: one caption and nothing else (never a calm-looking empty
+    list). Returns True when the book's weights were available for this draw."""
     if result is None:
         st.caption("Trend not checked: the index and sector-fund prices couldn't be loaded. "
                    "It's checked again on your next page load after 5 minutes.")
-        return
+        return False
     _trend_pdf = _get_or_offline(st.session_state, "_port_df_enriched")
     _trend_book_empty = _trend_pdf is not None and getattr(_trend_pdf, "empty", False)
     _trend_w = market_trend.held_weights(_trend_pdf)
@@ -5015,6 +5017,15 @@ def _render_trend_chips(result) -> None:
     st.caption(_cap)
     if result["not_checked"]:
         st.caption(f"Not checked: {', '.join(result['not_checked'])}")
+    return _trend_w is not None
+
+
+def _render_trend_table_button(result) -> None:
+    """The dock's "Full trend table" button, drawn ONCE per run after the chip slot
+    (a widget inside the slot would be drawn twice on Home's redraw and raise
+    DuplicateWidgetID). Nothing when the trend wasn't read."""
+    if result is None:
+        return
     if st.button("Full trend table ↗", key="_trend_dock_tbl_btn"):
         _trend_dialog(result)
 
@@ -5262,8 +5273,15 @@ with st.container(key=home_dock.DOCK_KEY):
                     print(f"[market_trend] dock lines failed: {type(_dk_te).__name__}: {_dk_te}")
                     _dock_trend, _dock_lines, _dock_note = None, None, ""
                 _index_strip(_dock_lines, _dock_note)
+                # The chip text lives in a slot so 🏠 Home can redraw it once it has
+                # published the book later in this same run (the "you N%" shares);
+                # the button stays outside the slot, drawn once.
+                _dock_trend_chips_slot = st.empty()
+                _dock_chips_had_weights = False
                 try:
-                    _render_trend_chips(_dock_trend)
+                    with _dock_trend_chips_slot.container():
+                        _dock_chips_had_weights = _render_trend_chip_text(_dock_trend)
+                    _render_trend_table_button(_dock_trend)
                 except Exception as _dk_ce:
                     print(f"[market_trend] dock chips failed: {type(_dk_ce).__name__}: {_dk_ce}")
                     st.caption("Trend chips couldn't be drawn this run.")
@@ -6364,6 +6382,14 @@ if page == "🏠 Home":
 
     # Cache enriched port_df (with Sector) so other pages can use it
     st.session_state["_port_df_enriched"] = port_df
+    # The dock's Markets chips were drawn before this publish: when they had no
+    # weights ("you N%" missing), redraw the slot now that Home has built the book.
+    try:  # the check sits inside the try too: a missing dock name must never stop Home
+        if not _dock_chips_had_weights:
+            with _dock_trend_chips_slot.container():
+                _render_trend_chip_text(_dock_trend)
+    except Exception as _dk_re:
+        print(f"[market_trend] dock chips redraw failed: {type(_dk_re).__name__}: {_dk_re}")
     st.session_state.pop("_home_data_outage_at", None)  # this load succeeded — clear any outage flag
 
     # ── Stock split detection ─────────────────────────────────────────────────

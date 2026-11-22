@@ -373,7 +373,8 @@ def test_dock_markets_tab_fetches_the_trend_and_hands_the_strip_two_arguments():
     assert "market_trend.as_of_session(_now_et()).isoformat()" in ast.unparse(fetches[0])
     strips = _calls_to(nodes, "_index_strip")
     assert len(strips) == 1 and len(strips[0].args) == 2 and not strips[0].keywords
-    assert _calls_to(nodes, "_render_trend_chips")
+    assert _calls_to(nodes, "_render_trend_chip_text")
+    assert _calls_to(nodes, "_render_trend_table_button")
 
 
 def test_trend_dialog_is_a_module_level_st_dialog_defined_before_the_dock():
@@ -414,8 +415,9 @@ def _pending_page_writes(fn: ast.AST) -> list[str]:
 def test_trend_dialog_navigates_through_pending_page_never_nav_page():
     fn = _module_func("_trend_dialog")
     assert _pending_page_writes(fn) == ['"🌐 Macro"']
-    trend_fns = ("_trend_dialog", "_trend_tile_lines", "_trend_note", "_render_trend_chips",
-                 "_render_trend_summary", "_render_trend_table", "_index_strip")
+    trend_fns = ("_trend_dialog", "_trend_tile_lines", "_trend_note", "_render_trend_chip_text",
+                 "_render_trend_table_button", "_render_trend_summary",
+                 "_render_trend_table", "_index_strip")
     for name in trend_fns:
         for n in ast.walk(_module_func(name)):
             if isinstance(n, ast.Attribute):
@@ -429,15 +431,83 @@ def _key_constants(node: ast.AST) -> set:
             and k.arg == "key" and isinstance(k.value, ast.Constant)}
 
 
-def test_full_trend_table_button_sits_in_the_chips_helper_not_the_fragment():
+def test_full_trend_table_button_sits_in_its_own_helper_not_the_fragment_or_the_text():
     assert "_trend_dock_tbl_btn" not in _key_constants(_module_func("_index_strip"))
-    chips = _module_func("_render_trend_chips")
-    assert "_trend_dock_tbl_btn" in _key_constants(chips)
-    assert _calls_to(ast.walk(chips), "_trend_dialog")
+    text = _module_func("_render_trend_chip_text")
+    assert "_trend_dock_tbl_btn" not in _key_constants(text)
+    btn = _module_func("_render_trend_table_button")
+    assert "_trend_dock_tbl_btn" in _key_constants(btn)
+    assert _calls_to(ast.walk(btn), "_trend_dialog")
     assert "_trend_dlg_open_macro" in _key_constants(_module_func("_trend_dialog"))
 
 
-@pytest.mark.parametrize("fn_name", ["_render_trend_chips", "_trend_tile_lines", "_trend_note"])
+def test_chip_text_helper_draws_no_widget():
+    fn = _module_func("_render_trend_chip_text")
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call):
+            assert _call_name(n) not in ("button", "download_button", "checkbox", "toggle",
+                                         "selectbox", "radio", "popover", "form_submit_button"), (
+                "a widget inside the redrawable slot would raise DuplicateWidgetID")
+            assert _call_name(n) != "_trend_dialog"
+
+
+def _is_slot_with(w: ast.With) -> bool:
+    for i in w.items:
+        e = i.context_expr
+        if (isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute)
+                and e.func.attr == "container" and isinstance(e.func.value, ast.Name)
+                and e.func.value.id == "_dock_trend_chips_slot"):
+            return True
+    return False
+
+
+def test_dock_creates_the_chip_slot_and_keeps_the_button_outside_it():
+    block = _dock_markets_with()
+    assigns = [a for a in ast.walk(block) if isinstance(a, ast.Assign)
+               and any(isinstance(t, ast.Name) and t.id == "_dock_trend_chips_slot"
+                       for t in a.targets)]
+    assert len(assigns) == 1 and ast.unparse(assigns[0].value) == "st.empty()"
+    slot_withs = [w for w in ast.walk(block) if isinstance(w, ast.With) and _is_slot_with(w)]
+    assert len(slot_withs) == 1
+    inside = {id(n) for stmt in slot_withs[0].body for n in ast.walk(stmt)}
+    buttons = [c for c in ast.walk(block) if isinstance(c, ast.Call)
+               and _call_name(c) == "_render_trend_table_button"]
+    assert len(buttons) == 1 and id(buttons[0]) not in inside
+    texts = [c for c in ast.walk(slot_withs[0]) if isinstance(c, ast.Call)
+             and _call_name(c) == "_render_trend_chip_text"]
+    assert len(texts) == 1
+    # the slot is declared after the strip, and the first draw records the weights flag
+    assert any(isinstance(a, ast.Assign) and any(
+        isinstance(t, ast.Name) and t.id == "_dock_chips_had_weights" for t in a.targets)
+        for a in ast.walk(slot_withs[0]))
+
+
+def test_home_redraws_the_chip_slot_after_publishing_the_book_only_without_weights():
+    home = _page_branch("🏠 Home")
+    publish = [s for s in home.body if isinstance(s, ast.Assign)
+               and ast.unparse(s.targets[0]).replace("'", '"') == 'st.session_state["_port_df_enriched"]']
+    assert len(publish) == 1
+    # the redraw is one top-level try (so even the flag check can't stop Home) holding
+    # an `if` on _dock_chips_had_weights around the slot redraw
+    redraws = [s for s in home.body if isinstance(s, ast.Try)
+               and any(isinstance(w, ast.With) and _is_slot_with(w) for w in ast.walk(s))]
+    assert len(redraws) == 1
+    r = redraws[0]
+    assert r.lineno > publish[0].lineno, "the redraw must come after the publish"
+    ifs = [n for n in ast.walk(r) if isinstance(n, ast.If)
+           and "_dock_chips_had_weights" in ast.unparse(n.test)]
+    assert len(ifs) == 1
+    assert any(isinstance(w, ast.With) and _is_slot_with(w) for w in ast.walk(ifs[0]))
+    assert any(isinstance(c, ast.Call) and _call_name(c) == "_render_trend_chip_text"
+               for c in ast.walk(ifs[0]))
+    # never a widget in the redraw (the button is drawn once, outside the slot)
+    assert not any(isinstance(c, ast.Call) and _call_name(c) in ("_render_trend_table_button", "button")
+                   for c in ast.walk(r))
+    # failure is caught, never raised
+    assert r.handlers and all(h.type is not None for h in r.handlers)
+
+
+@pytest.mark.parametrize("fn_name", ["_render_trend_chip_text", "_render_trend_table_button", "_trend_tile_lines", "_trend_note"])
 def test_dock_trend_helpers_have_no_raw_html_and_no_threshold_names(fn_name):
     fn = _module_func(fn_name)
     for n in ast.walk(fn):
@@ -450,7 +520,7 @@ def test_dock_trend_helpers_have_no_raw_html_and_no_threshold_names(fn_name):
 
 
 def test_chips_helper_reads_weights_through_get_or_offline_and_has_a_none_branch():
-    fn = _module_func("_render_trend_chips")
+    fn = _module_func("_render_trend_chip_text")
     srcs = [ast.unparse(a.value).replace("'", '"') for a in ast.walk(fn)
             if isinstance(a, ast.Assign)]
     assert '_get_or_offline(st.session_state, "_port_df_enriched")' in srcs
@@ -463,7 +533,7 @@ def test_chips_helper_reads_weights_through_get_or_offline_and_has_a_none_branch
 
 
 def test_chips_helper_always_dates_itself_and_discloses_a_missing_book():
-    fn = _module_func("_render_trend_chips")
+    fn = _module_func("_render_trend_chip_text")
     # a caption that carries fmt_session (the as-of date), drawn unconditionally
     dated = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
              and isinstance(n.func, ast.Attribute) and n.func.attr == "caption"]
@@ -484,7 +554,7 @@ def test_chips_helper_always_dates_itself_and_discloses_a_missing_book():
     assert "_trend_book_empty" in ast.unparse(gates[0].test)
 
 
-@pytest.mark.parametrize("fn_name", ["_render_trend_chips", "_render_trend_summary"])
+@pytest.mark.parametrize("fn_name", ["_render_trend_chip_text", "_render_trend_summary"])
 def test_trend_percent_rounding_is_one_shared_rule(fn_name):
     fn = _module_func(fn_name)
     local_defs = [n.name for n in ast.walk(fn) if isinstance(n, ast.FunctionDef)]
