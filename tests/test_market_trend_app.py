@@ -279,7 +279,7 @@ def test_trend_fetch_summary_and_table_sit_in_the_first_tab_summary_first():
         for t in tries)
 
 
-def test_the_book_gate_and_the_load_button_sit_in_the_second_tab():
+def test_the_book_gate_and_the_macro_signals_read_sit_in_the_second_tab():
     branch = _page_branch("🌐 Macro")
     first, second = _tab_withs(branch)
 
@@ -288,12 +288,28 @@ def test_the_book_gate_and_the_load_button_sit_in_the_second_tab():
                 and isinstance(n.test, ast.Attribute) and n.test.attr == "empty"
                 and isinstance(n.test.value, ast.Name) and n.test.value.id == "port_df"]
 
-    def load_buttons(nodes):
-        return [n for n in nodes if isinstance(n, ast.keyword) and n.arg == "key"
-                and isinstance(n.value, ast.Constant) and n.value.value == "_macro_load_btn"]
+    def signal_reads(nodes):
+        return [n for n in nodes if isinstance(n, ast.Call) and _call_name(n) == "_cached_macro_raw"]
 
     assert gates(list(_walk_with(second))) and not gates(list(_walk_with(first)))
-    assert load_buttons(list(_walk_with(second))) and not load_buttons(list(_walk_with(first)))
+    assert signal_reads(list(_walk_with(second))) and not signal_reads(list(_walk_with(first)))
+
+
+def test_macro_signals_auto_load_never_caches_an_incomplete_read():
+    # C4 (owner 2026-11-22): the button is gone; the 30-min layer raises on an
+    # incomplete read so only the 5-min layer can hold it.
+    strings = {n.value for n in ast.walk(_TREE) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    assert "_macro_load_btn" not in strings
+    ok = _module_func("_macro_raw_ok")
+    assert any(isinstance(n, ast.Raise) for n in ast.walk(ok))
+    assert "_load_macro_raw" in {_call_name(c) for c in ast.walk(ok) if isinstance(c, ast.Call)}
+    wrap = _module_func("_cached_macro_raw")
+    assert any(isinstance(n, ast.Try) for n in wrap.body)
+    # the tab never hides an all-failed (empty) read: it tests `is not None`, not truthiness
+    second = _tab_withs(_page_branch("🌐 Macro"))[1]
+    tests_on_mr = [n.test for n in _walk_with(second) if isinstance(n, ast.If)
+                   and "_mr" in {x.id for x in ast.walk(n.test) if isinstance(x, ast.Name)}]
+    assert any(isinstance(t, ast.Compare) and isinstance(t.ops[0], ast.IsNot) for t in tests_on_mr)
 
 
 def test_render_trend_summary_is_display_only_and_takes_book_empty():
@@ -506,3 +522,31 @@ def test_fetch_sector_returns_still_has_both_consumers():
         and any(isinstance(t, ast.Name) and t.id == "_sect_df" for t in a.targets)
     ]
     assert diag, "Performance Diagnostics' read of _fetch_sector_returns is gone"
+
+
+# ── C4: the 🔥 Sector Heatmap tab is a pointer to 🌐 Macro ────────────────────
+
+def _string_constants(node_iter) -> set:
+    return {n.value for n in node_iter if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+
+
+def test_heatmap_load_button_and_its_session_key_are_gone():
+    strings = _string_constants(ast.walk(_TREE))
+    assert "_heat_btn" not in strings
+    assert "_sector_rets" not in strings
+    assert "🔥 Load Sector Heatmap" not in strings
+
+
+def test_heatmap_tab_points_to_macro_through_pending_page():
+    overview = _page_branch("🥧 Portfolio Overview")
+    tab = [
+        w for w in _walk_body(overview)
+        if isinstance(w, ast.With) and len(w.items) == 1
+        and isinstance(w.items[0].context_expr, ast.Name)
+        and w.items[0].context_expr.id == "_an_t2"
+    ]
+    assert len(tab) == 1, "the 🔥 Sector Heatmap tab (_an_t2) should be one with-block"
+    assert _pending_page_writes(tab[0]) == ['"🌐 Macro"']
+    assert "_heat_moved_open_macro" in _string_constants(ast.walk(tab[0]))
+    assert not _calls_to(ast.walk(tab[0]), "_fetch_sector_returns"), \
+        "the pointer tab must not fetch anything"
