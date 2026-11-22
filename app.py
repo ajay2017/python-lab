@@ -77,7 +77,7 @@ from stock_analyzer.fundamentals import (
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
 from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, rate_sensitivity_per_ticker, capital_equivalent_risk, beta_vs_market
-from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
+from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations, left_out_note
 from stock_analyzer.earnings_advisor import build_earnings_playbook, analyst_fields as _analyst_fields
 from stock_analyzer import earnings_intel as _earn_intel
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation, sort_key_for_action
@@ -23613,13 +23613,20 @@ elif page == "🥧 Portfolio Overview":
                             "3M": _sr.get("3M"), "6M": _sr.get("6M"),
                         }
 
+                _attr_left_out: list = []
                 _attr_df = compute_attribution(
                     port_df, held_data, _cached_spy("6mo"),
                     _n_days, _sect_rets_dict, _perf_period,
+                    left_out=_attr_left_out,
                 )
+                _attr_left_note = left_out_note(_attr_left_out, _perf_period)
 
                 if _attr_df.empty:
                     st.info("Not enough price history to compute attribution for the selected period.")
+                    # Every position was left out: just the note (there are no
+                    # "other positions" to point to).
+                    if _attr_left_note:
+                        st.caption(_attr_left_note)
                 else:
                     _perf_recs = build_perf_recommendations(_attr_df, total_val, _perf_period)
 
@@ -23629,7 +23636,8 @@ elif page == "🥧 Portfolio Overview":
                     _n_riders     = int((_attr_df["Category"] == "Sector Rider").sum())
                     _n_destroyers = int((_attr_df["Category"] == "Alpha Destroyer").sum())
                     _n_total      = len(_attr_df)
-                    _skill_pct    = int((_attr_df["Alpha vs SPY (%)"] > 0).sum() / _n_total * 100) if _n_total else 0
+                    _n_beating    = int((_attr_df["Alpha vs SPY (%)"] > 0).sum())
+                    _skill_pct    = int(_n_beating / _n_total * 100) if _n_total else 0
 
                     _dp1, _dp2, _dp3, _dp4 = st.columns(4)
                     _dp1.metric(
@@ -23644,23 +23652,38 @@ elif page == "🥧 Portfolio Overview":
                         help=f"Total extra $ earned (or lost) vs holding SPY at identical weights over {_perf_period}",
                     )
                     _dp2.metric("Alpha Generators",  _n_generators,
-                                "beating SPY ≥ 5%", delta_color="off")
+                                f"beat SPY by {PERF_ALPHA_BAND_PCT:g}%+ and clearly beat their sector fund",
+                                delta_color="off")
                     _dp3.metric("Alpha Destroyers",  _n_destroyers,
-                                "lagging SPY ≥ 5%", delta_color="off")
+                                f"lagging SPY ≥ {PERF_ALPHA_BAND_PCT:g}%", delta_color="off")
                     _dp4.metric(
                         "Skill Ratio",
                         f"{_skill_pct}%",
-                        f"{int(_skill_pct / 100 * _n_total)}/{_n_total} positions beating SPY",
+                        f"{_n_beating}/{_n_total} positions beating SPY",
                         delta_color="off",
                         help="% of positions generating positive alpha vs S&P 500",
                     )
+                    # Positions with no row (history too short or stale for the
+                    # window, no value): without this "6/8" reads as the whole
+                    # book. The P&L waterfall below (same tab) is built from
+                    # every position in port_df, so the tail says it includes all.
+                    if _attr_left_note:
+                        st.caption(
+                            _attr_left_note
+                            + " The alpha tiles, the alpha chart and the position cards "
+                            "cover only the other positions; the P&L waterfall further "
+                            "down includes every position."
+                        )
 
                     # ── Alpha attribution chart ───────────────────────────────────
                     _asc = _attr_df.sort_values("Alpha vs SPY (%)", ascending=True)
-                    _bar_clrs = [
-                        "#00C851" if v >= PERF_ALPHA_BAND_PCT else "#ff4444" if v <= -PERF_ALPHA_BAND_PCT else "#888888"
-                        for v in _asc["Alpha vs SPY (%)"]
-                    ]
+                    # Coloured by the Category compute_attribution assigned, so a
+                    # Sector Rider is amber, not green (PerfWindowCollapse).
+                    _CAT_CLRS = {
+                        "Alpha Generator": "#00C851", "Sector Rider": "#ffbb33",
+                        "Alpha Destroyer": "#ff4444", "In Line": "#888888",
+                    }
+                    _bar_clrs = [_CAT_CLRS.get(c, "#888888") for c in _asc["Category"]]
                     _hover = [
                         f"<b>{r['Ticker']}</b><br>"
                         f"Return: {r['Holding Ret (%)']:+.1f}%<br>"
@@ -23682,9 +23705,9 @@ elif page == "🥧 Portfolio Overview":
                         hovertemplate="%{customdata}<extra></extra>",
                     ))
                     _attr_fig.add_vline(x=0,   line_color="#555",      line_width=1)
-                    _attr_fig.add_vline(x=5,   line_dash="dash",
+                    _attr_fig.add_vline(x=PERF_ALPHA_BAND_PCT,   line_dash="dash",
                                         line_color="rgba(0,200,81,0.4)",  line_width=1)
-                    _attr_fig.add_vline(x=-5,  line_dash="dash",
+                    _attr_fig.add_vline(x=-PERF_ALPHA_BAND_PCT,  line_dash="dash",
                                         line_color="rgba(255,68,68,0.4)", line_width=1)
                     _attr_fig.update_layout(
                         title=f"Alpha vs S&P 500 by Position — {_perf_period}",
@@ -23698,11 +23721,15 @@ elif page == "🥧 Portfolio Overview":
                         showlegend=False,
                     )
                     st.plotly_chart(_attr_fig, width="stretch")
+                    _pd_band_s = f"{PERF_ALPHA_BAND_PCT:g}"
                     st.caption(
-                        "🟢 Green = outperforming SPY ≥ 5% (alpha generator)  |  "
-                        "⬛ Gray = within ±5% of SPY  |  "
-                        "🔴 Red = lagging SPY ≥ 5% (alpha destroyer)  |  "
-                        "Dashed lines = ±5% thresholds  |  Hover for full breakdown vs sector ETF"
+                        f"🟢 Green = Alpha Generator (beat SPY by {_pd_band_s}%+ and clearly beat its sector fund)  |  "
+                        f"🟡 Amber = Sector Rider (beat SPY by {_pd_band_s}%+, but not clearly its sector fund, "
+                        "or the sector fund wasn't compared)  |  "
+                        f"⬛ Gray = within ±{_pd_band_s}% of SPY  |  "
+                        f"🔴 Red = lagging SPY by {_pd_band_s}%+  |  "
+                        f"Dashed lines = ±{_pd_band_s}% vs SPY  |  "
+                        "Hover for the comparison with each sector fund"
                     )
 
                     # ── Position Diagnostics cards ────────────────────────────────

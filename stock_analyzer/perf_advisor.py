@@ -7,7 +7,8 @@ with dollar impact, thesis status, and institutional context.
 """
 
 import pandas as pd
-from stock_analyzer.constants import COMPOSITE_HOLD
+from stock_analyzer.constants import COMPOSITE_HOLD, PERF_ALPHA_BAND_PCT
+from stock_analyzer.perf_backtest import _START_SLACK_SESSIONS
 
 
 def _f(val, default=0.0):
@@ -31,6 +32,23 @@ def _opt(val):
         return None
 
 
+def _usable_closes(data) -> pd.Series | None:
+    """tz-naive, sorted, de-duplicated, NaN-free Close series from a held_data
+    entry, or None when there is no usable history at all."""
+    if not data:
+        return None
+    hist = data.get("df")
+    if hist is None or hist.empty or "Close" not in hist.columns:
+        return None
+    closes = hist["Close"].dropna().copy()
+    if closes.empty:
+        return None
+    if closes.index.tz is not None:
+        closes.index = closes.index.tz_localize(None)
+    closes = closes[~closes.index.duplicated(keep="last")].sort_index()
+    return closes
+
+
 def compute_attribution(
     port_df: pd.DataFrame,
     held_data: dict,
@@ -38,12 +56,32 @@ def compute_attribution(
     n_days: int,
     sector_etf_rets: dict | None = None,
     period_label: str = "3M",
+    *,
+    left_out: list | None = None,
 ) -> pd.DataFrame:
     """
     Returns a DataFrame with per-position performance attribution.
     Columns: Ticker, Sector, ETF, Weight(%), Market Value, Holding Ret(%),
              SPY Ret(%), Sector Ret(%), Alpha vs SPY(%), Alpha vs Sector(%),
              Dollar Alpha($), Category, Score, Signal
+
+    The window is SPY's own last ``n`` sessions (PerfWindowCollapse). A holding
+    is measured from the window start (or, when it starts inside the slack, from
+    its first close) against SPY from the same date, so both legs span the same
+    dates; "SPY Ret (%)" differs by row only for a slack-start holding. The
+    cover rule follows perf_backtest.backtest_vs_spy (same cut date when SPY's
+    history covers the period; on a 6M view with a shorter SPY fetch this cut is
+    one session later; same slack constant) but is a separate implementation: a holding whose history starts
+    after the cover cut, or ends more than ``_START_SLACK_SESSIONS`` SPY sessions
+    before SPY's last close, gets no row instead of a return over a different
+    span than SPY's.
+
+    ``left_out`` (keyword-only): when a list is passed, one dict per position
+    that gets no row is appended to it: {"ticker", "reason", "sessions"} with
+    reason "no_value" (missing weight / market value), "no_history" (no usable
+    price history or base price), "short_history" (history doesn't cover the
+    window) or "stale_history" (history ends well before SPY's last close; also
+    carries ``last_date``); ``sessions`` = usable closes (0 if none).
     """
     if port_df.empty or spy_df is None or spy_df.empty:
         return pd.DataFrame()
@@ -53,21 +91,38 @@ def compute_attribution(
     spy_close = spy_df["Close"].dropna().copy()
     if spy_close.index.tz is not None:
         spy_close.index = spy_close.index.tz_localize(None)
+    spy_close = spy_close[~spy_close.index.duplicated(keep="last")].sort_index()
 
     n = min(n_days, len(spy_close) - 1)
     if n < 2:
         return pd.DataFrame()
 
-    spy_ret = (float(spy_close.iloc[-1]) / float(spy_close.iloc[-(n + 1)]) - 1) * 100
+    p0 = len(spy_close) - (n + 1)
+    window_start = spy_close.index[p0]
+    # +1: this window holds n + 1 dates (backtest_vs_spy's holds n), so the
+    # cut lands on the same date as backtest_vs_spy's cover cut (one session
+    # later when SPY's history is shorter than the period, e.g. 6M).
+    cover_cut = spy_close.index[min(p0 + _START_SLACK_SESSIONS + 1, len(spy_close) - 2)]
+    spy_last = float(spy_close.iloc[-1])
+
+    def _skip(ticker, reason, closes, **extra):
+        if left_out is not None:
+            left_out.append({
+                "ticker": str(ticker), "reason": reason,
+                "sessions": int(len(closes)) if closes is not None else 0,
+                **extra,
+            })
 
     rows = []
     for _, row in port_df.iterrows():
         ticker = row["Ticker"]
+        closes = _usable_closes(held_data.get(ticker))
         # Missing weight or market value would yield meaningless dollar-alpha
         # numbers (or under-report opportunity cost) -- skip the position.
         weight_v = _opt(row.get("Weight (%)"))
         mval_v   = _opt(row.get("Market Value"))
         if weight_v is None or mval_v is None or mval_v <= 0:
+            _skip(ticker, "no_value", closes)
             continue
         weight = weight_v
         mval   = mval_v
@@ -75,22 +130,34 @@ def compute_attribution(
         score  = _f(row.get("Score"))
         signal = str(row.get("Signal", ""))
 
-        data = held_data.get(ticker)
-        if not data:
-            continue
-        hist = data.get("df")
-        if hist is None or hist.empty or "Close" not in hist.columns:
+        if closes is None:
+            _skip(ticker, "no_history", None)
             continue
 
-        closes = hist["Close"].dropna().copy()
-        if closes.index.tz is not None:
-            closes.index = closes.index.tz_localize(None)
-
-        nh = min(n_days, len(closes) - 1)
-        if nh < 2:
+        first_date = closes.index[0]
+        # < 3 closes keeps the old two-interval minimum (a lone stale close
+        # would otherwise read as a flat 0% return from an earlier date).
+        if len(closes) < 3 or first_date > cover_cut:
+            _skip(ticker, "short_history", closes)
+            continue
+        # Stale: the history stops more than _START_SLACK_SESSIONS SPY sessions
+        # before SPY's last close, so its "latest" return isn't today's.
+        last_date = closes.index[-1]
+        if int((spy_close.index > last_date).sum()) > _START_SLACK_SESSIONS:
+            _skip(ticker, "stale_history", closes, last_date=last_date.date())
+            continue
+        if first_date <= window_start:
+            hold_base = _opt(closes.asof(window_start))
+            spy_base  = _opt(spy_close.iloc[p0])
+        else:
+            hold_base = _opt(closes.iloc[0])
+            spy_base  = _opt(spy_close.asof(first_date))
+        if hold_base is None or spy_base is None or hold_base <= 0 or spy_base <= 0:
+            _skip(ticker, "no_history", closes)
             continue
 
-        holding_ret = (float(closes.iloc[-1]) / float(closes.iloc[-(nh + 1)]) - 1) * 100
+        holding_ret = (float(closes.iloc[-1]) / hold_base - 1) * 100
+        spy_ret = (spy_last / spy_base - 1) * 100
 
         etf = SECTOR_ETF.get(sector, "SPY")
         sector_ret = None
@@ -106,9 +173,9 @@ def compute_attribution(
         # Dollar impact: extra $ vs holding SPY at same portfolio weight
         dollar_alpha = alpha_spy / 100 * mval
 
-        if alpha_spy >= 5:
+        if alpha_spy >= PERF_ALPHA_BAND_PCT:
             category = "Alpha Generator" if (alpha_sec is not None and alpha_sec >= 3) else "Sector Rider"
-        elif alpha_spy <= -5:
+        elif alpha_spy <= -PERF_ALPHA_BAND_PCT:
             category = "Alpha Destroyer"
         else:
             category = "In Line"
@@ -138,6 +205,38 @@ def compute_attribution(
         .sort_values("Dollar Alpha ($)", ascending=False)
         .reset_index(drop=True)
     )
+
+
+def left_out_note(left_out: list, period_label: str) -> str | None:
+    """Disclosure of positions `compute_attribution` gave no row ("Left out: A
+    (...); B (...)."), or None when nothing was left out. Tickers in input
+    order, de-duplicated. The caller appends what the rest of the page covers."""
+    if not left_out:
+        return None
+    parts: list[str] = []
+    seen: set = set()
+    for item in left_out:
+        ticker = str(item.get("ticker", ""))
+        if not ticker or ticker in seen:
+            continue
+        seen.add(ticker)
+        reason = item.get("reason")
+        if reason == "short_history":
+            k = int(item.get("sessions") or 0)
+            why = (f"{k} session{'' if k == 1 else 's'} of price history, "
+                   f"too short for the {period_label} window")
+        elif reason == "stale_history":
+            ld = item.get("last_date")
+            why = (f"price history ends on {ld:%b} {ld.day} (stale)"
+                   if hasattr(ld, "day") else "price history is stale")
+        elif reason == "no_value":
+            why = "no market value"
+        else:
+            why = "no price history"
+        parts.append(f"{ticker} ({why})")
+    if not parts:
+        return None
+    return "Left out: " + "; ".join(parts) + "."
 
 
 def build_perf_recommendations(

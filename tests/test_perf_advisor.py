@@ -377,3 +377,230 @@ def test_build_perf_recommendations_alpha_destroyer_opportunity_cost_metric():
     attr_df = pd.DataFrame([_attr_row(category="Alpha Destroyer", alpha_spy=-10.0, mval=5000.0)])
     recs = pa.build_perf_recommendations(attr_df, 100000)
     assert recs[0]["metrics"]["Opportunity Cost"] == "-$500"
+
+
+# ── PerfWindowCollapse: date-aligned window, left_out, band constant ───────
+# Window rule mirrors perf_backtest.backtest_vs_spy: SPY's own last n sessions,
+# a holding must start within _START_SLACK_SESSIONS of the window start.
+
+from stock_analyzer.constants import PERF_ALPHA_BAND_PCT  # noqa: E402
+
+
+def _bidx(n):
+    return pd.bdate_range("2026-01-01", periods=n)
+
+
+def _spy70():
+    idx = _bidx(70)
+    return pd.DataFrame({"Close": [100.0 + i for i in range(70)]}, index=idx), idx
+
+
+def _hold(idx, closes):
+    return {"df": pd.DataFrame({"Close": closes}, index=idx)}
+
+
+def test_two_session_holding_on_63_window_is_left_out_not_dropped_silently():
+    spy_df, idx = _spy70()
+    held = {
+        "ANT": _hold(idx[-2:], [10.0, 11.0]),
+        "FULL": _hold(idx, [50.0 + i for i in range(70)]),
+    }
+    port = pd.DataFrame([_port_row("ANT", 5, 500), _port_row("FULL", 20, 5000)])
+    left = []
+    res = pa.compute_attribution(port, held, spy_df, 63, left_out=left)
+    assert list(res["Ticker"]) == ["FULL"]
+    assert left == [{"ticker": "ANT", "reason": "short_history", "sessions": 2}]
+
+
+def test_holding_starting_within_slack_is_measured_from_its_first_date():
+    spy_df, idx = _spy70()
+    # p0 = 70 - 64 = 6; the holding starts 3 sessions into the window (idx[9]).
+    closes = [50.0] + [60.0] * 60
+    held = {"NEW": _hold(idx[9:], closes)}
+    port = pd.DataFrame([_port_row("NEW", 10, 1000)])
+    left = []
+    res = pa.compute_attribution(port, held, spy_df, 63, left_out=left)
+    assert left == []
+    row = res.iloc[0]
+    spy_base = 100.0 + 9  # SPY close on the holding's first date
+    assert row["SPY Ret (%)"] == round((169.0 / spy_base - 1) * 100, 1)
+    assert row["Holding Ret (%)"] == round((60.0 / 50.0 - 1) * 100, 1)
+
+
+def test_holding_starting_ten_sessions_in_is_short_history():
+    spy_df, idx = _spy70()
+    held = {"LATE": _hold(idx[16:], [10.0 + i for i in range(54)])}
+    port = pd.DataFrame([_port_row("LATE", 10, 1000)])
+    left = []
+    res = pa.compute_attribution(port, held, spy_df, 63, left_out=left)
+    assert res.empty
+    assert left == [{"ticker": "LATE", "reason": "short_history", "sessions": 54}]
+
+
+def test_full_history_holding_uses_the_same_start_date_as_spy():
+    spy_df, idx = _spy70()
+    keep = [i for i in range(70) if i != 30]  # a missing day inside the window
+    held = {"FULL": _hold(idx[keep], [10.0 * (i + 1) for i in keep])}
+    port = pd.DataFrame([_port_row("FULL", 10, 1000)])
+    res = pa.compute_attribution(port, held, spy_df, 63)
+    row = res.iloc[0]
+    # window start = idx[6]: holding 70.0 -> 700.0, SPY 106.0 -> 169.0.
+    # (A positional read from the holding's own 63rd-last row would differ.)
+    assert row["Holding Ret (%)"] == 900.0
+    assert row["SPY Ret (%)"] == round((169.0 / 106.0 - 1) * 100, 1)
+
+
+def test_left_out_reasons_for_missing_value_and_missing_history():
+    spy_df, idx = _spy70()
+    port = pd.DataFrame([
+        {"Ticker": "NOVAL", "Weight (%)": 10, "Market Value": None,
+         "Sector": "Technology", "Score": 70.0, "Signal": "BUY"},
+        _port_row("NOBUNDLE", 10, 1000),
+        _port_row("EMPTY", 10, 1000),
+        _port_row("OK", 10, 1000),
+    ])
+    held = {
+        "NOVAL": _hold(idx, [10.0 + i for i in range(70)]),
+        "EMPTY": {"df": pd.DataFrame()},
+        "OK": _hold(idx, [10.0 + i for i in range(70)]),
+    }
+    left = []
+    res = pa.compute_attribution(port, held, spy_df, 63, left_out=left)
+    assert list(res["Ticker"]) == ["OK"]
+    by = {d["ticker"]: d for d in left}
+    assert by["NOVAL"] == {"ticker": "NOVAL", "reason": "no_value", "sessions": 70}
+    assert by["NOBUNDLE"] == {"ticker": "NOBUNDLE", "reason": "no_history", "sessions": 0}
+    assert by["EMPTY"]["reason"] == "no_history" and by["EMPTY"]["sessions"] == 0
+
+
+def test_left_out_default_none_still_works():
+    spy_df, idx = _spy70()
+    port = pd.DataFrame([_port_row("LATE", 10, 1000)])
+    held = {"LATE": _hold(idx[-2:], [10.0, 11.0])}
+    assert pa.compute_attribution(port, held, spy_df, 63).empty
+
+
+def test_non_positive_base_price_is_no_history():
+    spy_df, idx = _spy70()
+    port = pd.DataFrame([_port_row("ZERO", 10, 1000)])
+    held = {"ZERO": _hold(idx, [5.0] * 6 + [0.0] + [5.0] * 63)}  # 0.0 on the window start
+    left = []
+    res = pa.compute_attribution(port, held, spy_df, 63, left_out=left)
+    assert res.empty
+    assert left[0]["reason"] == "no_history"
+
+
+def _band_row(alpha_pct, sector_ret):
+    spy_df = _closes([100] * 6)
+    held = {"AAA": {"df": _closes([100, 100, 100, 100, 100, 100 * (1 + alpha_pct / 100)])}}
+    port = pd.DataFrame([_port_row("AAA", 20, 5000, sector="Consumer Tech")])
+    rets = {"XLY": {"3M": sector_ret}} if sector_ret is not None else None
+    return pa.compute_attribution(port, held, spy_df, 5, rets, "3M").iloc[0]
+
+
+def test_alpha_exactly_at_band_with_sector_beat_is_alpha_generator():
+    assert _band_row(PERF_ALPHA_BAND_PCT, 1.0)["Category"] == "Alpha Generator"
+
+
+def test_alpha_exactly_at_band_with_sector_close_is_sector_rider():
+    assert _band_row(PERF_ALPHA_BAND_PCT, PERF_ALPHA_BAND_PCT - 1.0)["Category"] == "Sector Rider"
+
+
+def test_alpha_at_band_with_sector_missing_is_sector_rider():
+    assert _band_row(PERF_ALPHA_BAND_PCT, None)["Category"] == "Sector Rider"
+
+
+def test_alpha_exactly_minus_band_is_alpha_destroyer():
+    assert _band_row(-PERF_ALPHA_BAND_PCT, None)["Category"] == "Alpha Destroyer"
+
+
+# ── left_out_note ──────────────────────────────────────────────────────────
+
+def test_left_out_note_empty_is_none():
+    assert pa.left_out_note([], "3M") is None
+
+
+def test_left_out_note_wording_per_reason():
+    note = pa.left_out_note([
+        {"ticker": "ANT", "reason": "short_history", "sessions": 2},
+        {"ticker": "ONE", "reason": "short_history", "sessions": 1},
+        {"ticker": "XYZ", "reason": "no_value", "sessions": 5},
+        {"ticker": "NOH", "reason": "no_history", "sessions": 0},
+    ], "3M")
+    assert note == (
+        "Left out: ANT (2 sessions of price history, too short for the 3M window); "
+        "ONE (1 session of price history, too short for the 3M window); "
+        "XYZ (no market value); NOH (no price history)."
+    )
+    assert "$" not in note
+
+
+def test_left_out_note_dedups_tickers_in_input_order():
+    note = pa.left_out_note([
+        {"ticker": "B", "reason": "no_value", "sessions": 0},
+        {"ticker": "A", "reason": "no_history", "sessions": 0},
+        {"ticker": "B", "reason": "no_history", "sessions": 0},
+    ], "1M")
+    assert note.startswith("Left out: B (no market value); A (no price history).")
+    assert note.count("B (") == 1
+
+
+def test_left_out_note_stale_history_wording_uses_the_date():
+    from datetime import date
+    note = pa.left_out_note([
+        {"ticker": "OLD", "reason": "stale_history", "sessions": 40,
+         "last_date": date(2026, 3, 4)},
+    ], "3M")
+    assert note == "Left out: OLD (price history ends on Mar 4 (stale))."
+
+
+# ── stale history ──────────────────────────────────────────────────────────
+
+def test_holding_whose_history_ends_well_before_spy_is_stale_history():
+    spy_df, idx = _spy70()
+    held = {"OLD": _hold(idx[:64], [10.0 + i for i in range(64)])}  # 6 SPY dates after
+    port = pd.DataFrame([_port_row("OLD", 10, 1000)])
+    left = []
+    res = pa.compute_attribution(port, held, spy_df, 63, left_out=left)
+    assert res.empty
+    assert left == [{"ticker": "OLD", "reason": "stale_history", "sessions": 64,
+                     "last_date": idx[63].date()}]
+
+
+def test_holding_ending_within_the_slack_of_spy_is_kept():
+    spy_df, idx = _spy70()
+    held = {"OK": _hold(idx[:65], [10.0 + i for i in range(65)])}  # 5 SPY dates after
+    port = pd.DataFrame([_port_row("OK", 10, 1000)])
+    left = []
+    res = pa.compute_attribution(port, held, spy_df, 63, left_out=left)
+    assert list(res["Ticker"]) == ["OK"]
+    assert left == []
+
+
+# ── cover cut agrees with backtest_vs_spy ──────────────────────────────────
+
+def test_holding_starting_on_the_cover_cut_is_in_both_backtest_and_attribution():
+    from stock_analyzer.perf_backtest import backtest_vs_spy
+    spy_df, idx = _spy70()
+    spy_close = spy_df["Close"]
+    port = pd.DataFrame([_port_row("H", 10, 1000)])
+    # backtest cut for n=63 over 70 sessions = idx[len - n + 5] = idx[12]
+    on_cut = idx[12:]
+    bt = backtest_vs_spy({"H": pd.Series([10.0 + i for i in range(len(on_cut))], index=on_cut)},
+                         {"H": 1.0}, spy_close, 63)
+    assert bt["ok"] and bt["included"] == ["H"]
+    held = {"H": _hold(on_cut, [10.0 + i for i in range(len(on_cut))])}
+    assert len(pa.compute_attribution(port, held, spy_df, 63)) == 1
+
+
+def test_holding_starting_after_the_cover_cut_is_out_of_both():
+    from stock_analyzer.perf_backtest import backtest_vs_spy
+    spy_df, idx = _spy70()
+    port = pd.DataFrame([_port_row("H", 10, 1000)])
+    late = idx[13:]
+    vals = [10.0 + i for i in range(len(late))]
+    bt = backtest_vs_spy({"H": pd.Series(vals, index=late)}, {"H": 1.0}, spy_df["Close"], 63)
+    assert not bt["ok"] and [r["ticker"] for r in bt["left_out"]] == ["H"]
+    left = []
+    res = pa.compute_attribution(port, {"H": _hold(late, vals)}, spy_df, 63, left_out=left)
+    assert res.empty and left[0]["reason"] == "short_history"

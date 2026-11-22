@@ -368,6 +368,10 @@ PULLBACK_SPY_MAX_DOWN   = 1.0   # SPY intraday drop ceiling — above this = rou
 # ± alpha band (percentage points vs benchmark) for classifying a position's
 # relative performance as Outperforming / In Line / Underperforming on the
 # Performance + Relative Strength views. Awareness/display only — never a gate.
+# Also the band perf_advisor.compute_attribution uses for 📊 Diagnostics'
+# Alpha Generator / Sector Rider / Alpha Destroyer category (2026-11-22), which
+# picks the position card's advice text (Trim / Exit wording for a destroyer):
+# changing it moves that advice.
 PERF_ALPHA_BAND_PCT = 5.0
 
 # Minimum reward:risk for an entry to be considered favourable. The composite
