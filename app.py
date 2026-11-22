@@ -4760,11 +4760,13 @@ def _render_trend_table(result: dict, weights, book_empty: bool = False) -> None
             "Trend", "Your weight", "1-week", "3-month", "6-month"]
 
     def _name(r: dict) -> str:
-        secs = r["app_sectors"]
-        joined = " · ".join(secs)
-        if len(secs) > 1 and r["name"] != joined:
-            return f"{r['name']} ({joined})"
+        # just the fund's display name (e.g. "Software"): a fund that backs several
+        # app sectors is spelled out in one caption under the table, so the first
+        # column stays narrow and all eleven columns fit (owner 2026-11-22)
         return r["name"]
+
+    _multi = [r for r in rows
+              if len(r["app_sectors"]) > 1 and r["name"] != " · ".join(r["app_sectors"])]
 
     _idx_syms = {x["symbol"] for x in result["indices"]}
 
@@ -4822,14 +4824,16 @@ def _render_trend_table(result: dict, weights, book_empty: bool = False) -> None
     )
     # height = every row plus the header (Streamlit's 35 px default each), so neither
     # table scrolls inside itself and the Falling rows at the top stay in view
-    # the first column is "large" so "Software (AI & Cloud · AI & Data · Enterprise Tech)"
-    # and "Consumer Staples & Retail" aren't cut off
+    # "medium" first columns: long enough for "Consumer Staples & Retail", narrow
+    # enough that the 3-month / 6-month columns stay inside the dialog
     st.dataframe(idx_frame, hide_index=True, width='stretch',
                  height=(len(idx_rows) + 1) * 35 + 3,
                  column_config={"Index": st.column_config.TextColumn(width="medium")})
     st.dataframe(sec_frame, hide_index=True, width='stretch',
                  height=(len(sec_rows) + 1) * 35 + 3,
-                 column_config={"Sector": st.column_config.TextColumn(width="large")})
+                 column_config={"Sector": st.column_config.TextColumn(width="medium")})
+    for _m in _multi:
+        st.caption(f"{_m['name']} ({_m['symbol']}) = {' · '.join(_m['app_sectors'])}")
     st.caption(weight_note)
     if result["not_checked"]:
         st.caption("Not checked: " + ", ".join(result["not_checked"]) + " (see the Trend column).")
