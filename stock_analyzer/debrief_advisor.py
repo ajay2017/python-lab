@@ -1014,6 +1014,11 @@ def _parse_response(text: str) -> dict:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+# Header above the model's protective / closed bullets when the app's entry block
+# precedes them (no heading when the entry block is absent).
+AI_DECISIONS_HEADING = "Protective signals and closed positions this week:"
+
+
 def _entry_bullet_lines(package: dict) -> "list[str]":
     """The app-written entry-signal bullets for a package, [] when it carries no
     entry-call info (recs unavailable: RECS_UNAVAILABLE_NOTE discloses it)."""
@@ -1085,8 +1090,12 @@ def generate_debrief(
         _entry_lines = _entry_bullet_lines(package)
         if _entry_lines:
             _parts.append("\n".join(_entry_lines))
-        if (sections.get("section_decisions") or "").strip():
-            _parts.append(sections["section_decisions"].strip())
+        _ai_dec = (sections.get("section_decisions") or "").strip()
+        if _ai_dec:
+            # DebriefHeading: under the app's entry block the model's bullets would
+            # read as more of the last header's list, so they get their own header
+            # (directly above them, like the entry headers).
+            _parts.append(f"{AI_DECISIONS_HEADING}\n{_ai_dec}" if _entry_lines else _ai_dec)
         for _note in (protective_unavailable_note(package),
                       recs_unavailable_note(package)):
             if _note:

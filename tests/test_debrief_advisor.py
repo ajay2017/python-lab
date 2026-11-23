@@ -862,7 +862,8 @@ def test_generated_debrief_carries_the_note_in_the_saved_decisions_text():
     result = da.generate_debrief(pkg, api_key="fake-key")
     # the app's own entry block (a supplied empty frame = a quiet week) leads
     assert result["section_decisions"] == (
-        _ENTRY_QUIET_BLOCK + "\n\nDecisions text.\n\n" + da.PROTECTIVE_UNAVAILABLE_NOTE)
+        _ENTRY_QUIET_BLOCK + "\n\n" + da.AI_DECISIONS_HEADING + "\nDecisions text.\n\n"
+        + da.PROTECTIVE_UNAVAILABLE_NOTE)
     assert "$" not in da.PROTECTIVE_UNAVAILABLE_NOTE and "**" not in da.PROTECTIVE_UNAVAILABLE_NOTE
     assert set(result) <= set(db._WEEKLY_DEBRIEF_COLS)    # every key has a column
     # a reply with an empty Decisions section still shows the line
@@ -878,7 +879,8 @@ def test_generated_debrief_without_failure_has_no_note():
         pkg = da.build_debrief_package(SUN, core, pd.DataFrame(), t, **kw)
         _install_fake_anthropic(_RAW)
         result = da.generate_debrief(pkg, api_key="fake-key")
-        assert result["section_decisions"] == _ENTRY_QUIET_BLOCK + "\n\nDecisions text."
+        assert result["section_decisions"] == (
+            _ENTRY_QUIET_BLOCK + "\n\n" + da.AI_DECISIONS_HEADING + "\nDecisions text.")
         assert "couldn't be loaded" not in result["section_decisions"]
 
 
@@ -1071,6 +1073,89 @@ def test_generate_with_unavailable_recs_has_no_entry_block_and_still_stamps_the_
     result = _generate_for(pkg, _RAW)
     assert "Entry signals this week:" not in result["section_decisions"]
     assert result["acted_rule_version"] == 2
+
+
+# ─── DebriefHeading: the AI's bullets get their own header under the entry block ──
+
+def _carried_pkg():
+    """AAA carried over from last week (acted Tue 07-21), DDD this week."""
+    return _generic_pkg(
+        pd.DataFrame([_call("AAA", "2026-07-17"), _call("DDD", "2026-07-21")]),
+        trades_extra=[{"ticker": "AAA", "action": "BUY",
+                       "traded_at": "2026-07-21T14:00:00+00:00"}],
+        exit_signals_df=pd.DataFrame([_exit_sig("BBB", "2026-07-21", "TRIM")]))
+
+
+_HEADING_REPLY = (
+    "**What happened**\nFacts text.\n\n"
+    "**Decisions you made**\n"
+    "• BBB: TRIM signal (surfaced 2×). You held — not acted on.\n"
+    "• CCC: Position closed this week.\n\n"
+    "**Patterns this week**\nPatterns text.")
+
+
+def test_heading_sits_after_the_carried_over_bullets_and_directly_above_the_ai_bullets():
+    result = _generate_for(_carried_pkg(), _HEADING_REPLY)
+    dec = result["section_decisions"]
+    assert dec.count(da.AI_DECISIONS_HEADING) == 1
+    lines = dec.split("\n")
+    h = lines.index(da.AI_DECISIONS_HEADING)
+    carried_hdr = lines.index("Carried over from last week:")
+    last_carried_bullet = max(i for i, ln in enumerate(lines)
+                              if ln.startswith("• AAA:"))
+    assert carried_hdr < last_carried_bullet < h
+    assert lines[h + 1] == "• BBB: TRIM signal (surfaced 2×). You held — not acted on."
+    assert lines[h + 2] == "• CCC: Position closed this week."
+    assert lines[h - 1] == ""                       # one blank line before the heading
+
+
+def test_heading_appears_between_the_entry_block_and_the_ai_text_with_no_carried_over():
+    pkg = _generic_pkg(pd.DataFrame([_call("DDD", "2026-07-20")]),
+                       exit_signals_df=pd.DataFrame())
+    assert not pkg["entry_carried_over"]
+    dec = _generate_for(pkg, _RAW)["section_decisions"]
+    assert "Carried over from last week:" not in dec
+    assert dec.count(da.AI_DECISIONS_HEADING) == 1
+    assert dec.index("Entry signals this week:") < dec.index(da.AI_DECISIONS_HEADING)
+    assert dec.endswith(da.AI_DECISIONS_HEADING + "\nDecisions text.")
+
+
+def test_no_heading_without_an_entry_block():
+    core, (t, _a, _dl) = _week_core()
+    pkg = da.build_debrief_package(SUN, core, None, t, exit_signals_df=pd.DataFrame())
+    dec = _generate_for(pkg, _RAW)["section_decisions"]
+    assert da.AI_DECISIONS_HEADING not in dec
+    assert dec == "Decisions text.\n\n" + da.recs_unavailable_note(pkg)
+
+
+def test_no_heading_when_the_ai_decisions_section_is_empty():
+    pkg = _generic_pkg(pd.DataFrame([_call("DDD", "2026-07-20")]),
+                       exit_signals_df=pd.DataFrame())
+    dec = _generate_for(pkg, "**What happened**\nFacts text.")["section_decisions"]
+    assert da.AI_DECISIONS_HEADING not in dec
+    assert dec.startswith("Entry signals this week:")
+
+
+def test_email_carries_the_ai_decisions_heading():
+    from stock_analyzer import notify
+    pkg = _carried_pkg()
+    result = _generate_for(pkg, _HEADING_REPLY)
+    html = notify.render_debrief_email(result, period=pkg)
+    assert da.AI_DECISIONS_HEADING in html
+    # the bug showed in the rendering: the carried-over list must close before
+    # the heading, which is its own paragraph, not a list item
+    head_at = html.index(da.AI_DECISIONS_HEADING)
+    assert "</ul>" in html[:head_at]
+    assert html.rfind("<p", 0, head_at) > html.rfind("</ul>", 0, head_at)
+    assert html.rfind("<li", 0, head_at) < html.rfind("</ul>", 0, head_at)
+
+
+def test_reports_markdown_renders_the_heading_as_its_own_paragraph():
+    from stock_analyzer import report_display
+    result = _generate_for(_carried_pkg(), _HEADING_REPLY)
+    md = report_display.report_markdown(result["section_decisions"])
+    assert "\n\n" + da.AI_DECISIONS_HEADING + "\n\n- BBB" in md
+    assert "- " + da.AI_DECISIONS_HEADING not in md
 
 
 # ─── behavioral / decision-quality enrichment ─────────────────────────────────
