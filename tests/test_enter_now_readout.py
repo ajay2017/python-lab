@@ -370,7 +370,7 @@ def _non_docstring_strings(tree: ast.AST) -> list[str]:
 
 
 def test_splits_are_market_state_only_no_composite_or_score_band():
-    assert len(eno.SPLITS) == 5
+    assert len(eno.SPLITS) == 9  # 5 market-state splits + the entry regime rules A / B / C + the Nasdaq label (C2)
     for title, field, order in eno.SPLITS:
         text = " ".join([title, field, *order]).lower()
         assert "composite" not in text and "score" not in text and "band" not in text

@@ -723,6 +723,10 @@ TREND_BEAR_PCT                = -20.0  # index rows only: this far (or more) bel
 ENTRY_REGIME_RULE_VERSION        = 1   # bump on ANY change to a rule definition (in entry_regime.py), to a TREND_* / RISK_OFF_* value the rules depend on, or to market_trend's label logic (precedent: COMPOSITE_WEIGHTS_VERSION); recorded on every shadow row.
 ENTRY_REGIME_HOLD_SPX_LABELS     = ("weakening", "falling")             # rule A (primary): the S&P 500 F-319 trend label is one of these = hold.
 ENTRY_REGIME_ALT_HOLD_SPX_LABELS = ("weakening", "falling", "steady")   # rule B (named secondary): A plus Steady, i.e. anything but Rising.
+# Owner-pre-registered go-live criteria (docs/plans/entry-regime-check.md §4, set
+# BEFORE the readout was first run). Readout-only: no app decision reads them yet.
+ENTRY_REGIME_GO_LIVE_MARGIN_PP       = 15.0  # criterion 2: rule A's "hold" cell must beat SPY at least this many percentage points LESS often than its "pass" cell (per episode, 30 sessions).
+ENTRY_REGIME_GO_LIVE_EARLY_HORIZON   = 10    # criterion 4: the early-read horizon in NYSE sessions (hold's beat-SPY share must be below pass's here too).
 
 # Cross-asset regime signals — thresholds for the Cross-Asset Pulse card (Risk tab).
 # Each signal is independent; score = count of stressed signals (0–5).
