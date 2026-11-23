@@ -715,6 +715,15 @@ TREND_HIGH_LOOKBACK_SESSIONS  = 252    # 52-week high = standard trading-year se
 TREND_CORRECTION_PCT          = -10.0  # index rows only: this far (or more) below the 52-week closing high reads "correction" (owner).
 TREND_BEAR_PCT                = -20.0  # index rows only: this far (or more) below the 52-week closing high reads "bear market" (owner).
 
+# ── Entry regime check (MEASURE ONLY; docs/plans/entry-regime-check.md §3) ──
+# Pre-registered 2026-11-22 (owner-approved with the rules). Read by
+# stock_analyzer/entry_regime.py, which is shadow-only: no decision reads it
+# until the plan's go-live criteria (§4) are met. Rule C reuses RISK_OFF_VIX_LEVEL /
+# RISK_OFF_TREND_MA above (no separate constant).
+ENTRY_REGIME_RULE_VERSION        = 1   # bump on ANY change to a rule definition (in entry_regime.py), to a TREND_* / RISK_OFF_* value the rules depend on, or to market_trend's label logic (precedent: COMPOSITE_WEIGHTS_VERSION); recorded on every shadow row.
+ENTRY_REGIME_HOLD_SPX_LABELS     = ("weakening", "falling")             # rule A (primary): the S&P 500 F-319 trend label is one of these = hold.
+ENTRY_REGIME_ALT_HOLD_SPX_LABELS = ("weakening", "falling", "steady")   # rule B (named secondary): A plus Steady, i.e. anything but Rising.
+
 # Cross-asset regime signals — thresholds for the Cross-Asset Pulse card (Risk tab).
 # Each signal is independent; score = count of stressed signals (0–5).
 CROSS_ASSET_HYG_TREND_DAYS     = 20    # lookback window (days) for HYG linear trend

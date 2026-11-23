@@ -1280,6 +1280,12 @@ _GATE_FILES = {
     # the owner a falling market is fine, or contradicts Market-Risk Posture.
     # Display only today; gated from the start so a later rule edit gets review.
     "stock_analyzer/market_trend.py",
+    # Added 2026-11-22 (EnterNowInProtect C1, docs/plans/entry-regime-check.md):
+    # decides the hold / clear / unknown verdict of the pre-registered entry regime
+    # rules A / B / C and the daily shadow row; a wrong call mis-measures (and at
+    # go-live would mis-gate) new entries. Measure-only while unwired; gated from
+    # the start so a later rule edit gets review.
+    "stock_analyzer/entry_regime.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

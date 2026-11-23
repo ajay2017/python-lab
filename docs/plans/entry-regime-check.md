@@ -1,6 +1,6 @@
 # Entry regime check: a market-trend hold on new entries (EnterNowInProtect step 2)
 
-**Status:** DESIGNED 2026-11-22 (Opus planner PROCEED WITH CHANGES). Owner decisions taken 2026-11-22: U1 = rule A primary, U2 = B and C shadowed as named secondaries, go-live margin = 15 pp (U5), build C1 + C2 now and C3 after the owner has read C2. **Nothing is wired into any decision.** The go-live criteria below are pre-registered before C2 is run over the past calls. Next: C1 (pure module), then C2 (the readout over every logged call), owner checkpoint, then C3 (live daily shadow; the owner applies its DDL first). Bug-register row: EnterNowInProtect.
+**Status:** DESIGNED 2026-11-22 (Opus planner PROCEED WITH CHANGES). Owner decisions taken 2026-11-22: U1 = rule A primary, U2 = B and C shadowed as named secondaries, go-live margin = 15 pp (U5), build C1 + C2 now and C3 after the owner has read C2. **Nothing is wired into any decision.** The go-live criteria below are pre-registered (committed `1510d2d8`) before C2 is run over the past calls. **C1 BUILT 2026-11-22** (`stock_analyzer/entry_regime.py`, `_GATE_FILES` 102, three constants; Opus FIX-FIRST: the no-importer pin walks every module with an allowlist, a tz-aware time converts to its ET date, the fingerprint is keyed by rule version → confirming round). C2 (the readout over every logged call) built alongside; next: its review, the owner's run (checkpoint), then C3 (live daily shadow; the owner applies its DDL first). Bug-register row: EnterNowInProtect.
 
 ## 1. Why
 

@@ -3,7 +3,10 @@
 Labels the S&P 500, the Nasdaq and every `portfolio.SECTOR_ETF` fund Rising /
 Weakening / Falling / Steady from CLOSES UP TO an as-of session. It changes no
 pick, size, stop or gate: the label is shown beside a named fund or index and
-nothing reads it back as a decision input.
+no decision reads it back. Its one non-display consumer is the measure-only
+`entry_regime` (a shadow record, docs/plans/entry-regime-check.md); no decision
+reads that either. A change to the label logic here changes entry_regime's
+rules A and B: bump ENTRY_REGIME_RULE_VERSION with it.
 
 Pure: no streamlit, no network, no DB. Every threshold comparison lives here
 (cut-offs are in `constants.py`: the `TREND_*` block plus the shared
