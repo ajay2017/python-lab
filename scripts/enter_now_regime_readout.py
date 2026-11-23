@@ -163,9 +163,13 @@ def print_report(rows: list[dict], episode_rows: list[dict], horizon: int, headi
     ep_alphas = {"all matured episodes": [r[af] for r in episode_rows if r.get(af) is not None]}
     print_block("BY EPISODE (graded from each episode's first call): headline",
                 ep_alphas, GATE_LEDGER_MIN_CALLS)
-    title, field, order = eno.SPLITS[0]
-    print_block(f"BY EPISODE: {title}",
-                eno.cells_by(episode_rows, field, af, order), GATE_LEDGER_MIN_CALLS)
+    # Every market-state split by episode too (owner 2026-11-22): the per-call
+    # cells count one name's run of calls many times (1,016 calls were 142
+    # episodes), so a policy reading must come from these. An episode carries
+    # the market state of its FIRST call.
+    for title, field, order in eno.SPLITS:
+        print_block(f"BY EPISODE: {title}",
+                    eno.cells_by(episode_rows, field, af, order), GATE_LEDGER_MIN_CALLS)
 
 
 # -- main ---------------------------------------------------------------------
