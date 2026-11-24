@@ -93,6 +93,34 @@ def _no_real_yfinance_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_supabase_network(monkeypatch):
+    """No test may make a real Supabase (httpx) request. A test that patches
+    `db.has_db` to True but leaves a `db` read unmocked (e.g. the maintenance
+    lane's `reference_data.resolve_universe` -> `db.load_reference_table`) builds
+    a REAL client on a machine that has `.streamlit/secrets.toml` or SUPABASE_*
+    env set, and then sits in `socket.getaddrinfo` / connect for ~33 s per read
+    (2026-11-24 suite measurement: 14 maintenance-lane tests at ~100 s each).
+    CI and Railway have no creds, so `has_db()` is False there and nothing is
+    sent: this makes a developer laptop behave the same.
+
+    Raises `httpx.ConnectError` (an ordinary Exception), the same failure an
+    offline box produces, so every `load_*` read degrades to its own offline
+    sentinel exactly as it does in CI. Patched at the transport, so httpx
+    `MockTransport` based tests are unaffected; a test that needs another
+    behaviour patches `db._client` / the loader itself (monkeypatch stacks)."""
+    try:
+        import httpx
+    except Exception:
+        return
+
+    def _blocked(self, request, *a, **k):
+        raise httpx.ConnectError(
+            f"real network request in a test: {request.url}", request=request)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", _blocked)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_risk_free_fetch(monkeypatch):
     """`fetch_risk_free_rate` swallows its own network failure and falls back to
     4.5%, so several morning-picks tests silently hit Yahoo (^IRX) for years. With
