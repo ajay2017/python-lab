@@ -121,6 +121,7 @@ from stock_analyzer import broker_frame_view as _broker_frame_view
 from stock_analyzer import home_dock
 from stock_analyzer import home_dock_digest
 from stock_analyzer import market_trend
+from stock_analyzer import playbook_trend_view
 from stock_analyzer import brief_chips
 from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.valuation_target import pt_label as _pt_label
@@ -4957,6 +4958,94 @@ def _render_trend_table(result: dict, weights, book_empty: bool = False) -> None
     st.caption(weight_note)
     if result["not_checked"]:
         st.caption("Not checked: " + ", ".join(result["not_checked"]) + " (see the Trend column).")
+
+
+def _render_playbook_vs_trend(fav: dict, trend_result, weights) -> None:
+    """🌐 Macro -> 📡 Macro signals: the Sector Rotation Playbook beside each
+    sector's actual trend (PlaybookVsTrend; mockup option C chart on top, option A
+    cards under it). Display only and render-only: every row, clash flag, label,
+    position and string comes from `playbook_trend_view`, and the trend result is the
+    one `_cached_market_trend` already holds for the 📈 tab (no download here).
+    trend_result None = couldn't read: the cards say "trend not checked", the chart
+    gives way to a caption and nothing is flagged."""
+    _pv = playbook_trend_view
+    _rows = _pv.rows(fav, trend_result, weights, RATE_SENSITIVITY)
+    _as_of = market_trend.fmt_session(trend_result["as_of"]) if trend_result is not None else None
+    st.markdown(f"**{_pv.HEADING}**")
+    st.caption(_pv.caption(_as_of))
+    st.caption(fav["reason"])
+    if _rows:
+        if trend_result is None:
+            st.caption(_pv.NO_TREND_CAPTION)
+        else:
+            _pts, _left_out = _pv.chart_points(_rows)
+            if not _pts:
+                st.caption(_pv.NO_POINTS_CAPTION)
+            else:
+                _b = _pv.y_bound(_pts)
+                _fig = go.Figure(go.Scatter(
+                    x=[p["x"] for p in _pts],
+                    y=[p["y"] for p in _pts],
+                    mode="markers+text",
+                    text=[_pv.point_label(p) for p in _pts],
+                    textposition="top center",
+                    textfont=dict(size=11),
+                    cliponaxis=False,
+                    hovertext=[_pv.hover_text(p) for p in _pts],
+                    hoverinfo="text",
+                    marker=dict(
+                        size=[_pv.dot_size(p["weight_pct"]) for p in _pts],
+                        color=[_pv.LABEL_COLOUR[p["label"]] for p in _pts],
+                        line=dict(
+                            color=[_pv.CLASH_COLOUR if p["clash"] else "rgba(0,0,0,0)" for p in _pts],
+                            width=[3 if p["clash"] else 0 for p in _pts],
+                        ),
+                    ),
+                    showlegend=False,
+                ))
+                # four zones shaded by whether map side and the 4-week gap point the same way
+                # (green) or not (amber); captions are neutral facts, the ring is the label check
+                for _x0, _x1, _y0, _y1, _fill in (
+                    (-1, 0, 0, _b, _pv.ZONE_CLASH_FILL), (0, 1, 0, _b, _pv.ZONE_AGREE_FILL),
+                    (-1, 0, -_b, 0, _pv.ZONE_AGREE_FILL), (0, 1, -_b, 0, _pv.ZONE_CLASH_FILL),
+                ):
+                    _fig.add_shape(type="rect", x0=_x0, x1=_x1, y0=_y0, y1=_y1, fillcolor=_fill,
+                                   opacity=0.7, line_width=0, layer="below")
+                _fig.add_vline(x=0, line_color="#9ca3af", line_dash="dash", line_width=1)
+                _fig.add_hline(y=0, line_color="#9ca3af", line_width=1)
+                # neutral caption colour: the zones state only beat / trailed the S&P 500,
+                # the amber ring (not the zone) is the trend-label check
+                for _ax, _ay, _xa, _ya, _key, _col in (
+                    (-0.98, 1, "left", "top", "top_left", "#9ca3af"),
+                    (0.98, 1, "right", "top", "top_right", "#9ca3af"),
+                    (-0.98, 0, "left", "bottom", "bottom_left", "#9ca3af"),
+                    (0.98, 0, "right", "bottom", "bottom_right", "#9ca3af"),
+                ):
+                    _fig.add_annotation(x=_ax, y=_ay, xref="x", yref="paper", xanchor=_xa,
+                                        yanchor=_ya, text=f"<b>{_pv.ZONE_TEXT[_key]}</b>",
+                                        showarrow=False, font=dict(size=12, color=_col))
+                for _ax, _txt, _col in ((-0.5, _pv.X_LAGS_TITLE, _pv.LAGS_COLOUR),
+                                        (0.5, _pv.X_FAVOURED_TITLE, _pv.FAVOURED_COLOUR)):
+                    _fig.add_annotation(x=_ax, y=0, xref="x", yref="paper", yanchor="top",
+                                        text=f"<b>{_txt}</b>", showarrow=False,
+                                        font=dict(size=13, color=_col))
+                _fig.update_layout(
+                    template="plotly_dark", height=460,
+                    margin=dict(l=0, r=0, t=10, b=50),
+                    xaxis=dict(range=[-1, 1], showticklabels=False, showgrid=False, zeroline=False),
+                    yaxis=dict(range=[-_b, _b], title=_pv.Y_AXIS_TITLE, showgrid=False,
+                               zeroline=False),
+                )
+                st.markdown(f"**{_pv.chart_title(_as_of)}**")
+                st.plotly_chart(_fig, width="stretch")
+                if _left_out:
+                    st.caption(_pv.left_out_caption(_left_out))
+                st.caption(_pv.CHART_LEGEND_CAPTION)
+    _pb1, _pb2 = st.columns(2)
+    with _pb1:
+        st.html(_pv.cards_html(_rows, _pv.SIDE_FAVOURED))
+    with _pb2:
+        st.html(_pv.cards_html(_rows, _pv.SIDE_LAGS))
 
 
 # ── Factor-proxy ETF daily returns (for Portfolio Intelligence Factor Tilt) ──
@@ -25226,6 +25315,7 @@ elif page == "🌐 Macro":
         # "Your weight" waits); the 📡 Macro signals tab keeps its own wait.
         with st.spinner("Loading index and sector-fund prices…"):
             _trend_res = _cached_market_trend(market_trend.as_of_session(_now_et()).isoformat())
+        _trend_w = None  # the 📡 tab below reuses this; stays None when the trend couldn't be read
         if _trend_res is None:
             st.info(
                 "ℹ️ Trend unavailable: the index and sector-fund prices couldn't be loaded. "
@@ -25247,7 +25337,9 @@ elif page == "🌐 Macro":
         st.caption(
             "Detects the current macro regime (rising/falling rates, risk-on/off) from live ETF proxies "
             "and shows which holdings are in the tailwind or headwind. "
-            "Institutional practice uses macro regime overlays to tilt sector weights 3–5% above/below benchmark."
+            "The Sector Rotation Playbook below is a fixed map of which sectors usually do well in "
+            "that kind of market: context, not a target weighting, and not a read of each sector's "
+            "own prices (the 📈 trend tab is that)."
         )
 
         port_df = st.session_state.get("_port_df_enriched", pd.DataFrame())
@@ -25316,27 +25408,13 @@ elif page == "🌐 Macro":
 
                     _fav = REGIME_FAVORED[regime["combined"]]
                     st.markdown("---")
-                    st.markdown("**Sector Rotation Playbook for this Regime**")
-                    st.caption(_fav["reason"])
-                    _pb1, _pb2 = st.columns(2)
-                    with _pb1:
-                        if _fav["overweight"]:
-                            st.markdown("🟢 **Overweight**")
-                            for _s in _fav["overweight"]:
-                                rs = RATE_SENSITIVITY.get(_s, 0)
-                                st.markdown(f"- {_s} &nbsp; *(rate sensitivity {rs:+.2f})*",
-                                            unsafe_allow_html=True)
-                        else:
-                            st.markdown("🟢 **Overweight** — none flagged")
-                    with _pb2:
-                        if _fav["underweight"]:
-                            st.markdown("🔴 **Underweight / Reduce**")
-                            for _s in _fav["underweight"]:
-                                rs = RATE_SENSITIVITY.get(_s, 0)
-                                st.markdown(f"- {_s} &nbsp; *(rate sensitivity {rs:+.2f})*",
-                                            unsafe_allow_html=True)
-                        else:
-                            st.markdown("🔴 **Underweight** — none flagged")
+                    # the SAME result object and weights the 📈 tab above read this run
+                    # (_trend_res / _trend_w): no second fetch, no second held_weights
+                    try:
+                        _render_playbook_vs_trend(_fav, _trend_res, _trend_w)
+                    except Exception as _pbe:
+                        print(f"[playbook_trend] render failed: {type(_pbe).__name__}: {_pbe}")
+                        st.caption("The Sector Rotation Playbook couldn't be drawn this run.")
 
                     st.markdown("---")
                     st.markdown("**Your Portfolio — Macro Alignment**")
@@ -25355,6 +25433,7 @@ elif page == "🌐 Macro":
                         _ec3.metric("Headwind positions", _nh,  help="Sector disfavored in current regime")
                         _ec4.metric("% in headwind sectors", f"{_headwind_weight:.0f}%",
                                     help="Combined weight of positions facing macro headwinds")
+                        st.caption(playbook_trend_view.ALIGNMENT_CAPTION)
 
                         # Positions whose sector has no structural rate label carry
                         # NaN (not a fabricated 0.0). Exclude them from the CHART
@@ -46811,7 +46890,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
 - **📋 Watchlist** — names you're tracking, with enter-now flags. Defaults to a **🎯 Actionable** filter (just the Enter Now / Near Entry names) rather than showing everything at once — other chips (Hold / Waiting / Remove / All), a ticker search box, and a sort dropdown are there to look further. Old, forgotten names that just became actionable get a "👁️ actionable again" callout. A name that says Enter Now but that you **sold today** shows a "Sold Today" warning instead of the entry card; it comes back the next day if the setup still qualifies. A well-scored name whose R:R is below 2:1 shows as **Near Entry**, and its card says R:R is below the 2:1 minimum and, when its target is an analyst target, the price it would need to pull back to for R:R to reach 2:1: set a price alert there (an estimate, not a buy order; if price gets there the app re-checks everything before calling an entry). The entry zone on this page is built around the price the card shows, so the 2:1 R:R check is what stops you overpaying. A **Ready to Enter** card can carry a soft caption noting the sector was classified only from the data provider's own label (the ticker isn't on the curated sector map) — the sector-cap check still ran, just against a less exact bucket.
 - **🧵 Thesis** — read-only consolidation of five features per ticker: your saved **Thesis** (what you believed at entry), **F-1 Review** (AI verdict: Intact / Weakening / Broken), **Thesis Red Team** (erosion score + counter-evidence), **Multi-Agent Debate** (Bull/Bear/Judge verdict), **Analyst Coverage** (saved research + consensus), and **Pre-Mortem** (your stated risk case + breached triggers). Every evidence line carries a **provenance tag** (📊 fact / 🧮 derived / 🏦 analyst opinion / 🤖 AI inference / 🖊 your words) so you always know what kind of claim you're looking at. Missing data is disclosed honestly (e.g. "No debate on record," "Erosion not computed today") rather than silently omitted. A **tension banner** surfaces when the engine composite, F-1 verdict, analyst consensus, and debate verdict genuinely disagree with each other — awareness only, never a gate. **"What changed since last review"** now shows a real diff comparing your two most recent evidence snapshots, reporting material composite moves, erosion shifts, analyst price-target cuts, newly-saved research, market-regime changes, and F-1 verdict changes; when insufficient history exists or no change crossed a threshold, it discloses that honestly instead. Awareness only; never gates or recommends.
-- **🌐 Macro** — two tabs. **📈 Market and sector trend** (opens first, and works before 🏠 Home has loaded your book) labels the S&P 500, the Nasdaq and each sector fund **Rising**, **Weakening**, **Falling** or **Steady** from the closes up to the last completed trading day (the caption names that close; the index tiles elsewhere are live, this is not). A sector fund is Weakening when it is below its 50-day average or its 4-week return trails the S&P 500's by more than 3 points, and Falling when both hold for 3 trading days in a row; Rising means above a 50-day average that is itself rising, with neither Weakening sign. The S&P 500 and Nasdaq use their 200-day average in place of the S&P comparison, so they can't read Rising while below it, and say "correction" or "bear market" when 10% or 20% below their 52-week closing high. A summary line names the Falling and Rising sectors with your share in each, then two tables give the 4-week return, the gap to the S&P 500, how long it has been above or below its 50-day average, the drop from the high, the label, your weight (from Home's last build) and the 1-week / 3-month / 6-month returns. The labels describe what has happened, never a forecast, and change no pick, size or stop. 🧭 Market-Risk Posture reads SPY with dividends included, so near the 200-day line the S&P row here can read "below" for a few days while Posture is still clear; when they differ, this page is the more cautious one. **📡 Macro signals** (after Home has loaded your book; loads by itself, kept up to 30 minutes): the ETF-proxy regime read (rates from TLT, volatility from VIX, market from SPY over 3 months), the Sector Rotation Playbook for that regime, and how your holdings line up with it (tailwind / neutral / headwind).
+- **🌐 Macro** — two tabs. **📈 Market and sector trend** (opens first, and works before 🏠 Home has loaded your book) labels the S&P 500, the Nasdaq and each sector fund **Rising**, **Weakening**, **Falling** or **Steady** from the closes up to the last completed trading day (the caption names that close; the index tiles elsewhere are live, this is not). A sector fund is Weakening when it is below its 50-day average or its 4-week return trails the S&P 500's by more than 3 points, and Falling when both hold for 3 trading days in a row; Rising means above a 50-day average that is itself rising, with neither Weakening sign. The S&P 500 and Nasdaq use their 200-day average in place of the S&P comparison, so they can't read Rising while below it, and say "correction" or "bear market" when 10% or 20% below their 52-week closing high. A summary line names the Falling and Rising sectors with your share in each, then two tables give the 4-week return, the gap to the S&P 500, how long it has been above or below its 50-day average, the drop from the high, the label, your weight (from Home's last build) and the 1-week / 3-month / 6-month returns. The labels describe what has happened, never a forecast, and change no pick, size or stop. 🧭 Market-Risk Posture reads SPY with dividends included, so near the 200-day line the S&P row here can read "below" for a few days while Posture is still clear; when they differ, this page is the more cautious one. **📡 Macro signals** (after Home has loaded your book; loads by itself, kept up to 30 minutes): the ETF-proxy regime read (rates from TLT, volatility from VIX, market from SPY over 3 months), the **Sector Rotation Playbook: what usually leads in this regime** (a fixed map of what tends to do well or badly in that kind of market, not a read of current prices), and how your holdings line up with it (tailwind / neutral / headwind; that is the map, not each sector's trend). Under the Playbook heading a chart, **Playbook vs what actually happened**, plots each sector fund's 4-week gap to the S&P 500 against the map's side (right = **Usually favoured**, left = **Usually lags**), with dot colour = the trend label and dot size = your weight (your share of your holdings' value in that fund's sector(s), at 🏠 Home's last build); the **Usually favoured** / **Usually lags** cards below list the same sectors with their trend chip. A card and its dot get an amber **⚠ trend disagrees** marker only when a favoured sector is Falling or a lagging sector is Rising (Weakening and Steady are never flagged, and nothing is flagged when the trend couldn't be read); the map is unchanged and the marker changes no pick, size or stop.
 - **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Discretion Value, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel ("What This Means For You") that turns the data into short **watch / caution observations** about your own history, never size-up/skip instructions (the live gates own entry and sizing). **Scope, stated on a line under the title:** only gated BUY calls (New Position / Add to Winner / Watchlist Enter Now) scored under the *current* composite weights; awareness-only Buy Candidate rows, rows scored under older weights (or with no recorded weights version), and ETFs are excluded and counted. **Every count is distinct tickers**, each at its first surfacing (your acted row if you bought it) — a name the scanner re-surfaced for 20 days counts once, not 20 times. The **personal threshold** on Score Calibration is the lowest composite floor where every band at or above it with enough tickers beat SPY *both* on average *and* in at least half of its tickers; thinner bands above it are listed as "not counted". Outcomes run from the call to today's price, and acted outcomes are marked from your fill to today, as if still held — not realized P&L. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Its Day+1 / Day+5 / Day+20 are fixed horizons (1, 5 and 20 trading days after the call). Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates. **Read the coverage line at the top before trusting any figure on this page.** It states how many matured recommendations could actually be scored and — for those that could not — exactly why, one reason at a time: sold positions (excluded by design, since realized P&L spans a holding period no single market window can benchmark), recommendations with no current price, ones with no entry price logged, and ones the SPY benchmark couldn't cover. The missing-price bucket is the one worth watching: a failed price lookup tends to happen on delisted, acquired or renamed tickers, so those exclusions are **not random** and the names are listed so you can see them. If more matured recommendations were dropped than scored, an amber note says so — every average on the page describes only the ones that could be scored.
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, a **🧭 Sector Gaps** pointer (sectors you're underweight/unheld that could genuinely diversify this book, linking to the full Diversification Advisor), and Analytics (relative strength, sector rotation, rankings, and a **Portfolio vs. S&P 500** real-sector benchmark tilt — uses each holding's actual market sector, not this app's thematic groupings) for your current holdings.
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
