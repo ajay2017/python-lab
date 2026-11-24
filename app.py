@@ -8885,7 +8885,7 @@ if page == "🏠 Home":
                ))
     _c2.metric(
         "Unrealized P&L",
-        _m(f"${total_pnl:,.0f}"),
+        _m(_signed_usd(total_pnl, 0)),
         f"{total_pnl_pct:+.1f}%",
         delta_color="normal",
         help=(
@@ -8955,9 +8955,9 @@ if page == "🏠 Home":
     # Streamlit's arrow/color parser sees the minus (a "$-450" delta string is
     # mis-parsed as positive because the $ prefix hides the sign).
     _c7.metric(f"Best: {best_row['Ticker']}",
-               _m(f"${best_row['P&L ($)']:,.0f}"), f"{best_row['P&L (%)']:+.1f}%", delta_color="normal")
+               _m(_signed_usd(best_row['P&L ($)'], 0)), f"{best_row['P&L (%)']:+.1f}%", delta_color="normal")
     _c8.metric(f"Worst: {worst_row['Ticker']}",
-               _m(f"${worst_row['P&L ($)']:,.0f}"), f"{worst_row['P&L (%)']:+.1f}%", delta_color="normal")
+               _m(_signed_usd(worst_row['P&L ($)'], 0)), f"{worst_row['P&L (%)']:+.1f}%", delta_color="normal")
 
     # Leverage caption — awareness only, never a gate (option (c) was parked
     # 2026-08-25; this is surfacing only). Reads the cache published earlier this
@@ -15200,7 +15200,7 @@ elif page == "🧾 Summary":
                 key="sm_pv_spark",
             )
     with _s2, st.container(border=True):
-        st.metric("Unrealized P&L", _m(f"${_sm_total_pnl:,.0f}"),
+        st.metric("Unrealized P&L", _m(_signed_usd(_sm_total_pnl, 0)),
                   f"{_sm_total_pnl_pct:+.1f}%", delta_color="normal")
     with _s3, st.container(border=True):
         if _sm_dpnl is not None:
@@ -19934,7 +19934,7 @@ elif page == "🔗 Risk Analysis":
                             "Weight (%)":       "{:.1f}%",
                             "Market Value ($)": "${:,.0f}",
                             "Est. Move (%)":    "{:+.1f}%",
-                            "Est. P&L ($)":     "${:+,.0f}",
+                            "Est. P&L ($)":     lambda v: _signed_usd(v, 0),
                         }),
                         width='stretch', hide_index=True,
                     )
@@ -20073,7 +20073,7 @@ elif page == "🔗 Risk Analysis":
 
                     st.dataframe(
                         _cmp_df.style.apply(_cmp_style, axis=1).format({
-                            "Est. P&L ($)":   "${:+,.0f}",
+                            "Est. P&L ($)":   lambda v: _signed_usd(v, 0),
                             "Post Value ($)":  "${:,.0f}",
                         }),
                         width='stretch', hide_index=True,
@@ -22294,7 +22294,7 @@ elif page == "🥧 Portfolio Overview":
             _ps_stop = _pos_or_zero(ps_row.get('Stop')) or None
             _ps_gap  = ps_row.get('Gap to Stop (%)')
             _ps_gap  = None if pd.isna(_ps_gap) else _ps_gap
-            d1.metric("P&L",         _m(f"${ps_row['P&L ($)']:,.0f}"), f"{ps_row['P&L (%)']:+.1f}%")
+            d1.metric("P&L",         _m(_signed_usd(ps_row['P&L ($)'], 0)), f"{ps_row['P&L (%)']:+.1f}%")
             d2.metric("Stop Loss",
                       f"${_ps_stop:.2f}" if _ps_stop is not None else "—",
                       ps_row['Stop Type'],
@@ -23441,9 +23441,9 @@ elif page == "🥧 Portfolio Overview":
         if _tax and _tax.get("rows"):
             # Portfolio-level KPI strip
             _tx_k1, _tx_k2, _tx_k3, _tx_k4, _tx_k5 = st.columns(5)
-            _tx_k1.metric("STCG Unrealized",    f"${_tax['total_stcg_gain']:,.0f}",
+            _tx_k1.metric("STCG Unrealized",    _signed_usd(_tax['total_stcg_gain'], 0),
                           help=f"Taxed at {_stcg_r*100:.0f}% if sold today")
-            _tx_k2.metric("LTCG Unrealized",    f"${_tax['total_ltcg_gain']:,.0f}",
+            _tx_k2.metric("LTCG Unrealized",    _signed_usd(_tax['total_ltcg_gain'], 0),
                           help=f"Taxed at {_ltcg_r*100:.0f}% — already long-term")
             _tx_k3.metric("Harvestable Losses", f"${_tax['total_harvestable']:,.0f}",
                           help="Unrealized losses that could offset gains")
@@ -24039,7 +24039,7 @@ elif page == "🥧 Portfolio Overview":
             _pk1.metric("Total P&L", _m(f"{_signed_usd(_total_pnl, 0)}"))  # no delta passed, delta_color was dead
             _pk2.metric("Gross Gains",    _m(f"${_win_total:,.0f}"),
                         f"{len(_winners)} positions", delta_color="off")
-            _pk3.metric("Gross Losses",   _m(f"${_loss_total:,.0f}"),
+            _pk3.metric("Gross Losses",   _m(_signed_usd(_loss_total, 0)),
                         f"{len(_losers)} positions",  delta_color="off")
             _pk4.metric(f"Top: {_best['Ticker']}",
                         _m(f"{_signed_usd(_best['P&L ($)'], 0)}"), f"{_best['P&L (%)']:+.1f}%",
@@ -43909,7 +43909,7 @@ elif page == "📄 Reports":
                             )
                             _prv_c2.metric(
                                 "Realized P&L (closed trades)",
-                                _m(f"${_prv['realized_pnl_total']:,.2f}"),
+                                _m(_signed_usd(_prv['realized_pnl_total'], 2)),
                             )
                             if _prv["realized_return_pct"] is None:
                                 st.caption(
@@ -43945,7 +43945,7 @@ elif page == "📄 Reports":
                             )
                             _prv_c3.metric(
                                 "Realized P&L (closed trades)",
-                                _m(f"${_prv['realized_pnl_total']:,.2f}"),
+                                _m(_signed_usd(_prv['realized_pnl_total'], 2)),
                             )
                             if _prv["realized_return_pct"] is None:
                                 st.caption(
@@ -43968,7 +43968,7 @@ elif page == "📄 Reports":
                         else:
                             _ptb_c1, _ptb_c2, _ptb_c3 = st.columns(3)
                             _ptb_c1.metric("Trades closed", _ptb["n_trades"])
-                            _ptb_c2.metric("Total realized P&L", _m(f"${_ptb['total_realized_pnl']:,.2f}"))
+                            _ptb_c2.metric("Total realized P&L", _m(_signed_usd(_ptb['total_realized_pnl'], 2)))
                             _ptb_c3.metric(
                                 "Win rate",
                                 f"{_ptb['win_rate_pct']:.1f}%" if _ptb["win_rate_pct"] is not None else "—",
@@ -45070,9 +45070,9 @@ elif page == "📄 Reports":
                     st.info(f"No realized sales found for {_rpt_year}.")
                 else:
                     _rc1, _rc2, _rc3 = st.columns(3)
-                    _rc1.metric("Short-term gain/loss", _m(f"${_rpt_ledger['st_gain']:,.0f}"))
-                    _rc2.metric("Long-term gain/loss", _m(f"${_rpt_ledger['lt_gain']:,.0f}"))
-                    _rc3.metric("Unknown-term gain/loss", _m(f"${_rpt_ledger['unknown_gain']:,.0f}"))
+                    _rc1.metric("Short-term gain/loss", _m(_signed_usd(_rpt_ledger['st_gain'], 0)))
+                    _rc2.metric("Long-term gain/loss", _m(_signed_usd(_rpt_ledger['lt_gain'], 0)))
+                    _rc3.metric("Unknown-term gain/loss", _m(_signed_usd(_rpt_ledger['unknown_gain'], 0)))
 
                     _rpt_fifo_total = _m(f"\\${_rpt_ledger['st_gain'] + _rpt_ledger['lt_gain'] + _rpt_ledger['unknown_gain']:,.2f}")
                     _rpt_stored_total = _m(f"\\${_rpt_ledger['stored_realized_total']:,.2f}")
