@@ -808,6 +808,8 @@ from stock_analyzer.constants import (
     HELD_TRAIL_ATR_MULT as _TIP_TRAIL_MULT,
     HELD_TRAIL_START as _TIP_TRAIL_START,
     STOP_RATCHET_LEVELS as _TIP_RATCHET_LEVELS,
+    HELD_STOP_MIN_BARS as _TIP_STOP_MIN_BARS,
+    TECHNICAL_MIN_BARS as _TIP_TECH_MIN_BARS,
 )
 _TIP_RATCHET_DESC = "\n".join(
     f"• +{_thr:.0f}% gain → floor {_m*100:.0f}% above your average cost ({_lab})"
@@ -2877,18 +2879,92 @@ def _held_stops_banner_text(approx_rows) -> str | None:
             "approximate and check them against your broker:\n\n" + "\n".join(_lines))
 
 
-def _render_held_stop_notices(held_stops, manual_stops) -> None:
+@st.fragment
+def _render_stop_entry_form(ticker: str, price: float) -> None:
+    """The "set your own stop" form for ONE holding with no stop yet (Home only). A
+    fragment, so typing a price reruns only this form (the percentage line updates
+    live) and not the whole Home build. The decision (what is refused) is
+    `young_holding_stop.validate_manual_stop`; the write is `db.save_manual_stop`
+    (the same `manual_stops` table the Brief's Mark Done form uses), after which a
+    full rerun rebuilds Home with the stop in force."""
+    _ro = st.session_state.get("_readonly", False)
+    st.caption(_young_holding_stop.form_caption())
+    _c1, _c2 = st.columns([1, 2])
+    with _c1:
+        _px_in = st.number_input(
+            _young_holding_stop.FORM_PRICE_LABEL, min_value=0.0, value=None,
+            step=0.01, format="%.2f", key=f"_sue_price_{ticker}")
+    with _c2:
+        _note_in = st.text_input(_young_holding_stop.FORM_NOTE_LABEL, key=f"_sue_note_{ticker}")
+    _ok, _msg, _pct = _young_holding_stop.validate_manual_stop(_px_in, price)
+    if _px_in is not None:
+        if _ok:
+            st.caption(_young_holding_stop.md_dollars(
+                _young_holding_stop.form_pct_text(_pct, price)))
+        else:
+            st.error(_young_holding_stop.md_dollars(_msg))
+    if st.button(
+        _young_holding_stop.FORM_SAVE_LABEL, key=f"_sue_save_{ticker}", type="primary",
+        disabled=_ro,
+        help=_young_holding_stop.FORM_READONLY_HELP if _ro else None,
+    ):
+        if not _ok:
+            if _px_in is None:      # a refusal on screen already for a typed price
+                st.error(_young_holding_stop.md_dollars(_msg))
+        elif db.save_manual_stop(
+            ticker=ticker, stop_price=round(float(_px_in), 2),
+            note=_note_in or None, source_action=_young_holding_stop.FORM_SOURCE_ACTION,
+        ):
+            st.success(_young_holding_stop.md_dollars(
+                _young_holding_stop.form_saved_text(ticker, round(float(_px_in), 2))))
+            st.rerun()
+        else:
+            st.error(f"The stop for {ticker} wasn't saved (no database connection, or the "
+                     "write failed; see Data Health). Nothing changed.")
+
+
+def _render_held_stop_notices(held_stops, manual_stops, port_df) -> None:
     """Home's stop warning in up to three parts (each only when it has rows): no stop
-    yet (amber), a manual stop in force (calm), then the approximate-stop rows.
+    yet (amber, with a collapsed "set your own stop" form per holding), a manual stop
+    in force (calm, with a clear button), then the approximate-stop rows.
     `manual_stops` None = the table couldn't be read: every row reads as if no manual
-    stop exists (the unreadable banner is rendered separately). Render-only wiring
-    over `young_holding_stop`."""
+    stop exists (the unreadable banner is rendered separately). `port_df` supplies
+    today's price for the form. Render-only wiring over `young_holding_stop`."""
     _parts = _young_holding_stop.split_stop_rows(held_stops, manual_stops)
+    _px_by_tkr = {}
+    if isinstance(port_df, pd.DataFrame) and not port_df.empty and {"Ticker", "Price"} <= set(port_df.columns):
+        _px_by_tkr = {str(_t).upper(): _p for _t, _p in zip(port_df["Ticker"], port_df["Price"])}
     _none_text = _young_holding_stop.none_notice_markdown(_parts["none"])
     if _none_text:
         st.warning(_none_text)
+        for _row in _parts["none"]:
+            _px = _px_by_tkr.get(_row["ticker"])
+            with st.expander(_young_holding_stop.form_label(_row["ticker"]), expanded=False):
+                if _f(_px) > 0:
+                    _render_stop_entry_form(_row["ticker"], float(_px))
+                else:
+                    st.caption(f"No price for {_row['ticker']} right now, so a stop can't be "
+                               "checked against it. Try again once prices load.")
     for _row in _parts["manual"]:
         st.info(_young_holding_stop.manual_notice_markdown(_row))
+        # one click removes the only stop on this holding: confirm inside a popover
+        with st.popover(
+            _young_holding_stop.FORM_CLEAR_LABEL,
+            disabled=st.session_state.get("_readonly", False),
+            help=(_young_holding_stop.FORM_READONLY_HELP
+                  if st.session_state.get("_readonly", False) else None),
+        ):
+            st.warning(_young_holding_stop.clear_confirm_markdown(_row))
+            if st.button(
+                _young_holding_stop.FORM_CLEAR_CONFIRM_LABEL,
+                key=f"_sue_clear_yes_{_row['ticker']}", type="primary",
+                disabled=st.session_state.get("_readonly", False),
+            ):
+                if db.clear_manual_stop(_row["ticker"]):
+                    st.rerun()
+                else:
+                    st.error(f"The stop for {_row['ticker']} wasn't cleared (no database "
+                             "connection, or the write failed; see Data Health). Nothing changed.")
     _approx_text = _held_stops_banner_text(_parts["approx"])
     if _approx_text:
         st.warning(_approx_text)
@@ -6338,7 +6414,7 @@ if page == "🏠 Home":
 
     # Held-stop basis (finding #26 C3): a stop built without the full price
     # history, or with no usable start date, is named here -- never silent.
-    _render_held_stop_notices(_held_stops, None if _manual_stops_unreadable else _manual_stops)
+    _render_held_stop_notices(_held_stops, None if _manual_stops_unreadable else _manual_stops, port_df)
     # One-time "stops recalculated" notice for the first few sessions after go-live.
     _hs_notice = _held_stop_view.recalc_notice(_today_et())
     if _hs_notice:
@@ -46470,6 +46546,8 @@ Your protective stop is the **highest** of up to three automatic parts, and it i
 **On the day you buy.** There is no completed session of your own yet, so the stop is your fill price minus {_TIP_ATR_MULT:g} × ATR (ATR from the last completed session), labelled *Entry Stop*. The fill is fixed, so today's price can't move it. From the next session it is rebuilt from completed days: the trailing and profit-lock parts can raise it, or it can come out lower if a later session has to use a fallback basis. No warning is shown for this. If the fill price isn't recorded, the stop falls back to *Prior-close ATR* with a ⚠️ note. If the recorded fill is outside today's price range and the prior close, or today's range isn't available yet and the fill isn't near the prior close, the stop is the lowest of the *Prior-close ATR* level, the fill-based level and, when today's range is available, the lower of today's low and the prior close, less a small tolerance, minus the same ATR distance, with a ⚠️ note. If the only price history available is out of date, the stop is still your fill price minus the ATR distance, but with a ⚠️ note saying where that history ends.
 
 **When history is incomplete.** If the app could not load the longer price history for a name, or the trade journal could not date the position, a ⚠️ banner on 🏠 Home and a note on 📈 Analysis name the holding and say what is missing. Treat those stops as rough guides and don't assume they only move up.
+
+**New listings.** A stop needs **{_TIP_STOP_MIN_BARS} sessions** of price history and the composite score needs **{_TIP_TECH_MIN_BARS}**. A stock that listed recently (an IPO, a spin-off, a direct listing) has no automatic stop for its first sessions, however long you have held it, and the app says so on 🏠 Home ("No stop yet") instead of implying one protects it. Under that warning, open **"✋ Set your own stop for …"**, enter the stop you placed at your broker (or want the app to watch) and save it. The app then treats it like any manual stop (Brief, Analysis, the pre-market email) and builds its own stop once the history is long enough; yours stays in force only while it is the higher of the two. While the app has no stop of its own for that holding, **↩️ Clear my stop** removes yours after you confirm.
 
 **A saved stop for days the long history can't load.** Each evening after the close, the app saves the stop of every position whose stop was built from the full price history that day. On a day when the longer history can't be loaded and the app has to use its shorter 6-month history, today's figure is compared with that saved stop and the higher of the two is used. The saved stop counts only while you haven't bought more or changed a buy since it was saved (an add, a split entry or an edited buy price ends it; selling part of the position doesn't), and the closing prices it was built from still match today's price history (a stock split or a corrected price would make them differ). When it matters, the ⚠️ note on 🏠 Home and 📈 Analysis says either that the stop is held at the saved amount (with the date it was saved and today's lower figure from the shorter history), or that the saved stop wasn't used and why: your trades changed, the price history no longer matches, or the stop rules changed. If the saved stop can't be read at all, the note says this stop may be lower than on earlier days. On a normal day with complete history there is no note. Your manual stop still wins whenever it is at least as tight as the stop in force. The app reads the saved stops once a day, so a stop saved this evening can show up the next day.
 
