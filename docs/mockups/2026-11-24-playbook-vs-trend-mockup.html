@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playbook vs Trend</title>
+<style>
+  :root {
+    --bg: #0e1117; --panel: #161b26; --line: #2a3142; --text: #e5e7eb; --muted: #9ca3af;
+    --rising: #4ade80; --rising-bg: #0f2e1c; --steady: #d1d5db; --steady-bg: #262b36;
+    --weak: #fbbf24; --weak-bg: #3a2c0b; --falling: #f87171; --falling-bg: #3b1416;
+    --fav: #22c55e; --lag: #ef4444; --clash: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 "Source Sans Pro", "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 1060px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.2rem; margin: 36px 0 6px; border-top: 1px solid var(--line); padding-top: 22px; }
+  h3 { font-size: 1.02rem; margin: 0 0 6px; }
+  .note { color: var(--muted); font-size: .9rem; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin-top: 12px; }
+  .cap { color: var(--muted); font-size: .86rem; margin: 2px 0 12px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
+  .col-h { font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px;
+          font-size: .82rem; font-weight: 700; white-space: nowrap; }
+  .c-rising { color: var(--rising); background: var(--rising-bg); }
+  .c-steady { color: var(--steady); background: var(--steady-bg); }
+  .c-weak { color: var(--weak); background: var(--weak-bg); }
+  .c-falling { color: var(--falling); background: var(--falling-bg); }
+  .c-na { color: var(--muted); background: #1f2430; font-weight: 600; }
+  /* Option A cards */
+  .card { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+          border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 8px;
+          padding: 9px 12px; margin-bottom: 8px; background: #121722; }
+  .card.agree { border-left-color: var(--fav); }
+  .card.agree.lagcol { border-left-color: var(--lag); }
+  .card.clash { border-color: var(--clash); border-left-color: var(--clash); background: #1d1708; }
+  .card .name { font-weight: 600; }
+  .card .fund { color: var(--muted); font-size: .8rem; }
+  .clash-tag { color: var(--clash); font-size: .78rem; font-weight: 700; margin-top: 2px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: .82rem; color: var(--muted); margin-top: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
+  /* Option B grid */
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: .82rem; }
+  td.verdict { font-weight: 700; }
+  .ok { color: var(--rising); } .bad { color: var(--clash); } .mid { color: var(--muted); }
+  .bar { height: 8px; border-radius: 4px; background: #232938; position: relative; min-width: 120px; }
+  .bar > i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+  .bar .zero { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--muted); }
+  /* Option C chart */
+  svg text { font-family: inherit; }
+  .pick { display: inline-block; margin-top: 10px; padding: 4px 10px; border-radius: 6px; background: #1f2937; font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🌐 Macro → 📡 Macro signals: Playbook vs trend</h1>
+  <p class="note">Mockup for PlaybookVsTrend (bug register), 2026-11-24. <b>Sample numbers, layout only:</b> the regime is the 11-22 risk-off read; the trend labels and the 4-week gaps for Energy, Software (IGV), Semiconductors and Communications are from the owner's 11-24 screenshot; Healthcare, Defense and Consumer Tech gaps are illustrative. Dark theme, colours as on the 📈 trend tab. Pick one option (or mix: e.g. A on top plus C as a chart).</p>
+
+  <!-- ───────────────────────── Option A ───────────────────────── -->
+  <h2>Option A: coloured cards, one glance per sector</h2>
+  <p class="note">Each sector is a card. Left stripe = what the regime map says (green = usually favoured, red = usually lags). Chip = the actual trend. When they clash, the whole card turns amber with "trend disagrees". Easiest to read; closest to today's layout.</p>
+  <div class="panel">
+    <h3>Sector Rotation Playbook: what usually leads in this regime</h3>
+    <div class="cap">A fixed map of what tends to do well or badly in this kind of market, not a read of current prices. The chip is each sector's actual trend (📈 Market and sector trend, as of the Mon Nov 23 close). Amber = the two disagree; the trend is what has actually happened.</div>
+    <div class="cols">
+      <div>
+        <div class="col-h"><span class="dot" style="background:var(--fav)"></span>Usually favoured</div>
+        <div class="card agree"><div><div class="name">Healthcare</div><div class="fund">XLV</div></div><span class="chip c-rising">↗ Rising</span></div>
+        <div class="card agree"><div><div class="name">Defense</div><div class="fund">ITA</div></div><span class="chip c-weak">↘ Weakening</span></div>
+        <div class="card clash"><div><div class="name">Energy</div><div class="fund">XLE</div><div class="clash-tag">⚠ trend disagrees</div></div><span class="chip c-falling">⇊ Falling</span></div>
+      </div>
+      <div>
+        <div class="col-h"><span class="dot" style="background:var(--lag)"></span>Usually lags</div>
+        <div class="card agree lagcol"><div><div class="name">Semiconductors</div><div class="fund">SOXX</div></div><span class="chip c-falling">⇊ Falling</span></div>
+        <div class="card agree lagcol"><div><div class="name">AI &amp; Cloud</div><div class="fund">Software, IGV</div></div><span class="chip c-falling">⇊ Falling</span></div>
+        <div class="card clash"><div><div class="name">Consumer Tech</div><div class="fund">XLY</div><div class="clash-tag">⚠ trend disagrees</div></div><span class="chip c-rising">↗ Rising</span></div>
+        <div class="card agree lagcol"><div><div class="name">AI &amp; Data</div><div class="fund">Software, IGV</div></div><span class="chip c-falling">⇊ Falling</span></div>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--fav)"></i>map: usually favoured</span>
+      <span><i class="sw" style="background:var(--lag)"></i>map: usually lags</span>
+      <span><i class="sw" style="background:var(--clash)"></i>trend disagrees</span>
+      <span class="chip c-rising">↗ Rising</span><span class="chip c-steady">→ Steady</span>
+      <span class="chip c-weak">↘ Weakening</span><span class="chip c-falling">⇊ Falling</span>
+    </div>
+  </div>
+
+  <!-- ───────────────────────── Option B ───────────────────────── -->
+  <h2>Option B: one table, "map says / trend says / verdict" with a bar</h2>
+  <p class="note">One row per sector. The bar shows the 4-week gap to the S&amp;P 500 (left of the line = trailing, right = beating), coloured by the trend. Verdict column spells out agree / clash. Most information, a bit denser.</p>
+  <div class="panel">
+    <h3>Sector Rotation Playbook: what usually leads in this regime</h3>
+    <div class="cap">Same caption as A.</div>
+    <table>
+      <thead><tr><th>Sector (fund)</th><th>Map says</th><th>Trend</th><th>4-week vs S&amp;P 500</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>Healthcare (XLV)</td><td><span class="ok">▲ favoured</span></td><td><span class="chip c-rising">↗ Rising</span></td>
+            <td><div class="bar"><span class="zero"></span><i style="left:50%;width:18%;background:var(--rising)"></i></div></td><td class="verdict ok">✓ agrees</td></tr>
+        <tr><td>Defense (ITA)</td><td><span class="ok">▲ favoured</span></td><td><span class="chip c-weak">↘ Weakening</span></td>
+            <td><div class="bar"><span class="zero"></span><i style="left:42%;width:8%;background:var(--weak)"></i></div></td><td class="verdict mid">– mixed</td></tr>
+        <tr><td>Energy (XLE)</td><td><span class="ok">▲ favoured</span></td><td><span class="chip c-falling">⇊ Falling</span></td>
+            <td><div class="bar"><span class="zero"></span><i style="left:25%;width:25%;background:var(--falling)"></i></div></td><td class="verdict bad">⚠ clashes</td></tr>
+        <tr><td>Semiconductors (SOXX)</td><td><span style="color:var(--lag)">▼ lags</span></td><td><span class="chip c-falling">⇊ Falling</span></td>
+            <td><div class="bar"><span class="zero"></span><i style="left:24%;width:26%;background:var(--falling)"></i></div></td><td class="verdict ok">✓ agrees</td></tr>
+        <tr><td>AI &amp; Cloud (Software, IGV)</td><td><span style="color:var(--lag)">▼ lags</span></td><td><span class="chip c-falling">⇊ Falling</span></td>
+            <td><div class="bar"><span class="zero"></span><i style="left:24%;width:26%;background:var(--falling)"></i></div></td><td class="verdict ok">✓ agrees</td></tr>
+        <tr><td>Consumer Tech (XLY)</td><td><span style="color:var(--lag)">▼ lags</span></td><td><span class="chip c-rising">↗ Rising</span></td>
+            <td><div class="bar"><span class="zero"></span><i style="left:50%;width:12%;background:var(--rising)"></i></div></td><td class="verdict bad">⚠ clashes</td></tr>
+        <tr><td>AI &amp; Data (Software, IGV)</td><td><span style="color:var(--lag)">▼ lags</span></td><td><span class="chip c-falling">⇊ Falling</span></td>
+            <td><div class="bar"><span class="zero"></span><i style="left:24%;width:26%;background:var(--falling)"></i></div></td><td class="verdict ok">✓ agrees</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ───────────────────────── Option C ───────────────────────── -->
+  <h2>Option C: a picture, map vs reality on one chart</h2>
+  <p class="note">Each dot is a sector. Left half = the map says "usually lags", right half = "usually favoured". Up = beating the S&amp;P 500 over 4 weeks, down = trailing. Top-right and bottom-left are <b>agree</b> (green zones); top-left and bottom-right are <b>clash</b> (amber zones). Dot colour = trend label; bigger dot = more of your book. The clashes jump out without reading anything.</p>
+  <div class="panel">
+    <h3>Playbook vs what actually happened (4 weeks to the Mon Nov 23 close)</h3>
+    <svg viewBox="0 0 900 430" width="100%" role="img" aria-label="Quadrant chart of regime map versus 4-week trend">
+      <!-- zones -->
+      <rect x="70" y="20" width="390" height="185" fill="#3a2c0b" opacity=".55"/>
+      <rect x="460" y="20" width="390" height="185" fill="#0f2e1c" opacity=".7"/>
+      <rect x="70" y="205" width="390" height="185" fill="#0f2e1c" opacity=".7"/>
+      <rect x="460" y="205" width="390" height="185" fill="#3a2c0b" opacity=".55"/>
+      <text x="80" y="40" fill="#f59e0b" font-size="13" font-weight="700">⚠ map says lags, but it's beating</text>
+      <text x="840" y="40" fill="#4ade80" font-size="13" font-weight="700" text-anchor="end">✓ map says favoured, and it's beating</text>
+      <text x="80" y="380" fill="#4ade80" font-size="13" font-weight="700">✓ map says lags, and it's trailing</text>
+      <text x="840" y="380" fill="#f59e0b" font-size="13" font-weight="700" text-anchor="end">⚠ map says favoured, but it's trailing</text>
+      <!-- axes -->
+      <line x1="70" y1="205" x2="850" y2="205" stroke="#9ca3af" stroke-width="1"/>
+      <line x1="460" y1="20" x2="460" y2="390" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 4"/>
+      <text x="40" y="209" fill="#9ca3af" font-size="12" text-anchor="middle">0</text>
+      <text x="40" y="65" fill="#9ca3af" font-size="12" text-anchor="middle">+10</text>
+      <text x="40" y="350" fill="#9ca3af" font-size="12" text-anchor="middle">−10</text>
+      <text x="16" y="205" fill="#9ca3af" font-size="12" transform="rotate(-90 16 205)" text-anchor="middle">4-week vs S&amp;P 500 (pts)</text>
+      <text x="265" y="415" fill="#ef4444" font-size="13" text-anchor="middle" font-weight="700">◀ map: usually lags</text>
+      <text x="655" y="415" fill="#22c55e" font-size="13" text-anchor="middle" font-weight="700">map: usually favoured ▶</text>
+      <!-- dots (x jittered inside each half, y = pts gap; 1 pt = 14 px) -->
+      <!-- favoured -->
+      <circle cx="560" cy="135" r="9" fill="#4ade80"/><text x="575" y="139" fill="#e5e7eb" font-size="12">Healthcare</text>
+      <circle cx="660" cy="230" r="9" fill="#fbbf24"/><text x="675" y="234" fill="#e5e7eb" font-size="12">Defense</text>
+      <circle cx="760" cy="321" r="9" fill="#f87171" stroke="#f59e0b" stroke-width="3"/><text x="740" y="349" fill="#e5e7eb" font-size="12" text-anchor="end">Energy −8.3</text>
+      <!-- lags -->
+      <circle cx="140" cy="328" r="9" fill="#f87171"/><text x="155" y="332" fill="#e5e7eb" font-size="12">Semis −8.8</text>
+      <circle cx="260" cy="328" r="20" fill="#f87171" opacity=".9"/><text x="285" y="318" fill="#e5e7eb" font-size="12">AI &amp; Cloud / AI &amp; Data (Software −8.8) · you 33%</text>
+      <circle cx="380" cy="135" r="21" fill="#4ade80" stroke="#f59e0b" stroke-width="3"/><text x="365" y="100" fill="#e5e7eb" font-size="12" text-anchor="end">Consumer Tech · you 35%</text>
+    </svg>
+    <div class="legend">
+      <span class="chip c-rising">● Rising</span><span class="chip c-steady">● Steady</span>
+      <span class="chip c-weak">● Weakening</span><span class="chip c-falling">● Falling</span>
+      <span>amber ring = clash</span><span>dot size = your share of the book</span>
+    </div>
+  </div>
+
+  <h2>Lead's suggestion</h2>
+  <p><b>C on top as the picture, A underneath as the list</b> (A's cards double as the chart's labels for anyone who wants the names in order). B is the densest and repeats what the 📈 trend tab already tables. For the "Your Portfolio — Macro Alignment" tiles below the Playbook, any option adds the caption "Tailwind / headwind = the regime map above, not each sector's trend".</p>
+  <p class="note">Unchanged in every option: the regime read, the map, the tailwind / headwind classification, and every pick, size and stop. Display only; the agree / clash rule lives in a small pure function with tests, Opus review for the advice wording.</p>
+  <span class="pick">Reply with A, B, C, or a mix (e.g. "C + A").</span>
+</main>
+</body>
+</html>

@@ -315,13 +315,18 @@ def compute_held_stop(df: pd.DataFrame, episode: dict, avg_cost: float,
     """See the module docstring. Returns a dict: stop, basis (full / partial /
     prior_session / unavailable), binding, reason, since, last_session,
     hw_close, hw_session, components {entry, trailing, ratchet}, ratchet_label,
-    atr_last, last_close, bind_session, bind_close."""
+    atr_last, last_close, bind_session, bind_close. The "unavailable" result for
+    too few bars also carries `bars` (completed bars seen) and `need` (min_bars)."""
     if int(warmup_bars) < 1:
         raise ValueError(f"warmup_bars must be >= 1 (got {warmup_bars})")
     bars = completed_bars(df, as_of)
     if len(bars) < int(min_bars):
-        return _result(None, "unavailable", None,
-                       f"only {len(bars)} completed bars (need {int(min_bars)})")
+        res = _result(None, "unavailable", None,
+                      f"only {len(bars)} completed bars (need {int(min_bars)})")
+        # Additive: the bar count and the floor, so a reader (young_holding_stop)
+        # needs no parse of the reason text.
+        res["bars"], res["need"] = len(bars), int(min_bars)
+        return res
 
     close_all = bars["Close"].astype(float)
     last_date = bars.index[-1].date()

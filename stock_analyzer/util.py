@@ -260,12 +260,19 @@ def score_withheld_banner_text(withheld: list[dict] | None) -> str | None:
         the trend-break exit ladder (which needs a 50-bar SMA) cannot assess
         it either and only its stop and concentration limits protect it. The
         generic "stops and risk metrics still apply" reassurance is NOT used.
+        With `"stop_state"` on the entry (`young_holding_stop.stop_state`) the
+        stop claim follows the real state: "auto" (and a legacy entry with no
+        `stop_state`) keeps this wording exactly; "manual" names the owner's
+        stop (`"manual_stop"`, dollar signs escaped for markdown: the text renders as markdown);
+        "none" says no stop exists (a new listing under `HELD_STOP_MIN_BARS`
+        sessions) and points to the stop warning on Home.
       * Technical missing with `t_bars` at/above the floor: a required reading
         could not be computed from recent prices (e.g. a flat or halted
         quote). No "too short" claim and no ladder caveat — the ladder CAN run
         there.
-    Singular/plural grammar follows the ticker count. No markdown (may render
-    inside HTML).
+    Singular/plural grammar follows the ticker count. Rendered through
+    `st.info` (markdown): no bold or links, but a manual-stop price carries
+    `\\$` so it never renders as LaTeX.
     """
     d = withheld or []
     if not d:
@@ -303,33 +310,88 @@ def score_withheld_banner_text(withheld: list[dict] | None) -> str | None:
                 "a measurement — it's withheld here too, matching the Analysis page."
             )
         if short_rows:
-            bars: dict[str, int] = {}
-            for row in short_rows:
-                try:
-                    b = int(row.get("t_bars"))
-                except (TypeError, ValueError, OverflowError):
-                    continue
-                if b >= 0:
-                    bars[str(row["ticker"])] = b
-            names = [str(r["ticker"]) for r in short_rows]
-            if not bars:
-                span = f"{TECHNICAL_MIN_BARS} sessions needed"
-            elif len(set(bars.values())) == 1 and len(bars) == len(names):
-                span = f"{next(iter(bars.values()))} sessions; {TECHNICAL_MIN_BARS} needed"
-            else:
+            # Group by stop state so each sentence is true for every ticker it
+            # names: "auto" (a stop exists; today's wording, also a legacy entry
+            # with no `stop_state`), "manual" (only the owner's stop), "none" (no
+            # stop at all; a too-few-bars reason or another cause).
+            def _short_span(rows_: list[dict]) -> str:
+                bars: dict[str, int] = {}
+                for row in rows_:
+                    try:
+                        b = int(row.get("t_bars"))
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if b >= 0:
+                        bars[str(row["ticker"])] = b
+                names_ = [str(r["ticker"]) for r in rows_]
+                if not bars:
+                    return f"{TECHNICAL_MIN_BARS} sessions needed"
+                if len(set(bars.values())) == 1 and len(bars) == len(names_):
+                    return f"{next(iter(bars.values()))} sessions; {TECHNICAL_MIN_BARS} needed"
                 per = ", ".join(f"{t} {b} sessions" for t, b in bars.items())
-                span = f"{per}; {TECHNICAL_MIN_BARS} needed"
-            one = len(names) == 1
-            sentences.append(
-                f"{', '.join(names)}: price history too short ({span}) to "
-                "measure the technical trend, so the "
-                + ("composite is" if one else "composites are")
-                + " withheld, and the trend-break exit ladder can't assess "
-                + ("it" if one else "them") + " either — only "
-                + ("its" if one else "their")
-                + " stop and concentration limits protect "
-                + ("it." if one else "them.")
-            )
+                return f"{per}; {TECHNICAL_MIN_BARS} needed"
+
+            def _short_lead(rows_: list[dict]) -> str:
+                names_ = [str(r["ticker"]) for r in rows_]
+                one_ = len(names_) == 1
+                return (
+                    f"{', '.join(names_)}: price history too short ({_short_span(rows_)}) to "
+                    "measure the technical trend, so the "
+                    + ("composite is" if one_ else "composites are")
+                    + " withheld, and the trend-break exit ladder can't assess "
+                    + ("it" if one_ else "them") + " either")
+
+            def _state(r: dict) -> str:
+                return r.get("stop_state") if r.get("stop_state") in ("manual", "none") else "auto"
+
+            auto_rows = [r for r in short_rows if _state(r) == "auto"]
+            manual_rows = [r for r in short_rows if _state(r) == "manual"]
+            none_rows = [r for r in short_rows if _state(r) == "none"]
+            if auto_rows:
+                one = len(auto_rows) == 1
+                sentences.append(
+                    _short_lead(auto_rows) + " — only "
+                    + ("its" if one else "their")
+                    + " stop and concentration limits protect "
+                    + ("it." if one else "them.")
+                )
+            if manual_rows:
+                one = len(manual_rows) == 1
+                prices = []
+                for r in manual_rows:
+                    try:
+                        prices.append((str(r["ticker"]), "\\$" + f"{float(r.get('manual_stop')):.2f}"))
+                    except (TypeError, ValueError):
+                        prices.append((str(r["ticker"]), None))
+                if one:
+                    mine = ("your manual stop (" + prices[0][1] + ")") if prices[0][1] else "your manual stop"
+                else:
+                    mine = "your manual stops (" + ", ".join(
+                        f"{t} {p}" if p else t for t, p in prices) + ")"
+                sentences.append(
+                    _short_lead(manual_rows) + f" — only {mine} and concentration limits protect "
+                    + ("it." if one else "them.")
+                )
+            if none_rows:
+                from stock_analyzer.constants import HELD_STOP_MIN_BARS
+                # a too-few-bars cause says "yet" and the floor; any other cause
+                # (a failed build, no price history) does not claim a floor
+                for _short_cause in (True, False):
+                    grp = [r for r in none_rows
+                           if (r.get("stop_reason") == "short_history") == _short_cause]
+                    if not grp:
+                        continue
+                    one = len(grp) == 1
+                    no_stop = (f"No stop can be built yet ({HELD_STOP_MIN_BARS} sessions needed)"
+                               if _short_cause else
+                               "No stop could be built for " + ("it" if one else "them"))
+                    sentences.append(
+                        _short_lead(grp) + f". {no_stop}, so only concentration limits protect "
+                        + ("it" if one else "them")
+                        + (": set your own stop under the stop warning on 🏠 Home, or place one at your broker."
+                           if one else
+                           ": set your own stops under the stop warning on 🏠 Home, or place them at your broker.")
+                    )
         if uncomp_rows:
             names = [str(r["ticker"]) for r in uncomp_rows]
             sentences.append(
@@ -340,12 +402,22 @@ def score_withheld_banner_text(withheld: list[dict] | None) -> str | None:
             )
         head = f"ℹ️ {n} holding{'s' if n != 1 else ''} shown without a composite score. "
         return head + " ".join(sentences)
+    stopless = [str(r["ticker"]) for r in d
+                if r.get("ticker") and r.get("stop_state") == "none"]
+    if not stopless:
+        applies = "Price, weight, stops and risk metrics still apply."
+    elif len(stopless) == len(tickers):
+        applies = ("Price, weight and risk metrics still apply; no stop could be built for "
+                   + ("it" if n == 1 else "them") + " yet (see the stop warning).")
+    else:
+        applies = ("Price, weight, stops and risk metrics still apply, except that no stop "
+                   f"could be built yet for {', '.join(stopless)} (see the stop warning).")
     return (
         f"ℹ️ {n} holding{'s' if n != 1 else ''} shown without a composite score: "
         f"{', '.join(tickers)}. Company fundamentals aren't available for these "
         "from any provider (e.g. funds/ETFs), so a composite score would be a "
         "guess rather than a measurement — it's withheld here too, matching the "
-        "Analysis page. Price, weight, stops and risk metrics still apply."
+        "Analysis page. " + applies
     )
 
 

@@ -121,7 +121,8 @@ def test_portfolio_score_available_only_when_technical_measured():
     assert pd.isna(row["Score"])
     assert row["Signal"] == WITHHELD_SIGNAL
     assert bad.attrs["score_withheld"] == [
-        {"ticker": "AAA", "missing": ["Technical"], "t_bars": 30}]
+        {"ticker": "AAA", "missing": ["Technical"], "t_bars": 30,
+         "stop_state": "auto", "manual_stop": None, "stop_reason": None}]
 
 
 def test_portfolio_legacy_bundle_equals_t_available_true():

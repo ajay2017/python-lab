@@ -93,6 +93,7 @@ from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import macro_sector_gate as _macro_sector_gate
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import held_stop_view as _held_stop_view
+from stock_analyzer import young_holding_stop as _young_holding_stop
 from stock_analyzer import thesis_review_status
 from stock_analyzer import signals_headline
 from stock_analyzer import forward_sim as _fsim
@@ -1816,7 +1817,10 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                    else f"{_gap_now:.1f}% cushion to the active stop.")
 
         # ── B) Plain-English walk-through (with THIS position's numbers) ───────
-        _lines = [
+        # No automatic stop at all (a new listing under HELD_STOP_MIN_BARS sessions; only
+        # a manual stop reaches here): don't describe an automatic stop that doesn't exist.
+        _no_auto = _basis == "unavailable"
+        _lines = [] if _no_auto else [
             "Your automatic stop is the **highest** of up to three parts. Each part is built "
             "from completed trading days only, so today's price can't move it:",
         ]
@@ -1825,11 +1829,12 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
         if any(_r["kind"] == "saved" for _r in _rows):
             _lines.append("The saved stop is listed as well because it is higher than today's "
                           "figure; your automatic stop is held at it.")
-        _lines.append(
-            "A part is missing when it doesn't apply yet (the trailing part starts at the stop's "
-            f"go-live date, the profit lock needs a gain; the rungs are {_rl_desc}) or its data "
-            "failed a check (see the note above, if any)."
-        )
+        if not _no_auto:
+            _lines.append(
+                "A part is missing when it doesn't apply yet (the trailing part starts at the stop's "
+                f"go-live date, the profit lock needs a gain; the rungs are {_rl_desc}) or its data "
+                "failed a check (see the note above, if any)."
+            )
         if _manual:
             _lines.append(f"**Your manual stop (\\${_active:.2f}) is in force:** it wins because it is "
                           "at least as tight as the automatic one (or no automatic stop could be built).")
@@ -1839,7 +1844,7 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
             _lines.append("With complete price history, and until you add shares, the automatic stop only "
                           "moves up. It can fall if you sell out, add shares, or the price "
                           "data itself changes.")
-        elif _basis in ("partial", "prior_session", "unavailable"):
+        elif _basis in ("partial", "prior_session"):
             _lines.append("This stop is not on a full price history, so don't assume it only moves up.")
         st.markdown("\n\n".join(_lines))
 
@@ -2861,14 +2866,32 @@ def _held_stops_for(holdings, held_data) -> dict:
     return out
 
 
-def _held_stops_banner_text(held_stops) -> str | None:
-    """Degraded-basis warning text, or None when every stop is on a full basis."""
-    _rows = _held_stop_wiring.degraded_notes(held_stops)
-    if not _rows:
+def _held_stops_banner_text(approx_rows) -> str | None:
+    """Part 3 of Home's stop warning: the automatic stops on a partial / prior-close
+    basis (`young_holding_stop.split_stop_rows(...)["approx"]`), or None without
+    rows. Render-only: which rows land here is decided in `young_holding_stop`."""
+    if not approx_rows:
         return None
-    _lines = [f"- **{_t}** ({_lbl}): {_note}" for _t, _lbl, _note in _rows]
+    _lines = [f"- **{_t}** ({_lbl}): {_note}" for _t, _lbl, _note in approx_rows]
     return ("⚠️ **Some stops are not on a full price history.** Treat these stops as "
             "approximate and check them against your broker:\n\n" + "\n".join(_lines))
+
+
+def _render_held_stop_notices(held_stops, manual_stops) -> None:
+    """Home's stop warning in up to three parts (each only when it has rows): no stop
+    yet (amber), a manual stop in force (calm), then the approximate-stop rows.
+    `manual_stops` None = the table couldn't be read: every row reads as if no manual
+    stop exists (the unreadable banner is rendered separately). Render-only wiring
+    over `young_holding_stop`."""
+    _parts = _young_holding_stop.split_stop_rows(held_stops, manual_stops)
+    _none_text = _young_holding_stop.none_notice_markdown(_parts["none"])
+    if _none_text:
+        st.warning(_none_text)
+    for _row in _parts["manual"]:
+        st.info(_young_holding_stop.manual_notice_markdown(_row))
+    _approx_text = _held_stops_banner_text(_parts["approx"])
+    if _approx_text:
+        st.warning(_approx_text)
 
 
 def _publish_brief_coord_caches(brief):
@@ -6315,9 +6338,7 @@ if page == "🏠 Home":
 
     # Held-stop basis (finding #26 C3): a stop built without the full price
     # history, or with no usable start date, is named here -- never silent.
-    _hs_banner = _held_stops_banner_text(_held_stops)
-    if _hs_banner:
-        st.warning(_hs_banner)
+    _render_held_stop_notices(_held_stops, None if _manual_stops_unreadable else _manual_stops)
     # One-time "stops recalculated" notice for the first few sessions after go-live.
     _hs_notice = _held_stop_view.recalc_notice(_today_et())
     if _hs_notice:

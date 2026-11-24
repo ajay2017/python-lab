@@ -29,6 +29,7 @@ from stock_analyzer import split_detector
 from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import stop_breach_text as _stop_breach_text
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
+from stock_analyzer import young_holding_stop as _young_holding_stop
 from stock_analyzer import news_feed
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
@@ -209,8 +210,11 @@ def _build_context(today: date) -> dict:
         fetch_history=_held_stop_wiring.fetch_or_raise,
         floors=held_stop_floors,
         fetch_range=fetch_session_range)
-    held_stop_notes = [f"{t} ({label}): {note}"
-                       for t, label, note in _held_stop_wiring.degraded_notes(held_stops)]
+    # One line per holding with no automatic stop yet (a new listing), or a stop on a
+    # limited basis. A manual-stops read that failed (None) keeps today's lines: the
+    # footer never claims "your manual stop is in force" from an unread table.
+    held_stop_notes = _young_holding_stop.plain_notes(
+        held_stops, None if manual_stops_unreadable else manual_stops)
     for _line in held_stop_notes:
         errors.append(f"held stop on a limited basis: {_line}")
     # Every name on a prior-close / unavailable stop = the held-stop engine is not

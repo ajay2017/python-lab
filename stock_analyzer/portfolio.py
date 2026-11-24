@@ -641,10 +641,18 @@ def build_portfolio_df(
         # never reads this and is unaffected.
         _basis = verdict_basis(r)
         if _basis == "withheld":
+            # Stop state (`young_holding_stop.stop_state`: the one rule, which reuses
+            # `compose_with_manual`): the notice must not say a stop protects a name
+            # that has none (a new listing under HELD_STOP_MIN_BARS bars). Additive keys.
+            from stock_analyzer.young_holding_stop import stop_state as _stop_state
+            _ss = _stop_state(_hs, _ms)
             withheld.append({
                 "ticker": ticker,
                 "missing": unmeasured_pillars(r),
                 "t_bars": r.get("t_bars"),
+                "stop_state": _ss["state"],
+                "manual_stop": _ss["manual_price"],
+                "stop_reason": _ss["reason"],
             })
 
         # Three-way Score/Signal resolution: "equity" is completely unchanged

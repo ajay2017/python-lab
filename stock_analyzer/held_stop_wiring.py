@@ -199,6 +199,10 @@ def _wrap(ticker: str, res: dict, note: str, avg_cost: float, *, fell_back: bool
         "last_close": res.get("last_close"),
         "bind_session": res.get("bind_session"),
         "bind_close": res.get("bind_close"),
+        # additive: completed bars seen / needed, set only on a too-few-bars
+        # "unavailable" result (None otherwise)
+        "bars": res.get("bars"),
+        "need": res.get("need"),
         "avg_cost": avg_cost,
         "note": note,
         "degraded": basis in _DEGRADED_BASES,

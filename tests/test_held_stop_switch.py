@@ -132,7 +132,8 @@ def test_analysis_merge_uses_analysis_manual_override():
 
 
 def test_banner_sites_render_held_stop_basis_and_notice():
-    assert "_held_stops_banner_text(_held_stops)" in _APP
+    assert "_render_held_stop_notices(_held_stops," in _APP
+    assert "_held_stops_banner_text(_parts[\"approx\"])" in _APP
     assert "_held_stop_view.recalc_notice(_today_et())" in _APP
 
 

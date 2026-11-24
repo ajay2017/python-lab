@@ -1291,6 +1291,13 @@ _GATE_FILES = {
     # hold; an unreviewed edit could change the test before the read. Read-only
     # diagnostic; gated so the criteria cannot drift unreviewed.
     "stock_analyzer/enter_now_readout.py",
+    # Added 2026-11-24 (StopUnavailableNoEntry, docs/plans/stop-unavailable-holdings.md):
+    # decides what a holding with no automatic stop yet (a new listing) is told, on
+    # Home, in the composite-withheld notice and in the pre-market email, and
+    # validates the stop the owner types before it is written; a wrong call tells
+    # the owner a stop protects a name that has none, or writes a stop that fires
+    # at once.
+    "stock_analyzer/young_holding_stop.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully
