@@ -100,6 +100,8 @@
 | ID | Bug | Status |
 |---|---|---|
 | #30 | Yahoo `yf.download` returned empty for the indices on 2026-10-31. The page is guarded (`7bbbe11`); the cause is parked until it recurs (pull the web log BEFORE pushing). | Parked |
+| GrowTodayStaleToday | Grow Today's bear-tone message says "S&P 500 {sp500_pct:+.2f}% today — market in risk-off mode." (`daily_briefing.py` ~1157) even when the figure is the prior session's move. Seen live Mon 2026-11-23 pre-open (owner screenshot): "S&P 500 −3.70% today" over Fri Nov 20's close, while the tone card beside it said "data as of Fri Nov 20". The figure is correct; the word "today" is wrong outside market hours (weekend, holiday, pre-open, and possibly after hours). Time-context class: before building, sweep every "today" printed over a prior-session figure (Brief, Grow Today, Signals, emails) and fix them or list them here. `daily_briefing.py` is a gate file → reviewer. Logged 2026-11-24. | Open |
+| DockTilePreOpen | Low priority, owner 2026-11-24. Before 9:30 AM ET the 📈 Markets dock tiles show the last session's move (Tue 11-24 07:50 ET: S&P +4.73%, Nasdaq +6.51%, Dow +3.01% = Mon 11-23 vs Fri 11-20, checked against Yahoo's closes), while the footer reads "prices live, every 60s" (app.py ~4952). The numbers are right; the footer suggests a live move. Fix = outside market hours, name the session the move belongs to (e.g. "Mon close"). Display only. Sibling of GrowTodayStaleToday. | Open |
 
 ## D. Display only
 
