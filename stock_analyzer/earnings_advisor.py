@@ -9,7 +9,7 @@ during the report itself.
 
 import math as _math
 import pytz as _pytz
-from datetime import date as _date, datetime as _datetime
+from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
 
 from stock_analyzer import revision_flag as _revflag
 from stock_analyzer.text_fmt import share_word
@@ -37,7 +37,8 @@ from stock_analyzer.constants import (
     EARNINGS_WEAK_TRIM_PCT,
 )
 from stock_analyzer.trim_sizing import (
-    earnings_week_trim,
+    days_to_earnings,
+    earnings_week_decision,
     fraction_trim_shares,
     exact_shares,
     fmt_shares,
@@ -329,7 +330,35 @@ def _recommend_core(
     # window the single-name ceiling rule applies. A 0-share trim never returns
     # REDUCE — it falls through to the next rules.
     if in_earnings_window(days):
-        r = earnings_week_trim(weight, n_positions or 0, _sz)
+        r = earnings_week_decision(weight, n_positions or 0, _sz)
+        if r is not None and r["trim_shares"] >= 1 and r["basis"] == "standing_in_window":
+            # Floor above SINGLE_NAME_TRIM_TRIGGER (N <= 7): earnings week never
+            # sizes looser than the week before, so the standing trim still applies.
+            trim_sh  = r["trim_shares"]
+            trim_val = round(trim_sh * (market_value / _sz)) if _sz > 0 else 0
+            return (
+                "REDUCE",
+                "HIGH",
+                (
+                    f"Position is **{weight:.0f}% of your portfolio** — under the "
+                    f"{r['floor_pct']:.1f}% earnings-week line, but over the "
+                    f"{SINGLE_NAME_TRIM_TRIGGER:.0f}% single-name trigger. "
+                    f"An estimated ±{est_move:.0f}% earnings move on a ${market_value:,.0f} position = "
+                    f"±${est_move / 100 * market_value:,.0f} in a single session. "
+                    f"**Trim to ≈{SINGLE_NAME_CEILING:.0f}% weight: sell {_sh(trim_sh)} (≈${trim_val:,.0f})** before earnings. "
+                    "Keep the core position for the upside scenario — just cap the binary risk."
+                ),
+                (
+                    f"Institutional position sizing rule for binary events: the earnings-week line scales "
+                    f"with how many positions you hold (N={n_positions or 0}: {r['floor_pct']:.1f}%), and "
+                    f"earnings week never sizes looser than the week before, so a position over "
+                    f"{SINGLE_NAME_TRIM_TRIGGER:.0f}% is still trimmed to {SINGLE_NAME_CEILING:.0f}% going "
+                    f"into the report, regardless of conviction. "
+                    "The reason is not that you're wrong — it's that earnings are inherently uncertain "
+                    "even with perfect fundamental analysis. Managing size IS the risk management. "
+                    "You can always add back after the report confirms the thesis."
+                ),
+            )
         if r is not None and r["trim_shares"] >= 1:
             trim_sh  = r["trim_shares"]
             trim_val = round(trim_sh * (market_value / _sz)) if _sz > 0 else 0
@@ -590,12 +619,13 @@ def build_earnings_playbook(
         if not earn_str:
             continue
 
-        try:
-            earn_date = _datetime.strptime(earn_str, "%Y-%m-%d").date()
-        except Exception:
+        # Same parse as the Brief and Signals (trim_sizing.days_to_earnings reads the
+        # first 10 chars), so a timestamped earnings string no longer drops out of
+        # the Playbook only. `today` is the caller's ET date.
+        days_until = days_to_earnings(earn_str, today)
+        if days_until is None:
             continue
-
-        days_until = (earn_date - today).days
+        earn_date = today + _timedelta(days=days_until)
         if days_until < 0 or days_until > lookahead_days:
             continue
 
@@ -760,11 +790,11 @@ def build_earnings_catalyst_candidates(
         earn_date_str = ctx.get("earnings_date")
         if not earn_date_str:
             continue
-        try:
-            earn_date = _datetime.strptime(str(earn_date_str), "%Y-%m-%d").date()
-        except Exception:
+        # Same parse as the Brief / Signals / Playbook (trim_sizing.days_to_earnings).
+        days_until = days_to_earnings(earn_date_str, today)
+        if days_until is None:
             continue
-        days_until = (earn_date - today).days
+        earn_date = today + _timedelta(days=days_until)
         if days_until < 0 or days_until > lookahead_days:
             continue
 

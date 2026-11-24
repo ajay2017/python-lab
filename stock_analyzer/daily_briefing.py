@@ -37,6 +37,7 @@ from stock_analyzer.constants import (
     COMPOSITE_HIGH_CONVICTION,
     COMPOSITE_BUY_FLAT_DAY,
     SINGLE_NAME_CEILING,
+    SINGLE_NAME_TRIM_TRIGGER,
     NET_CAPITAL_POSITION_CAP_PCT,
     SECTOR_CEILING,
     SECTOR_ELEVATED,
@@ -3407,10 +3408,15 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         })
 
     # 2 — Earnings within 7 days
-    # Action policy:
+    # Action policy (EW C2: ONE decision, trim_sizing.earnings_week_decision):
     #   - Weight > dynamic overweight floor (position-count-aware — see
     #     _dynamic_overweight_floor) → trim to TRIM_TO_PCT (10%).
-    #   - Weight ≤ floor → WATCH; sizing already conservative for the binary risk.
+    #   - Floor ≥ weight > SINGLE_NAME_TRIM_TRIGGER (N ≤ 7 only) → the standing
+    #     trim to SINGLE_NAME_CEILING: earnings week never sizes looser than the
+    #     week before.
+    #   - Otherwise WATCH; nothing is due before the report.
+    # Skips only names an Act card actually reduces (`_reduce_tickers`), never an
+    # attribution-only `risk` card or a critical-news hold (U5).
     seen_earn: set = set()
     _n_pos = len(port_df) if port_df is not None else 0
     _overweight_floor = _dynamic_overweight_floor(_n_pos)
@@ -3422,7 +3428,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         if days is None or not (0 <= days <= EARNINGS_IMMINENT_DAYS):
             continue
         seen_earn.add(ticker)
-        if ticker in _act_tickers:
+        if str(ticker).upper() in _reduce_tickers:
             continue
         pm = _port_rows(port_df, ticker)
         if pm.empty:
@@ -3431,7 +3437,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         shares_raw = _trim_sizing.exact_shares(pm.iloc[0])
         price  = _f(pm["Price"].iloc[0])
         label  = "TODAY" if days == 0 else f"in {days}d"
-        _etrim = _trim_sizing.earnings_week_trim(weight, _n_pos, shares_raw)
+        _edec = _trim_sizing.earnings_week_decision(weight, _n_pos, shares_raw)
+        _floor = _edec["floor_pct"] if _edec is not None else _overweight_floor
         # Finding #23: the Trigger line looks at the stop, same decision as
         # the 🔔 Playbook (earnings_stop_cover). None gap stays None.
         _esc_sector = str(pm["Sector"].iloc[0]) if "Sector" in pm.columns else "Other"
@@ -3440,38 +3447,62 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         _esc_est = _esc.estimate_earnings_move(
             _esc_rm if isinstance(_esc_rm, dict) else {}, _esc_sector)
         _esc_state = _esc.stop_cover_state(_esc_gap, _esc_est)
-        if _etrim is not None and _etrim["trim_shares"] >= 1:
-            trim_shares  = _etrim["trim_shares"]
+        if _edec is not None and _edec["trim_shares"] >= 1:
+            trim_shares  = _edec["trim_shares"]
             trim_dollars = round(trim_shares * price, 0)
             action = {
                 "type":           "TRIM_TO_TARGET",
                 "trim_shares":    trim_shares,
                 "trim_dollars":   trim_dollars,
                 "from_weight":    weight,
-                "target_weight":  _etrim["target_pct"],
+                "target_weight":  _edec["target_pct"],
                 "reason_key":     "earnings",
             }
-            why = (
-                f"Weight {weight:.1f}% × binary earnings risk above your "
-                f"{_overweight_floor:.1f}% position-count-adjusted threshold "
-                f"(N={_n_pos} positions). Trim to size-down the binary event exposure."
-            )
+            if _edec["basis"] == "standing_in_window":
+                why = (
+                    f"Weight {weight:.1f}% is under your {_floor:.1f}% "
+                    f"position-count-adjusted earnings-week line (N={_n_pos} positions) "
+                    f"but over the {SINGLE_NAME_TRIM_TRIGGER:.0f}% single-name trigger, "
+                    f"so the standing trim to {SINGLE_NAME_CEILING:.0f}% applies before "
+                    f"the report: earnings week never sizes looser than the week before."
+                )
+            else:
+                why = (
+                    f"Weight {weight:.1f}% × binary earnings risk above your "
+                    f"{_floor:.1f}% position-count-adjusted threshold "
+                    f"(N={_n_pos} positions). Trim to size-down the binary event exposure."
+                )
             trigger = _esc.brief_earnings_trigger(_esc_state, _esc_gap, _esc_est, trimmed=True)
-        elif _etrim is not None:
+        elif _edec is not None:
             action = {"type": "WATCH"}
-            why = (
-                f"Weight {weight:.1f}% is over the {_overweight_floor:.1f}% "
-                f"position-count-adjusted line by less than one share at today's "
-                f"price, so no trim is sized (N={_n_pos} positions)."
-            )
+            if _edec["basis"] == "standing_in_window":
+                why = (
+                    f"Weight {weight:.1f}% is over the {SINGLE_NAME_TRIM_TRIGGER:.0f}% "
+                    f"single-name trigger by less than one share at today's price, "
+                    f"so no trim is sized (N={_n_pos} positions)."
+                )
+            else:
+                why = (
+                    f"Weight {weight:.1f}% is over the {_floor:.1f}% "
+                    f"position-count-adjusted line by less than one share at today's "
+                    f"price, so no trim is sized (N={_n_pos} positions)."
+                )
             trigger = _esc.brief_earnings_trigger(_esc_state, _esc_gap, _esc_est, trimmed=False)
         else:
             action = {"type": "WATCH"}
-            why = (
-                f"Weight {weight:.1f}% within tolerance "
-                f"(≤ {_overweight_floor:.1f}% position-count-adjusted threshold, "
-                f"N={_n_pos} positions). Existing sizing already conservative for the binary risk."
-            )
+            if weight >= SINGLE_NAME_CEILING:
+                why = (
+                    f"Weight {weight:.1f}% is under the {_floor:.1f}% "
+                    f"position-count-adjusted earnings-week line (N={_n_pos} positions), "
+                    f"so the earnings-week rule sizes nothing before the report; it is over the "
+                    f"{SINGLE_NAME_CEILING:.0f}% single-name ceiling (standing work)."
+                )
+            else:
+                why = (
+                    f"Weight {weight:.1f}% within tolerance "
+                    f"(≤ {_floor:.1f}% position-count-adjusted threshold, "
+                    f"N={_n_pos} positions). Existing sizing already conservative for the binary risk."
+                )
             trigger = _esc.brief_earnings_trigger(_esc_state, _esc_gap, _esc_est, trimmed=False)
         # Rating-change Watch flag (shared rule/wording): its own field, never
         # appended to `why` (the Snapshot caps `why`), never changes the
@@ -4187,6 +4218,11 @@ def build_daily_briefing(
             _rt = decision_bucket._ticker(_it)
             if str(_it.get("kind", "")) == "critical_news" and _rt in _ro_by_t:
                 _fold_news(_ro_by_t[_rt], _it.get("news_headline"))
+                # Keep any risk flags merged onto the news card (a sector breach):
+                # only the hold read is redundant, not the flag.
+                _as_risk = decision_bucket.critical_news_as_risk(_it)
+                if _as_risk is not None:
+                    _kept_act.append(_as_risk)
                 continue
             _kept_act.append(_it)
         act = _kept_act

@@ -22,6 +22,7 @@ import pytest
 from stock_analyzer import rec_events_capture as rec
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
+    REBALANCE_TRIM_PNL_PCT,
     SECTOR_ELEVATED,
     SINGLE_NAME_CEILING,
     WEAK_CONVICTION_SCORE,
@@ -30,13 +31,16 @@ from stock_analyzer.constants import (
 pytestmark = pytest.mark.fast
 
 FIRED_DATE = datetime.date(2026, 9, 15)
+# A real rebalance_actions() trim carries `pnl`; the capture guard (EW C2) reads it,
+# so the monkeypatched trim actions below carry a pnl over the standing trigger.
+_PNL = REBALANCE_TRIM_PNL_PCT + 20.0
 
 
 # ── rebal_trim ───────────────────────────────────────────────────────────────
 
 def test_rebal_trim_row_built_from_rebalance_actions_trim_action(monkeypatch):
     monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
-        {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 3500.0},
+        {"type": "trim", "ticker": "AAA", "weight": 22.0, "pnl": _PNL, "trim_val": 3500.0},
     ])
     rows = rec._build_rebal_trim_rows(pd.DataFrame({"Ticker": ["AAA"]}), "2026-09-15")
     assert len(rows) == 1
@@ -57,9 +61,9 @@ def test_rebal_trim_row_built_from_rebalance_actions_trim_action(monkeypatch):
 
 def test_rebal_trim_skips_unsized_trim_and_reports_it(monkeypatch):
     monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
-        {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 500.0, "trim_shares": 0},
-        {"type": "trim", "ticker": "BBB", "weight": 22.0, "trim_val": 5000.0, "trim_shares": 2},
-        {"type": "trim", "ticker": "CCC", "weight": 22.0, "trim_val": 5000.0},
+        {"type": "trim", "ticker": "AAA", "weight": 22.0, "pnl": _PNL, "trim_val": 500.0, "trim_shares": 0},
+        {"type": "trim", "ticker": "BBB", "weight": 22.0, "pnl": _PNL, "trim_val": 5000.0, "trim_shares": 2},
+        {"type": "trim", "ticker": "CCC", "weight": 22.0, "pnl": _PNL, "trim_val": 5000.0},
     ])
     skipped: set = set()
     rows = rec._build_rebal_trim_rows(pd.DataFrame({"Ticker": ["AAA"]}), "2026-09-15", skipped)
@@ -72,7 +76,7 @@ def test_unsized_trim_ticker_gets_no_single_name_conc_row_either(monkeypatch):
     # Precondition: absent the dedup this ticker WOULD get a concentration row.
     assert len(rec._build_single_name_conc_rows(port, None, FIRED_DATE, "2026-09-15")) == 1
     monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
-        {"type": "trim", "ticker": "AAA", "weight": 20.0, "trim_val": 500.0, "trim_shares": 0},
+        {"type": "trim", "ticker": "AAA", "weight": 20.0, "pnl": _PNL, "trim_val": 500.0, "trim_shares": 0},
     ])
     rows = rec.build_rec_event_rows(
         FIRED_DATE, port, None, None, None, None, None, None, None,
@@ -486,7 +490,7 @@ def test_sector_conc_empty_port_df_returns_empty():
 
 def test_build_rec_event_rows_combines_all_three_generators(monkeypatch):
     monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
-        {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 1000.0},
+        {"type": "trim", "ticker": "AAA", "weight": 22.0, "pnl": _PNL, "trim_val": 1000.0},
     ])
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [
         {"type": "ADD", "sector": "Energy", "candidates": ["XOM"]},
@@ -523,7 +527,7 @@ def test_one_generator_failure_never_blanks_the_others(monkeypatch):
 
 def test_beta_trim_failure_never_blanks_rebal_trim_or_diversify_add(monkeypatch):
     monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
-        {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 1000.0},
+        {"type": "trim", "ticker": "AAA", "weight": 22.0, "pnl": _PNL, "trim_val": 1000.0},
     ])
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [
         {"type": "ADD", "sector": "Energy", "candidates": ["XOM"]},
@@ -559,7 +563,7 @@ def test_orchestrator_dedups_single_name_conc_against_rebal_trim(monkeypatch):
     exactly ONE row for AAA, not two, per the §11-class conflation ratified
     against on 2026-09-21."""
     monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
-        {"type": "trim", "ticker": "AAA", "weight": 25.0, "trim_val": 2500.0},
+        {"type": "trim", "ticker": "AAA", "weight": 25.0, "pnl": _PNL, "trim_val": 2500.0},
     ])
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [])
     port_df = pd.DataFrame({
@@ -598,7 +602,7 @@ def test_orchestrator_single_name_conc_fires_when_rebal_trim_misses_it(monkeypat
 
 def test_orchestrator_single_name_conc_or_sector_conc_failure_never_blanks_others(monkeypatch):
     monkeypatch.setattr(rec, "rebalance_actions", lambda port_df, **_kw: [
-        {"type": "trim", "ticker": "AAA", "weight": 22.0, "trim_val": 1000.0},
+        {"type": "trim", "ticker": "AAA", "weight": 22.0, "pnl": _PNL, "trim_val": 1000.0},
     ])
     monkeypatch.setattr(rec, "diversification_recommendations", lambda *a, **kw: [
         {"type": "ADD", "sector": "Energy", "candidates": ["XOM"]},

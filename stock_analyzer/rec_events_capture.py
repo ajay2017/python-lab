@@ -90,8 +90,10 @@ import pandas as pd
 from stock_analyzer.beta_repair import expected_beta_after_trim
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
+    REBALANCE_TRIM_PNL_PCT,
     SECTOR_ELEVATED,
     SINGLE_NAME_CEILING,
+    SINGLE_NAME_TRIM_TRIGGER,
     UNCLASSIFIED_SECTOR,
     WEAK_CONVICTION_SCORE,
 )
@@ -135,6 +137,12 @@ def _build_rebal_trim_rows(
     against: `EARNINGS_OVERWEIGHT_TRIM_TO_PCT` in earnings week via
     `earnings_days`, else `SINGLE_NAME_CEILING`);
     `rec_dollars` = the recommended trim amount (`trim_val`).
+
+    A trim action counts only when it meets the PRE-EXISTING trigger (weight >
+    SINGLE_NAME_TRIM_TRIGGER and P&L > REBALANCE_TRIM_PNL_PCT): since EW C2 an
+    earnings-week trim also fires at any P&L, and counting those would change
+    this history table's meaning (DoD #8). Such an action emits no row and joins
+    neither `skipped_out` nor any other dedup set.
     """
     if port_df is None or getattr(port_df, "empty", True):
         return []
@@ -146,6 +154,10 @@ def _build_rebal_trim_rows(
     rows: "list[dict]" = []
     for act in actions or []:
         if act.get("type") != "trim":
+            continue
+        _w, _pnl = _safe_float(act.get("weight")), _safe_float(act.get("pnl"))
+        if _w is None or _pnl is None or not (
+                _w > SINGLE_NAME_TRIM_TRIGGER and _pnl > REBALANCE_TRIM_PNL_PCT):
             continue
         ticker = str(act.get("ticker", "") or "").strip().upper()
         if not ticker:

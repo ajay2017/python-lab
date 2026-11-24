@@ -1484,7 +1484,15 @@ def test_earnings_overweight_real_portfolio_none_fire_at_n7():
         "BKNG": {"earnings": "2026-08-03"},
     }
     items = _review_list(port_df, [], [], held_data, _TODAY, portfolio_value=100_000.0)
-    for ticker in ("REGN", "GD", "V", "SPOT", "BKNG"):
+    # EW C2 (2026-11-24, deliberate change): REGN at 18.2% is over
+    # SINGLE_NAME_TRIM_TRIGGER, so earnings week keeps the standing trim to
+    # SINGLE_NAME_CEILING even though it is under the 19.3% earnings-week line
+    # ("earnings week never sizes looser than the week before"). The other four
+    # names are at or under the trigger: no earnings-week TRIM, as before.
+    regn = find_item(items, "REGN")
+    assert regn is not None and regn["action"]["type"] == "TRIM_TO_TARGET"
+    assert regn["action"]["target_weight"] == SINGLE_NAME_CEILING
+    for ticker in ("GD", "V", "SPOT", "BKNG"):
         item = find_item(items, ticker)
         assert item is not None, f"{ticker} missing from Review Before Close"
         assert item["action"]["type"] == "WATCH", f"{ticker} unexpectedly fired a TRIM"

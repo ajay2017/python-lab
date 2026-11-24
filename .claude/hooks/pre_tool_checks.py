@@ -1298,6 +1298,12 @@ _GATE_FILES = {
     # the owner a stop protects a name that has none, or writes a stop that fires
     # at once.
     "stock_analyzer/young_holding_stop.py",
+    # Added 2026-11-24 (EW C1, docs/plans/earnings-week-trim-consistency.md):
+    # decides which Brief sell "names" a held ticker and so which standing surface
+    # (Tune-up, Risk Analysis, Rebalancer) defers its own trim to it; a wrong call
+    # hides a real sell behind another surface's call (a `risk` attribution card
+    # is not a sell of its ticker) or leaves two sell sizes for one name.
+    "stock_analyzer/held_trim_owner.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

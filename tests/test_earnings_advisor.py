@@ -490,6 +490,17 @@ def test_catalyst_candidates_passes_all_gates():
     assert result[0]["rank_score"] == pytest.approx(80.0 * 70.0 * 1.2)
 
 
+def test_catalyst_candidates_read_a_timestamped_earnings_date():
+    # R2-N4: the same first-10-chars parse as the Brief / Signals / Playbook, so a
+    # timestamped provider string no longer drops the candidate here only.
+    stamp = (TODAY + timedelta(days=5)).isoformat() + " 16:00:00"
+    ctx = {"AAPL": _ctx(earnings_date=stamp)}
+    result = ea.build_earnings_catalyst_candidates(
+        ["AAPL"], set(), {"AAPL": {"total": 70.0}}, ctx, today=TODAY,
+    )
+    assert len(result) == 1 and result[0]["earn_date"] == (TODAY + timedelta(days=5)).isoformat()
+
+
 def test_catalyst_candidates_bullish_reaction_multiplier():
     ctx_bull = {"AAPL": _ctx(reaction="bullish")}
     ctx_neutral = {"MSFT": _ctx(reaction="mixed")}

@@ -7321,7 +7321,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 22  # bumped: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 23  # bumped: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -17344,7 +17344,10 @@ elif page == "📡 Signals & Advice":
                         gap = act["gap"]
                         stop = act["stop"]
                         stop_type = act["stop_type"]
-                        if gap < 4:
+                        if stop is None or gap is None or pd.isna(stop) or pd.isna(gap):
+                            # A young holding has no stop yet: never "Stop at $nan".
+                            _check("⚪", "No stop level available for this name.", "#9ca3af")
+                        elif gap < 4:
                             _check("🔴", f"Stop at ${stop:.2f} — only {gap:.1f}% away. Market may decide for you.", "#ff4444")
                         elif gap < 8:
                             _check("🟡", f"Stop at ${stop:.2f} ({stop_type}) — {gap:.1f}% buffer. Monitor closely.", "#ffbb33")
@@ -17709,22 +17712,25 @@ elif page == "📡 Signals & Advice":
                         if ts >= 1:
                             action_text = (
                                 f"Sell **{ts} share{'s' if ts != 1 else ''}** (≈${ts * act['price']:,.0f}) to reduce from "
-                                f"{act['weight']:.0f}% → ≈{_tw:.0f}% portfolio weight.  \n"
-                                f"This locks in a portion of the {act['pnl']:.0f}% gain while keeping "
-                                f"the core position."
+                                f"{act['weight']:.0f}% → ≈{_tw:.0f}% portfolio weight."
                             )
+                            # The gain sentence is only true of the standing ceiling
+                            # trim: an earnings-week trim fires at any P&L (EW C2, U1b).
+                            if act.get("basis") == "ceiling":
+                                action_text += (
+                                    f"  \nThis locks in a portion of the {act['pnl']:.0f}% gain "
+                                    f"while keeping the core position."
+                                )
                         else:
                             action_text = (
                                 f"The excess over {_tw:.0f}% (~${tv:,.0f}) is less than "
                                 f"one share at the current price, so no trim is sized."
                             )
-                        if act.get("basis") == "earnings_week":
-                            _ed = act.get("earnings_days")
-                            _ed_txt = "today" if _ed == 0 else f"in {_ed}d"
-                            action_text += (
-                                f"  \nEarnings {_ed_txt} — sized by the same earnings-week rule "
-                                "the 🏠 Brief and 🔔 Catalyst Watch use."
-                            )
+                        # The earnings line is built per basis in
+                        # portfolio.rebalance_actions; None outside earnings week.
+                        _earn_note = act.get("earnings_note")
+                        if isinstance(_earn_note, str) and _earn_note.strip():
+                            action_text += f"  \n{_earn_note}"
                         st.markdown(action_text)
 
                     elif act["type"] == "add":

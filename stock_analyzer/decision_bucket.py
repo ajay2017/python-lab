@@ -81,6 +81,44 @@ def _is_reduce(item: dict) -> bool:
     return False
 
 
+# Fields that render a critical-news card's "hold for now" read; a converted risk
+# card must not carry them (the Act card renderer prints directive / why / trigger
+# whenever they are present, so a leftover would put the hold line back).
+_NEWS_ONLY_KEYS = frozenset({"directive", "why", "trigger", "news_headline",
+                             "news_compound", "reason"})
+
+
+def critical_news_as_risk(item) -> dict | None:
+    """A risk card carrying a critical_news card's merged risk flags, or None.
+
+    `daily_briefing._consolidate_act_today` can make a same-ticker `critical_news`
+    card the PRIMARY of a merged group and gather the `risk` cards' flags (e.g. a
+    sector-concentration flag with its rebalance-plan payload) onto it. Dropping that
+    card because the ticker also has a reduce call (`_reconcile_act`, the risk-off
+    fold) would drop the breach flag with it. This returns the card re-cast as a risk
+    card (`kind="risk"`, the `RISK — …` action text and `reason` the consolidation
+    builds, the news-only hold fields removed) so the caller keeps it instead.
+    None when the item is not a critical_news card or carries no non-empty
+    `risk_flags` (then the caller drops it exactly as before). Never mutates `item`.
+    """
+    if not isinstance(item, dict) or str(item.get("kind", "")) != "critical_news":
+        return None
+    flags = item.get("risk_flags")
+    if not isinstance(flags, list) or not flags:
+        return None
+    out = {k: v for k, v in item.items() if k not in _NEWS_ONLY_KEYS}
+    ticker = str(item.get("ticker") or "").upper()
+    flags = list(flags)
+    out["kind"] = "risk"
+    out["icon"] = "⚠️"
+    out["risk_flags"] = flags
+    out["action"] = (f"RISK — {len(flags)} flags on {ticker}" if len(flags) > 1
+                     else f"RISK — {(flags[0] or {}).get('title', 'Risk Alert')}")
+    out["reason"] = " ".join(
+        str((f or {}).get("recommendation", "")) for f in flags).strip()
+    return out
+
+
 def _reconcile_act(items: list[dict]) -> list[dict]:
     """Collapse the contradictory hold-vs-reduce split-brain in the Act bucket.
 
@@ -97,10 +135,15 @@ def _reconcile_act(items: list[dict]) -> list[dict]:
     reduce_tickers = {_ticker(it) for it in items if _is_reduce(it) and _ticker(it)}
     out: list[dict] = []
     folded: set = set()
+    converted: list[dict] = []     # news cards kept as risk cards (their flags matter)
     for it in items:
         t = _ticker(it)
         if str(it.get("kind", "")) == "critical_news" and t in reduce_tickers:
             folded.add(t)          # drop the contradictory "hold" card
+            _risk = critical_news_as_risk(it)
+            if _risk is not None:  # ... but never the risk flags merged onto it
+                out.append(_risk)
+                converted.append(_risk)
             continue
         out.append(it)
     # Annotate the (first) reduce card per folded ticker so the news isn't lost.
@@ -109,7 +152,8 @@ def _reconcile_act(items: list[dict]) -> list[dict]:
                  "into this reduce; it isn't a separate 'hold'.")
         for it in out:
             t = _ticker(it)
-            if t in folded and _is_reduce(it):
+            if (t in folded and _is_reduce(it)
+                    and not any(it is c for c in converted)):
                 it["why"] = f"{it.get('why', '').strip()}  {_note}".strip()
                 folded.discard(t)
     return out

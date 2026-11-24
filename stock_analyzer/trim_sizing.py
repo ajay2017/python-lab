@@ -22,6 +22,8 @@ from stock_analyzer.constants import (
     EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT,
     EARNINGS_OVERWEIGHT_TRIM_PCT,
     EARNINGS_OVERWEIGHT_TRIM_TO_PCT,
+    SINGLE_NAME_CEILING,
+    SINGLE_NAME_TRIM_TRIGGER,
 )
 
 
@@ -158,4 +160,36 @@ def earnings_week_trim(weight_pct: float, n_positions: int, shares: float) -> di
         "floor_pct": floor,
         "target_pct": EARNINGS_OVERWEIGHT_TRIM_TO_PCT,
         "trim_shares": shares_to_trim(shares, w, EARNINGS_OVERWEIGHT_TRIM_TO_PCT),
+    }
+
+
+def earnings_week_decision(weight_pct: float, n_positions: int, shares: float) -> dict | None:
+    """The ONE in-window sizing decision (EW C1; the caller has already checked
+    `in_earnings_window(days)`, so this takes no days).
+
+    Above the position-count-aware floor: basis "earnings_week", trim to
+    EARNINGS_OVERWEIGHT_TRIM_TO_PCT. Otherwise above SINGLE_NAME_TRIM_TRIGGER (only
+    reachable when the floor is above that trigger, i.e. N <= 7): basis
+    "standing_in_window", trim to SINGLE_NAME_CEILING -- earnings week never sizes
+    looser than the week before (the day-8 Playbook already trims there). Else None.
+    Both comparisons are strict, like `earnings_week_trim`. `trim_shares` is floored
+    and may be 0; `over_ceiling` = weight >= SINGLE_NAME_CEILING.
+    """
+    w = _num(weight_pct)
+    if w is None:
+        return None
+    floor = earnings_overweight_floor(n_positions)
+    if w > floor:
+        basis, target = "earnings_week", EARNINGS_OVERWEIGHT_TRIM_TO_PCT
+    elif w > SINGLE_NAME_TRIM_TRIGGER:
+        basis, target = "standing_in_window", SINGLE_NAME_CEILING
+    else:
+        return None
+    return {
+        "basis": basis,
+        "floor_pct": floor,
+        "target_pct": target,
+        "weight_pct": w,
+        "trim_shares": shares_to_trim(shares, w, target),
+        "over_ceiling": w >= SINGLE_NAME_CEILING,
     }

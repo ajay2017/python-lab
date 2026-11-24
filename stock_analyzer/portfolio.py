@@ -858,8 +858,11 @@ def alerts(
             # Earnings proximity
             earn = r.get("earnings")
             if earn:
-                try:
-                    days = (_datetime.strptime(earn, "%Y-%m-%d").date() - today).days
+                # Same parse as the Brief / Signals / Playbook (first 10 chars), so a
+                # timestamped date can't drop out of this alert only. A malformed
+                # provider string returns None: isolated to this ticker.
+                days = _trim_sizing.days_to_earnings(earn, today)
+                if days is not None:
                     if 0 <= days <= EARNINGS_CRITICAL_DAYS:
                         result.append({
                             "level": "danger", "category": "earnings",
@@ -873,12 +876,6 @@ def alerts(
                             "level": "warning", "category": "earnings",
                             "msg": f"📅 **{ticker}** reports earnings in {days} days ({earn}) — review ahead of report",
                         })
-                except (ValueError, TypeError):
-                    # Malformed/missing earnings-date string from the provider —
-                    # isolate to this ticker, same as every other per-ticker loop
-                    # in this file. Anything else (a real bug) must surface, not
-                    # vanish silently.
-                    pass
 
             # Analyst rating-change flag (U8, finding #22): one shared watch-only
             # rule (revision_flag), never danger. `rating` is the same read the
@@ -964,25 +961,55 @@ def rebalance_actions(
         mval   = row["Market Value"]
         avg_cost = row["Avg Cost"]
 
-        if w > SINGLE_NAME_TRIM_TRIGGER and pnl > REBALANCE_TRIM_PNL_PCT:
-            # Trim to the ceiling: sell (w - ceiling)% of the BOOK, i.e. the
-            # fraction (w - ceiling)/w of this position. (Pre-2026-10-23 this
+        # EW C2: inside earnings week the ONE shared decision
+        # (trim_sizing.earnings_week_decision) sizes the trim regardless of P&L
+        # (U1b); outside it, and for a None decision, the standing ceiling rule
+        # (w > trigger AND a strong gain) is unchanged. In the window a None
+        # decision implies w <= SINGLE_NAME_TRIM_TRIGGER, so the elif can't fire there.
+        _ed = (earnings_days or {}).get(str(ticker).upper())
+        _dec = (
+            _trim_sizing.earnings_week_decision(w, len(portfolio_df), shares)
+            if _trim_sizing.in_earnings_window(_ed) else None
+        )
+        _floor_pct = None
+        _earn_note = None
+        if _dec is not None or (w > SINGLE_NAME_TRIM_TRIGGER and pnl > REBALANCE_TRIM_PNL_PCT):
+            # Trim to the target: sell (w - target)% of the BOOK, i.e. the
+            # fraction (w - target)/w of this position. (Pre-2026-10-23 this
             # divided by 100, understating the trim by w/100.) Floor the share
             # count; a sub-one-share excess sizes 0 shares (action still emitted,
             # but urgency "low" and sized=False: no sell call is actually made).
-            _ed = (earnings_days or {}).get(str(ticker).upper())
-            _ew = (
-                _trim_sizing.earnings_week_trim(w, len(portfolio_df), shares)
-                if _trim_sizing.in_earnings_window(_ed) else None
-            )
-            if _ew is not None:
-                _target, _basis = _ew["target_pct"], "earnings_week"
-                _trigger = (
-                    f"Weight {w:.0f}% with earnings {'today' if _ed == 0 else f'in {_ed}d'} — the earnings-week "
-                    f"rule trims to {_target:.0f}%"
-                )
+            if _dec is not None:
+                _target, _basis = _dec["target_pct"], _dec["basis"]
+                _floor_pct = _dec["floor_pct"]
+                _when = "today" if _ed == 0 else f"in {_ed}d"
+                if _basis == "earnings_week":
+                    _title = "Oversized Going Into Earnings"
+                    _trigger = (
+                        f"Weight {w:.1f}% with earnings {_when}, above the {_floor_pct:.1f}% "
+                        f"earnings-week line, so the earnings-week rule trims to {_target:.0f}%"
+                    )
+                    _earn_note = (
+                        f"Earnings {_when} — sized by the same earnings-week rule the "
+                        f"🏠 Brief and 🔔 Catalyst Watch use."
+                    )
+                else:
+                    _title = "Over the Single-Name Ceiling Going Into Earnings"
+                    _trigger = (
+                        f"Weight {w:.1f}% with earnings {_when}: under the {_floor_pct:.1f}% "
+                        f"earnings-week line but over the {SINGLE_NAME_TRIM_TRIGGER:.0f}% "
+                        f"single-name trigger, so the standing trim to "
+                        f"{SINGLE_NAME_CEILING:.0f}% applies"
+                    )
+                    _earn_note = (
+                        f"Earnings {_when}: under the {_floor_pct:.1f}% earnings-week line, "
+                        f"so the standing {SINGLE_NAME_CEILING:.0f}% ceiling trim applies "
+                        f"before the report (the same earnings-week rule the 🏠 Brief and "
+                        f"🔔 Catalyst Watch use)."
+                    )
             else:
                 _target, _basis = SINGLE_NAME_CEILING, "ceiling"
+                _title = "Oversized Position with Strong Gain"
                 _trigger = f"Weight {w:.0f}% exceeds {SINGLE_NAME_TRIM_TRIGGER:.0f}% threshold with +{pnl:.0f}% profit"
             trim_val    = mval * (w - _target) / w if w > 0 else 0.0
             trim_shares = _trim_sizing.shares_to_trim(shares, w, _target)
@@ -991,10 +1018,12 @@ def rebalance_actions(
                 "urgency": "medium" if trim_shares >= 1 else "low",
                 "sized":   trim_shares >= 1,
                 "ticker":  ticker,
-                "title":   "Oversized Position with Strong Gain",
+                "title":   _title,
                 "trigger": _trigger,
                 "target_weight": _target,
                 "basis":   _basis,
+                "floor_pct": _floor_pct,
+                "earnings_note": _earn_note,
                 "earnings_days": _ed,
                 "trim_shares": trim_shares,
                 "trim_val":    trim_val,

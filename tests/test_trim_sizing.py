@@ -20,6 +20,7 @@ from stock_analyzer.constants import (
     EARNINGS_OVERWEIGHT_TRIM_TO_PCT,
     REBALANCE_TRIM_PNL_PCT,
     SINGLE_NAME_CEILING,
+    SINGLE_NAME_TRIM_TRIGGER,
     STOP_PROFIT_LOCK_PNL_PCT,
 )
 from stock_analyzer.daily_briefing import _act_today, _review_list
@@ -137,6 +138,76 @@ def test_earnings_week_trim_result_and_zero_share_case():
                  "target_pct": EARNINGS_OVERWEIGHT_TRIM_TO_PCT, "trim_shares": 47}
     r0 = ts.earnings_week_trim(19.0, 15, 1)
     assert r0 is not None and r0["trim_shares"] == 0
+
+
+# -- earnings_week_decision (EW C1) -------------------------------------------
+
+@pytest.mark.parametrize("n", [0, 1, 5, 6, 7, 8, 9, 10, 11, 12, 15])
+def test_earnings_overweight_floor_table_from_constants(n):
+    # Expected value built from the constants, never a literal.
+    if n <= 0:
+        want = EARNINGS_OVERWEIGHT_TRIM_PCT
+    else:
+        want = max(EARNINGS_OVERWEIGHT_TRIM_PCT,
+                   min(100.0 / n + EARNINGS_OVERWEIGHT_TOLERANCE_PP,
+                       EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT))
+    assert ts.earnings_overweight_floor(n) == want
+
+
+def _decision(n, w, shares=100):
+    return ts.earnings_week_decision(w, n, shares)
+
+
+def test_decision_boundaries_are_strict_and_pick_the_basis():
+    # N=8: floor 17.5 (under the trigger, so the standing branch is unreachable)
+    assert _decision(8, 17.5) is None
+    d = _decision(8, 17.6)
+    assert d["basis"] == "earnings_week" and d["target_pct"] == EARNINGS_OVERWEIGHT_TRIM_TO_PCT
+    # N=7: floor 19.29; at the trigger -> None; just over it -> the standing trim
+    assert _decision(7, SINGLE_NAME_TRIM_TRIGGER) is None
+    d = _decision(7, SINGLE_NAME_TRIM_TRIGGER + 0.1)
+    assert d["basis"] == "standing_in_window" and d["target_pct"] == SINGLE_NAME_CEILING
+    assert d["floor_pct"] == ts.earnings_overweight_floor(7)
+    # N=10: floor == SINGLE_NAME_CEILING exactly
+    assert ts.earnings_overweight_floor(10) == SINGLE_NAME_CEILING
+    assert _decision(10, SINGLE_NAME_CEILING) is None
+    assert _decision(10, SINGLE_NAME_CEILING + 0.1)["basis"] == "earnings_week"
+    # N=5: floor is the 22% cap
+    assert _decision(5, EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT)["basis"] == "standing_in_window"
+    assert _decision(5, EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT + 0.1)["basis"] == "earnings_week"
+
+
+def test_decision_over_ceiling_flag_and_fields():
+    assert _decision(8, SINGLE_NAME_CEILING + 3)["over_ceiling"] is True
+    d = _decision(15, SINGLE_NAME_CEILING)          # floor 12 -> earnings_week
+    assert d["over_ceiling"] is True
+    d = _decision(15, SINGLE_NAME_CEILING - 0.1)
+    assert d["over_ceiling"] is False and d["weight_pct"] == SINGLE_NAME_CEILING - 0.1
+    assert set(d) == {"basis", "floor_pct", "target_pct", "weight_pct", "trim_shares", "over_ceiling"}
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), "x"])
+def test_decision_bad_weight_is_none(bad):
+    assert ts.earnings_week_decision(bad, 8, 100) is None
+
+
+def test_decision_zero_shares_sizes_zero_but_still_decides():
+    d = ts.earnings_week_decision(19.0, 8, 0)
+    assert d is not None and d["trim_shares"] == 0
+    d1 = ts.earnings_week_decision(19.0, 8, 1)       # floor(1 * 9/19) = 0
+    assert d1["basis"] == "earnings_week" and d1["trim_shares"] == 0
+    assert ts.earnings_week_decision(19.0, 8, 100)["trim_shares"] == ts.shares_to_trim(
+        100, 19.0, EARNINGS_OVERWEIGHT_TRIM_TO_PCT)
+
+
+def test_earnings_week_trim_is_unchanged_beside_the_decision():
+    # The old function stays; the decision's first branch agrees with it.
+    for n in (8, 15):
+        old = ts.earnings_week_trim(19.0, n, 100)
+        new = ts.earnings_week_decision(19.0, n, 100)
+        assert new["basis"] == "earnings_week"
+        assert (new["floor_pct"], new["target_pct"], new["trim_shares"]) == (
+            old["floor_pct"], old["target_pct"], old["trim_shares"])
 
 
 # -- the whole point: one holding, one size, three surfaces -------------------
@@ -374,7 +445,10 @@ def test_signals_trim_card_renders_the_sized_target_not_the_ceiling():
     branch = src[start:src.index('elif act["type"] == "add":', start)]
     assert 'act.get("target_weight", SINGLE_NAME_CEILING)' in branch
     assert "{SINGLE_NAME_CEILING:.0f}%" not in branch
-    assert 'act.get("basis") == "earnings_week"' in branch
+    # EW C2: the per-basis earnings line is built in portfolio.rebalance_actions and
+    # rendered from the action; the gain sentence is only for the standing ceiling trim.
+    assert 'act.get("earnings_note")' in branch
+    assert 'act.get("basis") == "ceiling"' in branch
 
 
 @pytest.mark.parametrize("days,basis", [
@@ -397,20 +471,28 @@ def test_signals_earnings_basis_zero_share_trim_is_unsized():
     assert trim["trim_shares"] == 0 and trim["sized"] is False and trim["urgency"] == "low"
 
 
-def test_concentrated_book_band_pins_todays_behaviour():
-    # KNOWN GAP (owner call queued 2026-10-25): with N <= 7 the earnings-week line
-    # (19.29% at N=7) is above SINGLE_NAME_TRIM_TRIGGER (18), so a 19% name in
-    # earnings week gets WATCH on the Brief, no oversized REDUCE on the playbook,
-    # and a ceiling trim on Signals. Pinned so a fix is a deliberate change.
+def test_concentrated_book_band_now_keeps_the_standing_trim_in_earnings_week():
+    """Replaced by EW C2 (2026-11-24; owner took U1 (a) on docs/plans/earnings-week-trim-
+    consistency.md). It used to PIN the known gap: with N <= 7 the earnings-week line
+    (19.29% at N=7) is above SINGLE_NAME_TRIM_TRIGGER, so a 19% name in earnings week got
+    WATCH on the Brief and no REDUCE on the playbook while Signals trimmed it to the
+    ceiling, and the playbook trimmed it on day 8 but not on day 7. Now ONE decision
+    (earnings_week_decision) keeps the standing trim to SINGLE_NAME_CEILING on all three
+    surfaces: earnings week never sizes looser than the week before."""
     df = _book(weight=19.0, n=7)
     assert ts.earnings_overweight_floor(7) > 19.0
-    assert _brief_item(df, 3)["action"]["type"] == "WATCH"
-    action, *_ = ea._recommend(3, 70.0, 19.0, 70.0, 10.0, 0, "Buy", 100, 5000.0, 8.0,
-                               n_positions=7)
-    assert action != "REDUCE"
+    expected = ts.shares_to_trim(100, 19.0, SINGLE_NAME_CEILING)
+    item = _brief_item(df, 3)
+    assert item["action"]["type"] == "TRIM_TO_TARGET"
+    assert item["action"]["target_weight"] == SINGLE_NAME_CEILING
+    assert item["action"]["trim_shares"] == expected
+    action, _p, detail, _l = ea._recommend(3, 70.0, 19.0, 70.0, 10.0, 0, "Buy", 100, 5000.0, 8.0,
+                                           n_positions=7)
+    assert action == "REDUCE" and f"sell {expected:,} shares" in detail
     trim = next(a for a in rebalance_actions(df, earnings_days={"AAA": 3})
                 if a["type"] == "trim" and a["ticker"] == "AAA")
-    assert trim["basis"] == "ceiling" and trim["target_weight"] == SINGLE_NAME_CEILING
+    assert trim["basis"] == "standing_in_window" and trim["target_weight"] == SINGLE_NAME_CEILING
+    assert trim["trim_shares"] == expected
 
 
 def test_build_earnings_playbook_sizes_from_fractional_shares():
