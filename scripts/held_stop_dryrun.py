@@ -91,11 +91,40 @@ Modes:
                      (simulates a later rollover). Excludes --today / --replay. CSV =
                      one "today" row per holding plus one "replay" row per replayed
                      session. Read-only: no DB write, no LLM, no new outbound call.
+  --carry            (SlidingStop C2b, docs/plans/sliding-stop.md section 7 item 4) the
+                     carried-stop dry run, per holding, PRODUCTION policy. Today no
+                     holding is on a prior_session stop, so replaying the real basis would
+                     show the carry idle: instead, over the last `--carry-sessions`
+                     sessions (default 20) each holding is replayed under a FORCED
+                     scenario "the journal stops dating this position from session k", for
+                     k = the first replayed session, the middle one and 5 sessions before
+                     the end. Sessions < k: the production result on its real basis
+                     (floored, then held_stop_carry.apply_carry) and the EOD writer
+                     (rows_to_write) saves rows in memory. Sessions >= k: what
+                     held_stop_wiring._one's non-ok branch gives on the same frame (the
+                     UNCARRIED prior_session stop), then apply_carry with the saved row,
+                     then rows_to_write advances it, under three U2 variants
+                     (journal_readable, journal_down, journal_down_at_read: whether the
+                     reader / the EOD writer can read the journal). Per session it reports
+                     the TRUE full-history stop (real episode, floored, not carried), the
+                     uncarried stop, the carried stop, the carry state / lapse reason and
+                     the breach of each against that session's own Close (the app's
+                     is_stop_breached). Flags: FALSE_BREACH (carried breached, true not;
+                     the hard gate, 0 required, counted when the true basis is full),
+                     CARRY_ABOVE_FULL (carried > true + 1 cent), SAVED_A_SLIDE (true
+                     breached, uncarried not, carried breached), MISSED (true breached,
+                     carried not), BREACH_NO_FULL_TRUTH (informational). The summary ends
+                     with "GATE: PASS (0 false breaches)" or "GATE: FAIL (N false
+                     breaches: ...)". `--detail` prints every replayed session, otherwise
+                     only flagged / lapsed ones; the CSV carries every session. Excludes
+                     --today / --replay / --floor. Read-only: no DB write, no LLM; the
+                     only outbound call is the long Yahoo history per holding.
   --csv PATH         row-level data.   --tickers A,B  --since YYYY-MM-DD
 
 Usage:
     python scripts/held_stop_dryrun.py --today --live
     python scripts/held_stop_dryrun.py --floor --bundle-start 2026-06-24 --csv floor.csv
+    python scripts/held_stop_dryrun.py --carry --carry-sessions 20 --csv carry.csv
     python scripts/held_stop_dryrun.py --replay --csv replay.csv
     python scripts/held_stop_dryrun.py --today --trail-start 2026-10-15 --mults 3.0,3.5 --detail
 
@@ -154,6 +183,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))   # sibling scripts (ex
 
 from stock_analyzer import constants as _C  # noqa: E402
 from stock_analyzer import held_stop as hs  # noqa: E402
+from stock_analyzer import held_stop_carry as hsc  # noqa: E402
 from stock_analyzer import held_stop_floor as hsf  # noqa: E402
 from stock_analyzer import held_stop_wiring as hsw  # noqa: E402
 from stock_analyzer import portfolio, risk  # noqa: E402
@@ -1406,6 +1436,358 @@ def run_floor(args, holdings, trades):
     return rows, skipped
 
 
+# -- carry mode (SlidingStop C2b) ----------------------------------------------
+# The carried-stop dry run (docs/plans/sliding-stop.md section 7 item 4). Pure parts
+# (frames in, dicts out) first, then the I/O edge `run_carry`. Read-only: the saved
+# carry rows are a dict in memory standing in for the held_stop_carry table.
+
+CARRY_SESSIONS_DEFAULT = 20   # replay depth: a report window, not a gate
+CARRY_LATE_OFFSET = 5         # the "late" forced-mismatch start: sessions before the end
+CARRY_ABOVE_FULL_TOL = 0.01   # CARRY_ABOVE_FULL report tolerance (one cent), not a gate
+CARRY_FLAGS = ("FALSE_BREACH", "CARRY_ABOVE_FULL", "SAVED_A_SLIDE", "MISSED",
+               "BREACH_NO_FULL_TRUTH")
+# U2 variants once the forced mismatch has started: (the reader can read the journal,
+# the EOD writer can). Before the mismatch both read it (production).
+CARRY_VARIANTS = {
+    "journal_readable": (True, True),         # the real mismatch case: it reads, it disagrees
+    "journal_down": (False, False),           # an outage at the reader AND at the EOD run:
+                                              # the writer fails closed, the row stops advancing
+    "journal_down_at_read": (False, True),    # a read-time outage only: the EOD still advances it
+}
+
+
+def carry_ks(dates: list) -> list:
+    """The forced-mismatch start sessions k replayed per holding: the FIRST replayed
+    session (no saved row before it: the seed path), the MIDDLE one, and the session
+    `CARRY_LATE_OFFSET` before the end (clamped to the first). Sorted, no repeats."""
+    n = len(dates)
+    if n == 0:
+        return []
+    return [dates[i] for i in sorted({0, n // 2, max(0, n - CARRY_LATE_OFFSET)})]
+
+
+def carry_flags(close, truth_stop, truth_basis, unc_stop, carried_stop) -> dict:
+    """Breach booleans (the app's own rule, `is_stop_breached`) and the flags for ONE
+    session: the stop in force for D against D's own Close.
+      FALSE_BREACH          carried breached, the TRUE full-history stop not (gated
+                            only when the true basis is full)
+      CARRY_ABOVE_FULL      carried > true + one cent (true basis full)
+      SAVED_A_SLIDE         true breached, uncarried not, carried breached
+      MISSED                true breached, carried not
+      BREACH_NO_FULL_TRUTH  carried breached, true not, and the true basis is not
+                            full (informational: there is no full-history truth)"""
+    tb = bool(is_stop_breached(close, truth_stop))
+    ub = bool(is_stop_breached(close, unc_stop))
+    cb = bool(is_stop_breached(close, carried_stop))
+    full = truth_basis == "full"
+    flags = []
+    if cb and not tb:
+        flags.append("FALSE_BREACH" if full else "BREACH_NO_FULL_TRUTH")
+    if (full and truth_stop is not None and carried_stop is not None
+            and carried_stop > truth_stop + CARRY_ABOVE_FULL_TOL):
+        flags.append("CARRY_ABOVE_FULL")
+    if tb and not ub and cb:
+        flags.append("SAVED_A_SLIDE")
+    if tb and not cb:
+        flags.append("MISSED")
+    return {"truth_breached": tb, "uncarried_breached": ub, "carried_breached": cb,
+            "flags": flags}
+
+
+def carry_truth(ticker, long_frame, ep, avg_cost, dates, pol) -> dict:
+    """{D: effective result} on the REAL episode: the full-history production result
+    per session, wrapped like the driver and floored with the floor rows saved so far
+    (the C3c writer replayed in memory), NOT carried. This is the TRUE stop series and
+    the pre-mismatch production result."""
+    rows: dict = {}
+    out: dict = {}
+    for d in dates:
+        res = hs.compute_held_stop(long_frame, ep, avg_cost, d, **pol)
+        eff = hsf.apply_floor(hsw._wrap(ticker, res, "", avg_cost, ep=ep), rows, ep=ep,
+                              avg_cost=avg_cost, frame=long_frame, as_of=d, readable=True)
+        out[d] = eff
+        for r in hsf.rows_to_write({ticker: eff}, d):
+            rows[_iso_date(r["episode_start"])] = r
+    return out
+
+
+def carry_unreadable(ticker, long_frame, bad_ep, avg_cost, dates, pol) -> dict:
+    """{D: effective result} when the journal cannot date the position: the result
+    `held_stop_wiring._one`'s non-ok branch gives (`compute_held_stop` with an episode
+    whose status is not "ok", wrapped, then `apply_floor`, which drops out for it) on
+    the same frame. This is the UNCARRIED prior_session stop."""
+    out: dict = {}
+    for d in dates:
+        res = hs.compute_held_stop(long_frame, bad_ep, avg_cost, d, **pol)
+        out[d] = hsf.apply_floor(hsw._wrap(ticker, res, "", avg_cost, ep=bad_ep), {},
+                                 ep=bad_ep, avg_cost=avg_cost, frame=long_frame, as_of=d,
+                                 readable=True)
+    return out
+
+
+def carry_replay(ticker, frame, truth, bad, avg_cost, jsig, dates, k, variant, closes, *,
+                 force_lapse_from=None) -> list:
+    """One forced scenario, "the journal stops dating this position from session k",
+    replayed over `dates` with the saved carry rows in memory. Sessions < k use
+    `truth[D]` (production on the real basis); sessions >= k use `bad[D]` (the
+    unreadable-episode result) with the reader / writer journal visibility of
+    `CARRY_VARIANTS[variant]`. Per session: `held_stop_carry.apply_carry` with the row
+    saved so far, then `rows_to_write` (the seed guard, the fail-closed rules) advances
+    the row. `closes` = {D: that session's own Close}. `force_lapse_from` (a test
+    hook) hands the carry an average cost $1 higher from that session on, as if an add
+    changed the fingerprint. Returns one log dict per session."""
+    saved: dict = {}
+    sig_now = hsf.policy_sig()
+    log: list = []
+    for d in dates:
+        mis = d >= k
+        reader_ok, writer_ok = CARRY_VARIANTS[variant] if mis else (True, True)
+        base = bad[d] if mis else truth[d]
+        avg_c = avg_cost + 1.0 if (force_lapse_from is not None and d >= force_lapse_from) \
+            else avg_cost
+        carried = hsc.apply_carry(base, saved.get(ticker), as_of=d, bars=frame,
+                                  avg_cost=avg_c, journal_sig=jsig if reader_ok else None,
+                                  journal_readable=reader_ok, policy_sig_now=sig_now,
+                                  carry_readable=True)
+        written = hsc.rows_to_write({ticker: carried}, d, journal_sigs={ticker: jsig},
+                                    avg_costs={ticker: avg_c}, prior_rows=dict(saved),
+                                    session_closes={ticker: closes.get(d)},
+                                    journal_readable=writer_ok, carry_readable=True)
+        for r in written:
+            saved[r["ticker"]] = r
+        close = closes.get(d)
+        tr, unc = truth[d], base
+        cy = carried.get("carry") or {}
+        fl = carry_flags(close, tr.get("stop"), tr.get("basis"), unc.get("stop"),
+                         carried.get("stop"))
+        diff = (round(carried["stop"] - tr["stop"], 2)
+                if carried.get("stop") is not None and tr.get("stop") is not None else None)
+        log.append({"ticker": ticker, "k": k, "variant": variant, "as_of": d, "mismatch": mis,
+                    "close": close, "truth_stop": tr.get("stop"), "truth_basis": tr.get("basis"),
+                    "uncarried_stop": unc.get("stop"), "uncarried_basis": unc.get("basis"),
+                    "carried_stop": carried.get("stop"), "carried_minus_truth": diff,
+                    "carry_state": cy.get("state"), "carry_reason": cy.get("reason", ""),
+                    "carry_code": hsf._code(cy.get("reason", "")) if cy.get("state") ==
+                    hsc.LAPSED else "", "carry_binding": cy.get("binding"),
+                    "truth_breached": fl["truth_breached"],
+                    "uncarried_breached": fl["uncarried_breached"],
+                    "carried_breached": fl["carried_breached"],
+                    "wrote": bool(written), "flags": fl["flags"]})
+    return log
+
+
+def carry_holding(ticker, shares, avg_cost, ep, long_frame, as_of: date, pol, *,
+                  journal_sig, sessions=CARRY_SESSIONS_DEFAULT, ks=None,
+                  force_lapse_from=None) -> dict:
+    """Everything the carry dry run says about ONE holding (frames in, dict out; no
+    network). `skipped` is a reason text when the holding can't be exercised, else
+    `scenarios` = one dict per (k, variant): k, variant, log, counts (flags), states,
+    lapses (reason codes)."""
+    ep = ep or {}
+    start = _iso_date(ep.get("start"))
+    out = {"ticker": ticker, "shares": shares, "avg_cost": avg_cost, "as_of": as_of,
+           "episode_status": ep.get("status"), "episode_start": start,
+           "last_buy": _iso_date(ep.get("last_buy")), "skipped": "", "dates": [], "ks": [],
+           "scenarios": []}
+    if ep.get("status") != "ok" or start is None:
+        out["skipped"] = f"no usable episode ({ep.get('status')}: {ep.get('reason')})"
+        return out
+    if start >= as_of:
+        out["skipped"] = "bought today (buy_day basis, never carried)"
+        return out
+    if journal_sig is None:
+        out["skipped"] = "journal fingerprint unavailable (no row could be written)"
+        return out
+    if not _usable(long_frame):
+        out["skipped"] = "no usable long price history"
+        return out
+    dates = replay_dates(long_frame, ep, as_of, int(sessions))
+    if not dates:
+        out["skipped"] = "no completed session after the episode start / last buy"
+        return out
+    truth = carry_truth(ticker, long_frame, ep, avg_cost, dates, pol)
+    if all(truth[d].get("stop") is None for d in dates):
+        out["skipped"] = (f"no stop could be built on any replayed session (fewer than "
+                          f"{MIN_BARS} completed bars: HELD_STOP_MIN_BARS)")
+        return out
+    bad_ep = hs._episode("mismatch", "forced scenario: the journal stops dating this position",
+                         holdings_shares=shares)
+    bad = carry_unreadable(ticker, long_frame, bad_ep, avg_cost, dates, pol)
+    bars = hs.completed_bars(long_frame, as_of)
+    closes = {i.date(): _f(c) for i, c in zip(bars.index, bars["Close"])}
+    ks = list(ks) if ks else carry_ks(dates)
+    out["dates"], out["ks"] = dates, ks
+    for k in ks:
+        for variant in CARRY_VARIANTS:
+            log = carry_replay(ticker, long_frame, truth, bad, avg_cost, journal_sig, dates,
+                               k, variant, closes, force_lapse_from=force_lapse_from)
+            out["scenarios"].append({
+                "k": k, "variant": variant, "log": log,
+                "counts": Counter(f for e in log for f in e["flags"]),
+                "states": Counter(e["carry_state"] for e in log),
+                "lapses": Counter(e["carry_code"] for e in log if e["carry_code"])})
+    return out
+
+
+def summarize_carry(rows: list[dict]) -> dict:
+    """Counts over the carry rows: per-flag totals, the detail of every FALSE_BREACH /
+    CARRY_ABOVE_FULL / SAVED_A_SLIDE / MISSED session, holdings exercised and skipped
+    (with the reason), lapse reason codes per holding, and the gate."""
+    ex = [r for r in rows if not r.get("skipped")]
+    flag_counts: Counter = Counter()
+    detail = {f: [] for f in CARRY_FLAGS}
+    lapses: dict = {}
+    states: Counter = Counter()
+    sessions = 0
+    for r in ex:
+        for sc in r["scenarios"]:
+            for e in sc["log"]:
+                sessions += 1
+                states[e["carry_state"]] += 1
+                if e["carry_code"]:
+                    lapses.setdefault(r["ticker"], Counter())[e["carry_code"]] += 1
+                for f in e["flags"]:
+                    flag_counts[f] += 1
+                    detail[f].append(e)
+    return {
+        "holdings": len(rows), "exercised": sorted(r["ticker"] for r in ex),
+        "skipped": sorted((r["ticker"], r["skipped"]) for r in rows if r.get("skipped")),
+        "scenario_sessions": sessions, "flag_counts": dict(flag_counts), "detail": detail,
+        "lapses": {t: dict(c) for t, c in sorted(lapses.items())}, "states": dict(states),
+        "false_breaches": len(detail["FALSE_BREACH"]),
+    }
+
+
+def carry_gate_line(s: dict) -> str:
+    """The one-line verdict. A run that exercised nothing proves nothing, so it is
+    NOT PASS."""
+    if not s["exercised"]:
+        return "GATE: NOT EXERCISED (no holding could be replayed)"
+    n = s["false_breaches"]
+    if n == 0:
+        return "GATE: PASS (0 false breaches)"
+    shown = [f"{e['ticker']} k={e['k']} {e['variant']} {e['as_of']} "
+             f"carried {_fmt(e['carried_stop'])} vs close {_fmt(e['close'])}, "
+             f"true {_fmt(e['truth_stop'])}" for e in s["detail"]["FALSE_BREACH"][:10]]
+    more = f" (+{n - 10} more)" if n > 10 else ""
+    return f"GATE: FAIL ({n} false breaches: " + "; ".join(shown) + more + ")"
+
+
+def flatten_carry(rows: list[dict]) -> list[dict]:
+    """CSV rows: one per replayed session per scenario (flags joined with |), plus one
+    `skipped` row per holding that could not be replayed."""
+    out = []
+    for r in rows:
+        if r.get("skipped"):
+            out.append({"record": "skipped", "ticker": r["ticker"], "reason": r["skipped"]})
+            continue
+        for sc in r["scenarios"]:
+            for e in sc["log"]:
+                out.append({"record": "session", **e, "flags": "|".join(e["flags"])})
+    return out
+
+
+def print_carry_header(args, n_holdings: int, pol: dict) -> None:
+    print("=== HELD-STOP CARRY DRY RUN (SlidingStop C2b; read-only) ===")
+    print(f"as_of={args.as_of}  holdings={n_holdings}  replay sessions={args.carry_sessions}  "
+          f"policy = production (held_stop_wiring._policy): trail_start={pol['trail_start']}"
+          f"{' (explicit --trail-start)' if args.trail_start_explicit else ' (HELD_TRAIL_START)'}")
+    print("scenario per holding: 'the journal stops dating this position from session k' "
+          "for k = the first replayed session, the middle one and "
+          f"{CARRY_LATE_OFFSET} sessions before the end. Sessions < k: the production "
+          "result on the real basis (floored, then the carry), the EOD writer saves rows in "
+          "memory. Sessions >= k: the result _one's non-ok branch gives on the same frame "
+          "(the UNCARRIED prior_session stop), then held_stop_carry.apply_carry with the "
+          "saved row, then rows_to_write advances it.")
+    print("U2 variants after k: " + "; ".join(
+        f"{v} (reader {'reads' if rd else 'cannot read'} the journal, EOD writer "
+        f"{'reads' if wr else 'cannot read'} it)" for v, (rd, wr) in CARRY_VARIANTS.items()))
+    print("per session: the stop in force for D against D's own Close, the app's rule "
+          "is_stop_breached. TRUE = the real-episode full-history production stop (floored, "
+          "not carried).")
+    print("flags: FALSE_BREACH (carried breached, true not; the gate, true basis full) | "
+          f"CARRY_ABOVE_FULL (carried > true + {CARRY_ABOVE_FULL_TOL:g}) | SAVED_A_SLIDE (true "
+          "breached, uncarried not, carried breached) | MISSED (true breached, carried not) | "
+          "BREACH_NO_FULL_TRUTH (as FALSE_BREACH but the true basis is not full; not gated)")
+    print("approximations: the long unadjusted frame stands in for the app's 6-month bundle "
+          "on the unreadable-episode result; today's average cost / episode / journal "
+          "fingerprint are used for every session; the floor rows are replayed in memory.")
+    print()
+
+
+def _carry_line(e: dict) -> str:
+    state = e["carry_state"] + (f": {e['carry_code']}" if e["carry_code"] else "")
+    return (f"    {e['as_of']} {'MIS' if e['mismatch'] else 'ok '} close {_fmt(e['close']):>8} "
+            f"true {_fmt(e['truth_stop']):>8} ({e['truth_basis']}) "
+            f"uncarried {_fmt(e['uncarried_stop']):>8} carried {_fmt(e['carried_stop']):>8} "
+            f"[{state}]{' wrote' if e['wrote'] else ''}"
+            f"{'  ' + ' '.join(e['flags']) if e['flags'] else ''}")
+
+
+def print_carry(rows: list[dict], detail: bool = False) -> None:
+    for r in rows:
+        print(f"\n{r['ticker']}  {r['shares']:g} sh @ {_fmt(r['avg_cost'])}  episode "
+              f"{r['episode_status']} start={r['episode_start']} last_buy={r['last_buy']}")
+        if r["skipped"]:
+            print(f"  skipped: {r['skipped']}")
+            continue
+        print(f"  replay: {len(r['dates'])} sessions {r['dates'][0]} -> {r['dates'][-1]}; "
+              f"forced-mismatch starts k = {[str(k) for k in r['ks']]}")
+        for sc in r["scenarios"]:
+            flags = " ".join(f"{f}={n}" for f, n in sorted(sc["counts"].items())) or "no flags"
+            print(f"  k={sc['k']} {sc['variant']}: states {dict(sc['states'])}; lapses "
+                  f"{dict(sc['lapses']) or 'none'}; {flags}")
+            for e in sc["log"]:
+                if detail or e["flags"] or e["carry_code"]:
+                    print(_carry_line(e))
+
+
+def print_carry_summary(s: dict) -> None:
+    print(f"\n=== CARRY SUMMARY ({s['holdings']} holdings, {len(s['exercised'])} replayed, "
+          f"{s['scenario_sessions']} scenario-sessions) ===")
+    print(f"  holdings exercised: {s['exercised'] or 'none'}")
+    for t, why in s["skipped"]:
+        print(f"  skipped {t}: {why}")
+    print("  flag counts: " + (", ".join(f"{f}={s['flag_counts'].get(f, 0)}" for f in CARRY_FLAGS)))
+    print(f"  carry states over all sessions: {s['states']}")
+    print(f"  lapses observed (reason codes) per holding: {s['lapses'] or 'none'}")
+    for f in ("CARRY_ABOVE_FULL", "FALSE_BREACH"):
+        for e in s["detail"][f]:
+            print(f"  {f}: {e['ticker']} k={e['k']} {e['variant']} {e['as_of']} carried "
+                  f"{_fmt(e['carried_stop'])} true {_fmt(e['truth_stop'])} "
+                  f"(diff {_fmt(e['carried_minus_truth'])}) close {_fmt(e['close'])}")
+    print(f"  {carry_gate_line(s)}")
+
+
+def run_carry(args, holdings, trades):
+    """(rows, skipped[(ticker, reason)]). The only network use is the long Yahoo
+    history per holding (no live prices, no 6-month bundle)."""
+    pol = hsw._policy()
+    if args.trail_start_explicit:
+        pol = {**pol, "trail_start": args.trail_start}
+    rows, skipped = [], []
+    for _, h in holdings.iterrows():
+        t = str(h["Ticker"]).upper()
+        if args.tickers and t not in args.tickers:
+            continue
+        shares, avg = float(h["Shares"]), float(h["Avg Cost ($)"])
+        ep = hs.episode_from_journal(t, trades, shares, shares_tol=SHARES_TOL)
+        try:
+            start = _iso_date(ep.get("start"))
+            long_df = None
+            if ep.get("status") == "ok" and start is not None and start < args.as_of:
+                long_df = _long_for(t, ep.get("start"), pol["trail_start"], args.as_of)
+                if long_df is None or not len(long_df):
+                    skipped.append((t, "no long history returned"))
+                    continue
+            rows.append(carry_holding(t, shares, avg, ep, long_df, args.as_of, pol,
+                                      journal_sig=hsc.journal_buy_sig(trades, t),
+                                      sessions=args.carry_sessions))
+        except Exception as e:
+            skipped.append((t, f"{type(e).__name__}: {e}"))
+    return rows, skipped
+
+
 def _parse_date(s: str) -> date:
     return date.fromisoformat(s)
 
@@ -1432,6 +1814,11 @@ def main(argv=None) -> int:
     ap.add_argument("--bundle-start", default="", dest="bundle_start",
                     help="floor mode: truncate the fallback (6-month bundle) frame to start "
                          "on this ET date, to simulate a later rollover")
+    ap.add_argument("--carry", action="store_true",
+                    help="carried-stop dry run (SlidingStop C2b); excludes --today / "
+                         "--replay / --floor")
+    ap.add_argument("--carry-sessions", type=int, default=CARRY_SESSIONS_DEFAULT,
+                    dest="carry_sessions", help="carry mode: sessions of EOD writes to replay")
     args = ap.parse_args(argv)
 
     from stock_analyzer.market_time import today_et
@@ -1456,8 +1843,14 @@ def main(argv=None) -> int:
         print(f"--bundle-start {args.bundle_start} must be before the as-of date {args.as_of}: "
               "the fallback frame would hold no completed bar.")
         return 2
-    do_today = (args.today or not args.replay) and not args.floor
-    if (do_today or args.floor) and args.as_of != today_et():
+    if args.carry and (args.today or args.replay or args.floor):
+        print("--carry is its own mode: don't combine it with --today / --replay / --floor.")
+        return 2
+    if args.carry and args.carry_sessions < 1:
+        print("--carry-sessions must be at least 1.")
+        return 2
+    do_today = (args.today or not args.replay) and not args.floor and not args.carry
+    if (do_today or args.floor or args.carry) and args.as_of != today_et():
         print("--as-of other than today is refused in today mode: holdings, average cost and "
               "manual stops are as of now, so a past as-of would mix two dates.")
         return 2
@@ -1471,11 +1864,27 @@ def main(argv=None) -> int:
     if trades is None:
         print("Trade journal could not be read; nothing computed.")
         return 1
-    holdings = db.load_holdings_or_none() if (do_today or args.floor) else None
-    if (do_today or args.floor) and holdings is None:
+    holdings = db.load_holdings_or_none() if (do_today or args.floor or args.carry) else None
+    if (do_today or args.floor or args.carry) and holdings is None:
         print("Holdings could not be read; nothing computed.")
         return 1
     csv_rows: list[dict] = []
+    if args.carry:
+        # the carry sits on the AUTO stop: manual stops are not part of it, not loaded
+        pol = hsw._policy()
+        if args.trail_start_explicit:
+            pol = {**pol, "trail_start": args.trail_start}
+        print_carry_header(args, len(holdings), pol)
+        rows, skipped = run_carry(args, holdings, trades)
+        print(f"holdings computed: {len(rows)}; skipped: {len(skipped)}"
+              + "".join(f"\n  skipped {t}: {why}" for t, why in skipped))
+        print_carry(rows, args.detail)
+        s = summarize_carry(rows)
+        print_carry_summary(s)
+        csv_rows += flatten_carry(rows)
+        if args.csv:
+            _write_csv(args.csv, csv_rows)
+        return 0
     if args.floor:
         # manual stops are not part of the floor (it floors the AUTO stop): not loaded
         pol = hsw._policy()
