@@ -1317,6 +1317,11 @@ _GATE_FILES = {
     # sell, and the Signals all-clear headline; a wrong call hides a sell or names
     # one that isn't there.
     "stock_analyzer/act_sell_mention.py",
+    # Added 2026-11-25 (entry-fail-closed C1, docs/plans/entry-fail-closed.md):
+    # decides whether a buy check actually ran (earnings read: n/a / date / no
+    # date / failed; later fit, beta and tone); a wrong state lets a buy through
+    # on a check that never ran, or holds one that did.
+    "stock_analyzer/buy_check_state.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

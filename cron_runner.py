@@ -463,6 +463,26 @@ def _news_feed_check(*feeds) -> "str | None":
     return line
 
 
+def _log_watchlist_earnings_read(payload) -> None:
+    """One read-only scan-log line over the watchlist bundles' earnings read
+    (entry-fail-closed C1): "watchlist earnings read: N date, M no_date, K failed
+    (X, Y), J n/a". Nothing reads it for a decision. Never raises: a counting error
+    is logged and the lane carries on."""
+    try:
+        es = payload.get("earnings_states") if isinstance(payload, dict) else None
+        if not isinstance(es, dict):
+            _log("watchlist earnings read: not counted (payload carried no count)")
+            return
+        c = es["counts"]
+        failed = list(es["failed_tickers"])
+        shown = ", ".join(failed[:10]) + (f", +{len(failed) - 10} more" if len(failed) > 10 else "")
+        _log(f"watchlist earnings read: {c['date']} date, {c['no_date']} no_date, "
+             f"{c['failed']} failed" + (f" ({shown})" if failed else "")
+             + f", {c['not_applicable']} n/a")
+    except Exception as exc:  # noqa: BLE001
+        _log(f"watchlist earnings read: count FAILED - {str(exc)[:120]} - continuing.")
+
+
 def _notify_lane_failure(lane: str, now_et, failures) -> None:
     """`_notify_failure` for a lane's accumulated failures. A run whose ONLY
     failures are news-feed outages emails at most once per ET day across lanes
@@ -2143,6 +2163,7 @@ def _run_scan(now_et, force: bool) -> int:
         else:
             for e in _wle_payload.get("errors", []):
                 _log(f"watchlist-entries engine note: {e}")
+            _log_watchlist_earnings_read(_wle_payload)
             # Explicit `is None` rather than `or []` so a genuine offline
             # sentinel can never be silently collapsed into "checked, nothing new".
             _wle_entries = _wle_payload.get("entries")

@@ -284,12 +284,31 @@ class YFinanceProvider(DataProvider):
             # bundle loader's relevance filter runs BEFORE the per-ticker cap.
             news, news_status, news_names = self.search_news_with_names(ticker, keep=None)
             earnings = None
+            # earnings_status (docs/plans/entry-fail-closed.md C1; read by
+            # buy_check_state.earnings_state, nothing holds on it yet). Shapes seen
+            # by the 2026-11-25 P0 probe: a dated stock -> dict with a dated
+            # "Earnings Date" list; a fresh IPO -> dict whose "Earnings Date" is []
+            # ("no_date": Yahoo answered, nothing announced); ETFs and a bogus
+            # symbol -> a bare {} (ETFs are n/a by asset_type in earnings_state,
+            # so a bare {} on a stock reads "failed"). Starts "failed": a non-dict,
+            # a raise (incl. a non-subscriptable `dates`) or an unparseable first
+            # date never reaches the assignments below. An unparseable first date
+            # is "failed", not "no_date": Yahoo gave a value we can't read, which
+            # is not the same as announcing nothing.
+            earnings_status = "failed"
             try:
                 cal = t.calendar
                 if isinstance(cal, dict):
                     dates = cal.get("Earnings Date") or cal.get("earningsDate")
                     if dates:
                         earnings = str(dates[0])[:10]
+                        try:
+                            datetime.strptime(earnings, "%Y-%m-%d")
+                            earnings_status = "date"
+                        except ValueError:
+                            pass
+                    elif "Earnings Date" in cal or "earningsDate" in cal:
+                        earnings_status = "no_date"
             except Exception:
                 pass
 
@@ -332,7 +351,8 @@ class YFinanceProvider(DataProvider):
             return {
                 "history": hist, "info": info, "news": news,
                 "news_status": news_status, "news_names": news_names,
-                "earnings": earnings, "revisions": revisions,
+                "earnings": earnings, "earnings_status": earnings_status,
+                "revisions": revisions,
             }
 
         result = _retry(_fetch)

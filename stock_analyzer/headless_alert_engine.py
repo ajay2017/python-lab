@@ -31,6 +31,7 @@ from stock_analyzer import stop_breach_text as _stop_breach_text
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import young_holding_stop as _young_holding_stop
 from stock_analyzer import news_feed
+from stock_analyzer import buy_check_state as _buy_check_state
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
 from stock_analyzer.data import (
@@ -924,6 +925,21 @@ def _live_entry_context(today: date, port_df) -> dict:
     return {"market_context": mc, "macro_events": macro_events}
 
 
+def earnings_states_summary(state_map: dict) -> dict:
+    """{"counts": {not_applicable, date, no_date, failed: n}, "failed_tickers":
+    sorted list} over a ticker -> earnings_state map (entry-fail-closed C1; scan-log
+    only, nothing reads it for a decision). An unrecognised state value counts as
+    failed."""
+    counts = {"not_applicable": 0, "date": 0, "no_date": 0, "failed": 0}
+    failed: list = []
+    for tk, st in state_map.items():
+        key = st if st in counts else "failed"
+        counts[key] += 1
+        if key == "failed":
+            failed.append(str(tk))
+    return {"counts": counts, "failed_tickers": sorted(failed)}
+
+
 def compute_watchlist_entries(
     today: date | None = None,
     watchlist: "list[str] | None" = None,
@@ -1024,7 +1040,8 @@ def compute_watchlist_entries(
     watchlist = [str(t).strip().upper() for t in watchlist if str(t).strip()]
     if not watchlist:
         return {"entries": [], "built_at": built_at, "errors": [], "reason": None,
-                "gate_degraded": False}
+                "gate_degraded": False,
+                "earnings_states": earnings_states_summary({})}
 
     # Held-ticker set — read directly, decoupled from the heavier bundle/
     # port_df build below. D-C's held-exclusion is a hard invariant (a wrong
@@ -1145,6 +1162,9 @@ def compute_watchlist_entries(
                     "val_score", "s_score", "avg_sent")
     bundle_map: dict = {}
     _news_status_map: dict = {}   # ticker -> {"news_status"} only (never the bundle)
+    # entry-fail-closed C1: ticker -> earnings_state of each LOADED bundle, for the
+    # scan-log count only (nothing here reads it for a decision).
+    _earnings_state_map: dict = {}
     for t in watchlist:
         try:
             data = load_bundle(t, "6mo", spy_df=spy_for_bundles, rfr=rfr)
@@ -1154,6 +1174,10 @@ def compute_watchlist_entries(
             continue
         _news_status_map[str(t)] = {
             "news_status": data.get("news_status") if isinstance(data, dict) else None}
+        try:
+            _earnings_state_map[str(t).upper()] = _buy_check_state.earnings_state(data)["state"]
+        except Exception as e:
+            errors.append(f"{t}: earnings state failed ({e})")
         _provider_sector = data.get("sector") if isinstance(data, dict) else None
         # Both maps keyed UPPER, per build_enter_now_rows' documented contract.
         # Provably a no-op for sector_map today (db.add_to_watchlist upper-cases
@@ -1473,6 +1497,14 @@ def compute_watchlist_entries(
     except Exception as e:
         errors.append(f"watchlist gate-ledger rows failed: {e}")
 
+    # entry-fail-closed C1: additive scan-log count of the earnings read over the
+    # watchlist bundles loaded. None = the count itself failed (logged, never fatal).
+    try:
+        _earnings_states = earnings_states_summary(_earnings_state_map)
+    except Exception as e:
+        _earnings_states = None
+        errors.append(f"earnings state count failed ({e})")
+
     return {
         "entries": new_entries, "built_at": built_at, "errors": errors,
         "reason": None, "gate_degraded": gate_degraded,
@@ -1480,6 +1512,8 @@ def compute_watchlist_entries(
         "entry_run": _entry_run, "gate_ledger_rows": gate_ledger_rows,
         # Additive -- news_feed.feed_state over the watchlist bundles loaded.
         "news_feed": news_feed.feed_state(_news_status_map),
+        # Additive -- {"counts": {state: n}, "failed_tickers": [...]} (or None).
+        "earnings_states": _earnings_states,
     }
 
 

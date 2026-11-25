@@ -1091,3 +1091,125 @@ def test_the_cron_reads_the_trade_log_strictly_not_via_ctx():
            "port_risk": {"beta": 1.1}, "trades_df": pd.DataFrame()}
     result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx, trades_df=None)
     assert result["entries"] == []
+
+
+# ── entry-fail-closed C1: scan-log count of the earnings read (read-only) ────
+
+def _bundle_with(asset="stock", earnings=None, status=None, **extra):
+    b = {"sector": "Technology", "asset_type": asset, "earnings": earnings}
+    if status is not None:
+        b["earnings_status"] = status
+    b.update(extra)
+    return b
+
+
+def test_payload_counts_the_earnings_read_per_state_and_lists_failed_tickers():
+    bundles = {
+        "AAA": _bundle_with(earnings="2026-12-02", status="date"),
+        "BBB": _bundle_with(earnings=None, status="no_date"),
+        "CCC": _bundle_with(earnings=None, status="failed"),
+        "DDD": _bundle_with(earnings=None),                      # no status key: couldn't tell
+        "EEE": _bundle_with(asset="etf", earnings=None, status="failed"),
+        "FFF": _bundle_with(earnings=None, status="date", stale_as_of="2026-11-20"),
+    }
+    result = _run_watchlist_entries(
+        watchlist=list(bundles), load_bundle_fn=lambda t, *a, **k: bundles[t])
+    assert result["earnings_states"] == {
+        "counts": {"not_applicable": 1, "date": 1, "no_date": 1, "failed": 3},
+        "failed_tickers": ["CCC", "DDD", "FFF"],
+    }
+
+
+def test_a_bundle_that_failed_to_load_is_not_counted():
+    def _load(t, *a, **k):
+        if t == "BAD":
+            raise RuntimeError("down")
+        return _bundle_with(earnings="2026-12-02", status="date")
+    result = _run_watchlist_entries(watchlist=["OK", "BAD"], load_bundle_fn=_load)
+    assert result["earnings_states"]["counts"]["date"] == 1
+    assert result["earnings_states"]["failed_tickers"] == []
+    assert sum(result["earnings_states"]["counts"].values()) == 1
+
+
+def test_empty_watchlist_payload_carries_a_zero_count():
+    result = _run_watchlist_entries(watchlist=())
+    assert result["earnings_states"] == {
+        "counts": {"not_applicable": 0, "date": 0, "no_date": 0, "failed": 0},
+        "failed_tickers": [],
+    }
+
+
+def test_counting_never_changes_the_decision_fields():
+    """Nothing reads the new state: the entries / holds are identical for a
+    failed read and a dated one (C3 changes that, not C1)."""
+    a = _run_watchlist_entries(watchlist=["AAPL"], bundle=_bundle_with(earnings=None, status="failed"))
+    b = _run_watchlist_entries(watchlist=["AAPL"], bundle=_bundle_with(earnings="2026-12-02", status="date"))
+    assert [c["ticker"] for c in a["entries"]] == [c["ticker"] for c in b["entries"]] == ["AAPL"]
+    assert a["gate_degraded"] == b["gate_degraded"]
+
+
+def test_a_counting_exception_never_breaks_the_lane(monkeypatch):
+    def _boom(_m):
+        raise RuntimeError("count broke")
+    monkeypatch.setattr(hae, "earnings_states_summary", _boom)
+    result = _run_watchlist_entries(watchlist=["AAPL"])
+    assert result["earnings_states"] is None
+    assert any("earnings state count failed" in e for e in result["errors"])
+    assert [c["ticker"] for c in result["entries"]] == ["AAPL"]
+
+
+def test_a_per_ticker_state_exception_never_breaks_the_lane(monkeypatch):
+    def _boom(_b):
+        raise RuntimeError("state broke")
+    monkeypatch.setattr(hae._buy_check_state, "earnings_state", _boom)
+    result = _run_watchlist_entries(watchlist=["AAPL"])
+    assert any("earnings state failed" in e for e in result["errors"])
+    assert [c["ticker"] for c in result["entries"]] == ["AAPL"]
+
+
+def test_summary_counts_an_unrecognised_state_as_failed():
+    out = hae.earnings_states_summary({"A": "date", "B": "weird", "C": None})
+    assert out["counts"]["date"] == 1 and out["counts"]["failed"] == 2
+    assert out["failed_tickers"] == ["B", "C"]
+
+
+def test_scan_logs_one_earnings_read_line(monkeypatch, capsys):
+    wle_payload = {
+        "entries": [], "reason": None, "errors": [], "built_at": "x", "gate_degraded": False,
+        "earnings_states": {
+            "counts": {"not_applicable": 2, "date": 5, "no_date": 1, "failed": 2},
+            "failed_tickers": ["XYZ", "ABC"]},
+    }
+    rc, sent, saved, handled = _run_scan_to_watchlist_entries(monkeypatch, wle_payload=wle_payload)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "watchlist earnings read: 5 date, 1 no_date, 2 failed (XYZ, ABC), 2 n/a" in out
+
+
+def test_scan_log_line_omits_the_ticker_list_when_none_failed(monkeypatch, capsys):
+    wle_payload = {
+        "entries": [], "reason": None, "errors": [], "built_at": "x", "gate_degraded": False,
+        "earnings_states": {
+            "counts": {"not_applicable": 0, "date": 3, "no_date": 0, "failed": 0},
+            "failed_tickers": []},
+    }
+    _run_scan_to_watchlist_entries(monkeypatch, wle_payload=wle_payload)
+    assert "watchlist earnings read: 3 date, 0 no_date, 0 failed, 0 n/a" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bad", [None, "oops", {"counts": None, "failed_tickers": []},
+                                 {"counts": {"date": 1}, "failed_tickers": []}])
+def test_a_malformed_count_never_breaks_the_scan_lane(monkeypatch, capsys, bad):
+    wle_payload = {"entries": [], "reason": None, "errors": [], "built_at": "x",
+                   "gate_degraded": False, "earnings_states": bad}
+    rc, sent, saved, handled = _run_scan_to_watchlist_entries(monkeypatch, wle_payload=wle_payload)
+    assert rc == 0 and sent == []
+    assert "watchlist earnings read:" in capsys.readouterr().out
+
+
+def test_a_payload_without_the_key_logs_not_counted_and_the_lane_runs(monkeypatch, capsys):
+    wle_payload = {"entries": [], "reason": None, "errors": [], "built_at": "x",
+                   "gate_degraded": False}
+    rc, *_ = _run_scan_to_watchlist_entries(monkeypatch, wle_payload=wle_payload)
+    assert rc == 0
+    assert "watchlist earnings read: not counted" in capsys.readouterr().out

@@ -136,8 +136,13 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     cache + the internal SPY/rfr fetch, now passed in)."""
     _stale_as_of = None
     _from_cache = False
+    _earnings_status = None
     try:
         bundle = fetch_ticker_bundle(ticker, period)
+        # Provider-stamped earnings read state ("date" / "no_date" / "failed");
+        # None when the serving provider doesn't stamp one (earnings_state then
+        # reads the date alone).
+        _earnings_status = bundle.get("earnings_status")
         try:
             db.save_bundle_cache(ticker, bundle)
         except Exception:
@@ -153,6 +158,9 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         bundle = _cached_bundle["bundle"]
         _stale_as_of = _cached_bundle["fetched_at"]
         _from_cache = True
+        # entry-fail-closed C1: a last-known-good copy never proves today's
+        # earnings read, whatever status it was saved with -> "failed".
+        _earnings_status = "failed"
     # Per-ticker news feed status. A last-known-good cached bundle carries no news
     # (never cached there) -> "cached". A bundle from a provider without its own
     # status (not Yahoo) reads "ok" only when it really has headlines; an empty
@@ -484,6 +492,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "entry_lo": entry_lo, "entry_hi": entry_hi,
         "targets": targets, "sr": sr,
         "risk_metrics": risk_metrics, "earnings": bundle["earnings"],
+        "earnings_status": _earnings_status,
         "revisions": bundle.get("revisions", {}),
         "name": name, "sector": sector,
         "industry": industry, "market_cap": market_cap,

@@ -276,6 +276,13 @@ def get_bundle(ticker: str, period: str = "6mo") -> dict:
             if not primary.get("earnings") and hasattr(prov, "earnings"):
                 try:
                     primary["earnings"] = prov.earnings(ticker)
+                    # entry-fail-closed C1: a fallback that returned a date WITHOUT
+                    # raising makes the read "date". Only an existing status is
+                    # updated (a primary without earnings_status support keeps the
+                    # key absent, never an invented one); a fallback that raised or
+                    # returned nothing leaves the primary's own status.
+                    if primary["earnings"] and "earnings_status" in primary:
+                        primary["earnings_status"] = "date"
                 except Exception:
                     pass
             if not primary.get("revisions") and hasattr(prov, "revisions"):
