@@ -82,7 +82,7 @@ _UNSET = object()
 
 
 def _wle(*, watchlist=(SEMIS,), held=(), entry_context=_UNSET, bundle=None,
-         fake_cards=None, gate_holds=None, prior_df=None, live_ctx=None):
+         fake_cards=None, gate_holds=None, prior_df=None, live_ctx=None, ctx=None):
     """Run compute_watchlist_entries at the I/O boundary. With `fake_cards`
     ({ticker: card}) the advisor is stubbed; otherwise the REAL advisor runs and
     every (ticker, portfolio_ctx, entry_ctx, card) is recorded in `spy`."""
@@ -115,6 +115,7 @@ def _wle(*, watchlist=(SEMIS,), held=(), entry_context=_UNSET, bundle=None,
         P("db.load_watchlist_or_none", return_value=list(watchlist))
         P("db.load_holdings_or_none", return_value=_holdings(held))
         P("fetch_risk_free_rate", return_value=0.045)
+        P("fetch_spy", return_value=None)      # a not-ok ctx makes its own SPY read
         P("load_bundle", return_value=bundle)
         P("db.load_exit_signals_or_none", return_value=pd.DataFrame())
         P("db.load_trades_or_none", return_value=pd.DataFrame())
@@ -127,7 +128,7 @@ def _wle(*, watchlist=(SEMIS,), held=(), entry_context=_UNSET, bundle=None,
         P("_live_entry_context", side_effect=_live)
         kw = {} if entry_context is _UNSET else {"entry_context": entry_context}
         result = hae.compute_watchlist_entries(
-            TODAY, watchlist=list(watchlist), ctx=_ctx(), **kw)
+            TODAY, watchlist=list(watchlist), ctx=ctx if ctx is not None else _ctx(), **kw)
     return result, save_mock, spy, gate_calls, live_calls
 
 
@@ -733,3 +734,149 @@ def test_real_eligible_card_carries_its_unchecked_notes_into_the_email():
     assert r["entries"][0].get("entry_unchecked")
     _s, html = render_watchlist_entries_email(r["entries"], built_at="x")
     assert "Not checked: no recent headlines to check" in html
+
+
+# ═════════════ 9. entry-fail-closed C2a: an unread book HOLDS the name ═══════════
+def _ok_ctx(beta=1.0, dropped=None, sector="Healthcare", weight=2.0):
+    df = pd.DataFrame([{
+        "Ticker": "HELD1", "Sector": sector, "Weight (%)": weight,
+        "Gate Weight (%)": weight, "Market Value": 2000.0,
+    }])
+    if dropped is not None:
+        df.attrs["dropped_holdings"] = dropped
+    return {"ok": True, "errors": [], "port_df": df, "spy_6mo": None,
+            "port_risk": {"beta": beta}}
+
+
+@pytest.mark.parametrize("reason", ["no_bundles", "empty_port_df", "db_unavailable"])
+def test_ctx_not_ok_holds_every_name_no_entries_no_capture_no_ledger(reason):
+    ctx = {"ok": False, "reason": reason, "errors": [reason]}
+    r, save, spy, *_ = _wle(entry_context=FLAT_CTX, ctx=ctx)
+    assert spy[0][3]["action"] == "NEAR_ENTRY"
+    assert spy[0][3]["suppression_kind"] == "fit_unknown"
+    assert r["entries"] == []
+    save.assert_not_called()                       # held cards are never captured
+    assert r["gate_ledger_rows"] == []             # a data abstention: no ledger row
+    assert r["fit_state"] == {"state": "unknown", "unpriced_sectors": None}
+    assert r["fit_read"] is False and r["gate_degraded"] is True
+    assert r["checks_held"] == {"fit_unknown": [SEMIS], "beta_unknown": []}
+
+
+def test_ctx_ok_with_an_empty_frame_holds_too():
+    ctx = {**_ok_ctx(), "port_df": pd.DataFrame()}
+    r, _s, spy, *_ = _wle(entry_context=FLAT_CTX, ctx=ctx)
+    assert spy[0][3]["suppression_kind"] == "fit_unknown"
+    assert r["entries"] == []
+
+
+def test_no_holdings_is_a_true_zero_book_and_entries_flow():
+    ctx = {"ok": False, "reason": "no_holdings", "errors": ["no holdings"]}
+    r, save, spy, *_ = _wle(entry_context=FLAT_CTX, ctx=ctx)
+    assert spy[0][3]["action"] == "ENTER_NOW"
+    assert [e["ticker"] for e in r["entries"]] == [SEMIS]
+    assert r["fit_state"] == {"state": "flat", "unpriced_sectors": None}
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": []}
+    assert r["fit_read"] is True and r["gate_degraded"] is False
+
+
+def test_the_cron_passes_fit_state_into_the_advisor_context():
+    """Pin at the producer end: every portfolio_ctx the advisor receives carries
+    the run's fit_state (the advisor end is pinned in test_watchlist_advisor)."""
+    r, _s, spy, *_ = _wle(entry_context=FLAT_CTX)
+    pctx = spy[0][1]
+    assert pctx["fit_state"]["state"] == "ready"
+    assert pctx["fit_state"] is r["fit_state"]
+    import inspect
+    src = inspect.getsource(hae.compute_watchlist_entries)
+    assert '"fit_state":         _fit_state' in src
+
+
+def test_unpriced_sectors_are_computed_and_carried_but_hold_nothing_yet():
+    dropped = [{"ticker": "NVDA", "reason": "no_price_data"}]
+    r, _s, spy, *_ = _wle(entry_context=FLAT_CTX, ctx=_ok_ctx(dropped=dropped))
+    assert r["fit_state"]["state"] == "ready"
+    assert r["fit_state"]["unpriced_sectors"]                    # the NVDA sector
+    # the fit_unpriced hold is chunk C5 (Q4): the name is still emailed today
+    assert [e["ticker"] for e in r["entries"]] == [SEMIS]
+
+
+def test_a_real_g05_breach_binds_and_is_ledgered_with_fit_state_passed():
+    ctx = _ok_ctx(sector="Semiconductors", weight=40.0)
+    r, _s, spy, *_ = _wle(entry_context=FLAT_CTX, ctx=ctx)
+    assert spy[0][3]["suppression_kind"] == "sector"
+    assert [(x["ticker"], x["gate_id"]) for x in r["gate_ledger_rows"]] == [(SEMIS, "G-05")]
+    assert r["entries"] == []
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": []}   # not a data hold
+
+
+def test_beta_unknown_holds_when_the_unread_leg_could_bind():
+    # portfolio beta unread + ticker beta over critical -> held
+    b = _bundle(risk_metrics={"beta": 1.9})
+    r, save, spy, *_ = _wle(entry_context=FLAT_CTX, bundle=b, ctx=_ok_ctx(beta=None))
+    assert spy[0][3]["suppression_kind"] == "beta_unknown"
+    assert r["entries"] == [] and r["gate_ledger_rows"] == []
+    save.assert_not_called()
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [SEMIS]}
+    # ticker beta unread + portfolio beta over the ceiling -> held
+    r2, *_ = _wle(entry_context=FLAT_CTX, bundle=_bundle(), ctx=_ok_ctx(beta=1.5))
+    assert r2["entries"] == [] and r2["checks_held"]["beta_unknown"] == [SEMIS]
+
+
+def test_beta_unread_but_unable_to_bind_still_emails_the_name():
+    b = _bundle(risk_metrics={"beta": 1.0})
+    r, *_ = _wle(entry_context=FLAT_CTX, bundle=b, ctx=_ok_ctx(beta=None))
+    assert [e["ticker"] for e in r["entries"]] == [SEMIS]
+    assert r["gate_degraded"] is True and r["beta_read"] is False   # box still disclosed
+
+
+def test_a_held_in_portfolio_name_is_not_counted_in_checks_held():
+    ctx = {"ok": False, "reason": "no_bundles", "errors": ["x"]}
+    r, *_ = _wle(entry_context=FLAT_CTX, ctx=ctx, held=(SEMIS,))
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": []}
+
+
+def test_scan_with_every_name_held_sends_no_email_and_logs_the_line(monkeypatch):
+    ctx = {"ok": False, "reason": "no_bundles", "errors": ["no holdings could be loaded"]}
+    real, *_ = _wle(entry_context=FLAT_CTX, ctx=ctx)
+    assert real["entries"] == []
+    logs: list = []
+    monkeypatch.setattr(cr, "_log", lambda m: logs.append(m))
+    rc, sent, _w, _g, budget_calls, notified = _scan(
+        monkeypatch, morning=_morning_payload(entry_context=FLAT_CTX), wle=real)
+    assert rc == 0 and notified == []                      # exit code unchanged
+    assert [s for s in sent if s[0] == "watchlist-entries"] == []     # Q6: no email
+    assert budget_calls == [] or budget_calls == [[]]
+    assert f"watchlist: 1 held, a check couldn't run (fit_unknown: {SEMIS})" in logs
+
+
+def test_the_held_checks_line_formats_and_is_silent_when_nothing_is_held():
+    f = cr._watchlist_checks_held_line
+    assert f({"checks_held": {"fit_unknown": ["A", "B"], "beta_unknown": ["C"]}}) == (
+        "watchlist: 3 held, a check couldn't run (fit_unknown: A, B; beta_unknown: C)")
+    assert f({"checks_held": {"fit_unknown": [], "beta_unknown": ["C"]}}) == (
+        "watchlist: 1 held, a check couldn't run (beta_unknown: C)")
+    assert f({"checks_held": {"fit_unknown": [], "beta_unknown": []}}) is None
+    for bad in (None, {}, {"checks_held": None}, {"checks_held": "x"}, "payload", 5,
+                {"checks_held": {"fit_unknown": 5}}):
+        assert f(bad) is None
+
+
+def test_the_held_checks_logger_never_raises_or_touches_failures(monkeypatch):
+    monkeypatch.setattr(cr, "_log", lambda m: (_ for _ in ()).throw(RuntimeError("log boom")))
+    cr._log_watchlist_checks_held({"checks_held": {"fit_unknown": ["A"], "beta_unknown": []}})
+    cr._log_watchlist_checks_held(None)
+
+
+def test_scan_wires_the_held_checks_log_after_the_earnings_read():
+    import inspect
+    src = inspect.getsource(cr._run_scan)
+    assert src.index("_log_watchlist_earnings_read(_wle_payload)") < \
+        src.index("_log_watchlist_checks_held(_wle_payload)")
+
+
+def test_email_box_for_an_unread_book_says_loaded_or_priced():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    _s, html = render_watchlist_entries_email(
+        [_enter_card("AAA")], built_at="x", fit_read=False, beta_read=False)
+    assert "Your holdings couldn't be loaded or priced for this run" in html
+    assert "still applied" not in html

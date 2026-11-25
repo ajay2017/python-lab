@@ -579,6 +579,9 @@ HELD_KIND_LABELS = {
     "stale": "stale data",
     "earnings": "earnings",
     "check_failed": "entry check couldn't run",
+    # entry-fail-closed C2a: a portfolio-fit / beta check that couldn't run
+    "fit_unknown": "portfolio fit couldn't be checked",
+    "beta_unknown": "portfolio beta couldn't be checked",
 }
 
 

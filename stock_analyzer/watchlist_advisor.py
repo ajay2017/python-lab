@@ -46,6 +46,7 @@ from stock_analyzer import rr_pullback
 from stock_analyzer.rr_readout import fmt_ratio_vs
 from stock_analyzer import asset_type as _asset_type_mod
 from stock_analyzer import entry_eligibility as _entry_elig
+from stock_analyzer import buy_check_state as _buy_check_state
 from stock_analyzer.pillar_availability import (
     technical_clause, technical_history_short, verdict_basis, withheld_split,
 )
@@ -113,6 +114,22 @@ def _score_txt(score: float) -> str:
     """Score as display text that never rounds across a composite band edge
     (64.6 must not read "65"); see score_text.composite_score_text."""
     return composite_score_text(score)
+
+
+# Card wording for the two "a fit check couldn't run" abstentions of
+# `_portfolio_risk_gate` (entry-fail-closed C2a). Keyed by the gate's `kind`.
+_FIT_ABSTENTION_COPY = {
+    "fit_unknown": {
+        "title":   "Portfolio Fit Couldn't Be Checked",
+        "summary": "your holdings couldn't be loaded or priced, so the portfolio-fit checks couldn't run.",
+        "missing": "Portfolio fit couldn't be checked — your holdings weren't available",
+    },
+    "beta_unknown": {
+        "title":   "Portfolio Beta Couldn't Be Checked",
+        "summary": "the portfolio-beta check couldn't run.",
+        "missing": "Portfolio beta couldn't be checked — a beta value was unavailable",
+    },
+}
 
 
 def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
@@ -202,6 +219,53 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
             "gate_value":     ticker_beta,
             "gate_threshold": TICKER_BETA_CRITICAL,
         }
+
+    # ── Hard abstentions: a fit check that could not run (entry-fail-closed C2a) ──
+    # Only when the caller passes a `fit_state` (the cron does; the app's Watchlist
+    # doesn't until C2b): an absent key is today's behaviour exactly. Placed AFTER
+    # the G-05 / G-06 breaches above so a real breach still binds first and is still
+    # ledgered. Like `sector_unknown`, deliberately NOT in gate_ledger._WATCHLIST_KIND:
+    # a data abstention (we couldn't check), not a policy gate that measured a breach.
+    if "fit_state" in portfolio_ctx:
+        _fs = portfolio_ctx["fit_state"]
+        _fs_state = _fs.get("state") if isinstance(_fs, dict) else None
+        if _fs_state not in (_buy_check_state.FIT_READY, _buy_check_state.FIT_FLAT):
+            # "unknown", or a fit_state we can't read: fail closed.
+            return {
+                "severity": "hard",
+                "kind":     "fit_unknown",
+                "reason": (
+                    "Your holdings couldn't be loaded or priced for this check, so how "
+                    "this name would fit your book (sector concentration and portfolio "
+                    "beta) couldn't be checked. That is a reason to pause, not a green "
+                    "light. It re-runs at the next scan or page load."
+                ),
+                "gate_value":     None,
+                "gate_threshold": None,
+            }
+        # An empty book (flat) has no portfolio beta to breach: nothing to compute.
+        if (_fs_state == _buy_check_state.FIT_READY
+                and _buy_check_state.beta_leg_could_bind(port_beta, ticker_beta)):
+            _pb_read = _buy_check_state.beta_or_none(port_beta) is not None
+            _tb_read = _buy_check_state.beta_or_none(ticker_beta) is not None
+            if not _pb_read and not _tb_read:
+                _why = ("neither your portfolio's beta nor this name's beta could be "
+                        "read, so the portfolio-beta check couldn't run.")
+            else:
+                _what = ("your portfolio's beta couldn't be computed" if not _pb_read
+                         else "this name's beta couldn't be read")
+                _why = (f"{_what}, and the beta that was read is already past its "
+                        "limit, so the unread one could have blocked this entry.")
+            return {
+                "severity": "hard",
+                "kind":     "beta_unknown",
+                "reason": (
+                    f"The portfolio-beta check couldn't run: {_why} That is a reason "
+                    "to pause, not a green light. It re-runs at the next scan or page load."
+                ),
+                "gate_value":     None,
+                "gate_threshold": None,
+            }
 
     # ── Soft concerns: warn but keep ENTER_NOW ───────────────────────────────
     soft: list[str] = []
@@ -641,6 +705,44 @@ def _build_watchlist_recommendation(
                 portfolio_caution=gate["reason"],
                 # No gate id is ledgered for this kind (gate_ledger._WATCHLIST_KIND
                 # has no "sector_unknown" entry): a data abstention, not a policy gate.
+                suppression_kind=gate["kind"],
+                gate_value=gate.get("gate_value"),
+                gate_threshold=gate.get("gate_threshold"),
+            )
+
+        if gate and gate["severity"] == "hard" and gate["kind"] in _FIT_ABSTENTION_COPY:
+            # Data abstention, NOT a breach (entry-fail-closed C2a): the portfolio-fit
+            # (or beta) check couldn't run, so a Buy isn't called today. Same shape as
+            # the sector_unknown card above; the breach card's "trim the sector /
+            # open a small position" advice would be false here. No gate id is
+            # ledgered for these kinds (not in gate_ledger._WATCHLIST_KIND).
+            _cp = _FIT_ABSTENTION_COPY[gate["kind"]]
+            return _card(
+                ticker, "NEAR_ENTRY", score, rec_label, price, entry_lo, entry_hi,
+                stop, rr, earn_days,
+                title=f"{ticker} — Setup Ready, But {_cp['title']}",
+                summary=(
+                    f"Score {_score_txt(score)}/100 and price in entry zone — the stock-level setup is a go. "
+                    f"But {_cp['summary']} It isn't recommended today."
+                ),
+                detail=(
+                    f"{gate['reason']} "
+                    "Nothing was breached; the check simply couldn't run. "
+                    "It will re-evaluate automatically the next time it can."
+                ),
+                conditions_met=[
+                    f"Score {_score_txt(score)}/100 — above {COMPOSITE_BUY:.0f} threshold",
+                    f"Signal: {rec_label}",
+                    f"Price {zone_word(price, entry_lo, in_zone)} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
+                    f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
+                ],
+                conditions_missing=[_cp["missing"]],
+                institutional_lens=(
+                    "A portfolio-fit check that can't run is not a pass. When a required input "
+                    "is missing, the disciplined default is to wait rather than enter on an "
+                    "unverified fit."
+                ),
+                portfolio_caution=gate["reason"],
                 suppression_kind=gate["kind"],
                 gate_value=gate.get("gate_value"),
                 gate_threshold=gate.get("gate_threshold"),

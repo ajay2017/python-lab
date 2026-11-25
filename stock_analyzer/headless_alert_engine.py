@@ -949,8 +949,9 @@ def compute_watchlist_entries(
 ) -> dict:
     """Return {"entries": [...] | None, "built_at": <ET iso>, "errors": [...],
     "reason": str | None, "gate_degraded": bool, "fit_read": bool,
-    "beta_read": bool, "entry_run": {...},
-    "gate_ledger_rows": [...]}.
+    "beta_read": bool, "fit_state": {"state", "unpriced_sectors"},
+    "checks_held": {"fit_unknown": [...], "beta_unknown": [...]},
+    "entry_run": {...}, "gate_ledger_rows": [...]}.
 
     `entry_context` (shared-entry-check chunk 5): compute_morning_picks'
     `entry_context` -- {"market_context", "macro_events"} -- so both emails of
@@ -1011,14 +1012,19 @@ def compute_watchlist_entries(
     `errors` rather than risk announcing wrongly.
 
     D-D: the portfolio-fit gate (sector weight from port_df + portfolio beta)
-    is best-effort. Sector/concentration runs off port_df ONLY when the
-    portfolio context was built (`fit_read`); when it wasn't, port_df is None,
-    the sector weight reads 0.0 and the G-05 ceiling could not run. Beta is the
-    other leg (`beta_read`: a fragility/risk-metrics computation failure also
-    loses it). Both are reported in the return dict, and `gate_degraded` is
-    True when either leg is missing -- never silently dropped. An otherwise-
-    qualifying name is still included when degraded, never withheld (a later
-    chunk of docs/plans/entry-fail-closed.md changes that).
+    FAILS CLOSED (entry-fail-closed C2a). `fit_state` ("ready" / "flat" /
+    "unknown", `buy_check_state.fit_state`) travels into every ticker's portfolio
+    context: when the holdings frame wasn't built ("unknown": any not-ok ctx but
+    an empty book, or an ok ctx with no usable frame) the advisor HOLDS a
+    would-be ENTER_NOW as NEAR_ENTRY `fit_unknown`, and when a beta leg is
+    unread AND could bind G-06 it holds `beta_unknown` (a G-05 / G-06 breach that
+    CAN be evaluated still binds first). An empty book ("flat", ctx reason
+    "no_holdings") is a true zero: entries flow. So `entries == []` can now also
+    mean "every name was held because a check couldn't run" (`checks_held` lists
+    them; the lane sends no email and logs it). `fit_read` / `beta_read` /
+    `gate_degraded` are still returned, derived from `fit_state` and beta, for one
+    release; the email box words them (`gate_degraded` True when either leg is
+    missing).
 
     Never raises; faults are collected in `errors`.
     """
@@ -1067,25 +1073,31 @@ def compute_watchlist_entries(
     # uses, so sector weights/beta tie out with the protective/offense lanes.
     if ctx is None:
         ctx = _build_context(today)
-    gate_degraded = False
-    # CronSectorClaim: which legs of the fit gate really ran. `fit_read` = the
-    # holdings frame (sector weights) was read; `beta_read` = portfolio beta was
-    # computed. `gate_degraded` stays "either failed" for existing callers.
-    fit_read = False
+    # entry-fail-closed C2a: `fit_state` (ready / flat / unknown) says whether the
+    # holdings frame the sector-weight leg needs was really built; `fit_read` and
+    # `gate_degraded` below are DERIVED from it (kept in the payload for one release).
+    #   ctx ok                  -> ready (a non-empty frame) + `unpriced_sectors`;
+    #                              ok with no usable frame -> unknown
+    #   ctx reason "no_holdings"-> flat (the book was READ and is empty: a sector
+    #                              weight of 0.0 and no portfolio beta are true)
+    #   any other not-ok reason -> unknown
+    # `beta_read` = portfolio beta was computed, or there is nothing to compute (an
+    # empty book).
     beta_read = False
     port_df = None
     portfolio_beta = None
     spy_for_bundles = None
     if ctx.get("ok"):
         port_df = ctx["port_df"]
-        fit_read = True
         spy_for_bundles = ctx.get("spy_6mo")
         port_risk = ctx.get("port_risk")
         portfolio_beta = _f(port_risk.get("beta")) if port_risk else None
-        if portfolio_beta is None:
-            gate_degraded = True
-        else:
-            beta_read = True
+        beta_read = portfolio_beta is not None
+        # ctx ok proves the book was non-empty when the frame was built; the strict
+        # holdings read above is the same rows. If that read came back empty while
+        # ctx says ok, don't let the mismatch read as "flat": stay on the frame.
+        _fit_rows = holdings_df.to_dict("records") or [{}]
+        _fit_state = _buy_check_state.fit_state(_fit_rows, port_df)
     else:
         # _build_context always sets "errors" to a list on both its ok and
         # not-ok branches (never omits or nulls it) — direct index, not
@@ -1094,17 +1106,16 @@ def compute_watchlist_entries(
         _ctx_errors = ctx["errors"] if "errors" in ctx else []
         errors.extend(_ctx_errors)
         if ctx.get("reason") == "no_holdings":
-            # An empty book was READ, not missed: a sector weight of 0.0 and no
-            # portfolio beta are true, so neither leg is degraded and the email
-            # must not say the holdings couldn't be loaded (CronSectorClaim).
-            fit_read = True
+            _fit_state = _buy_check_state.fit_state([], None)
             beta_read = True
         else:
-            gate_degraded = True
+            _fit_state = {"state": _buy_check_state.FIT_UNKNOWN, "unpriced_sectors": None}
         try:
             spy_for_bundles = fetch_spy("6mo")
         except Exception:
             spy_for_bundles = None
+    fit_read = _fit_state["state"] in (_buy_check_state.FIT_READY, _buy_check_state.FIT_FLAT)
+    gate_degraded = (not fit_read) or (not beta_read)
 
     try:
         rfr = fetch_risk_free_rate()
@@ -1223,6 +1234,9 @@ def compute_watchlist_entries(
             "sector_label_source": _sctx["label_source"],
             "sector_provider_label": _sctx.get("provider_label"),
             "portfolio_beta":    portfolio_beta,
+            # entry-fail-closed C2a: an unread book HOLDS the name (the advisor's
+            # fit_unknown / beta_unknown abstentions); an empty book is "flat".
+            "fit_state":         _fit_state,
             # NOT replicated headlessly — these are session-only Risk Advisor /
             # Grow Today state, not part of any headless computation. Omitting
             # them only weakens the SOFT-caution legs of _portfolio_risk_gate;
@@ -1505,10 +1519,24 @@ def compute_watchlist_entries(
         _earnings_states = None
         errors.append(f"earnings state count failed ({e})")
 
+    # entry-fail-closed C2a: additive scan-log input -- the NOT-held-in-portfolio
+    # names the advisor held because a fit / beta check couldn't run. Never fatal.
+    _checks_held = {"fit_unknown": [], "beta_unknown": []}
+    try:
+        for _c in all_cards:
+            _k = _c.get("suppression_kind")
+            _tk = str(_c.get("ticker", "")).strip().upper()
+            if (_k in _checks_held and _c.get("action") == "NEAR_ENTRY"
+                    and _tk and _tk not in held_set):
+                _checks_held[_k].append(_tk)
+    except Exception as e:
+        errors.append(f"held-checks summary failed ({e})")
+
     return {
         "entries": new_entries, "built_at": built_at, "errors": errors,
         "reason": None, "gate_degraded": gate_degraded,
         "fit_read": fit_read, "beta_read": beta_read,
+        "fit_state": _fit_state, "checks_held": _checks_held,
         "entry_run": _entry_run, "gate_ledger_rows": gate_ledger_rows,
         # Additive -- news_feed.feed_state over the watchlist bundles loaded.
         "news_feed": news_feed.feed_state(_news_status_map),

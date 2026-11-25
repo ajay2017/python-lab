@@ -70,6 +70,13 @@ def _holdings_df(rows):
     return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
 
 
+def _priced_frame():
+    """A non-empty priced book frame: a ctx that is `ok` must carry one (an ok ctx
+    with an empty frame reads as fit UNKNOWN since entry-fail-closed C2a)."""
+    return pd.DataFrame([{"Ticker": "MSFT", "Sector": "Technology",
+                          "Weight (%)": 10.0, "Market Value": 1000.0, "Price": 300.0}])
+
+
 _UNSET = object()  # distinguishes "caller didn't pass prior_df" from "caller explicitly wants None"
 
 
@@ -83,7 +90,7 @@ def _run_watchlist_entries(
 ):
     cards = cards if cards is not None else {t: _wl_card(t) for t in watchlist}
     ctx = ctx if ctx is not None else {
-        "ok": True, "errors": [], "port_df": pd.DataFrame(), "spy_6mo": None,
+        "ok": True, "errors": [], "port_df": _priced_frame(), "spy_6mo": None,
         "port_risk": {"beta": 1.1},
     }
     prior_df = pd.DataFrame() if prior_df is _UNSET else prior_df
@@ -453,7 +460,7 @@ def test_gate_degraded_when_beta_context_unbuildable_but_entry_still_included():
 
 
 def test_gate_not_degraded_when_beta_available():
-    ctx = {"ok": True, "errors": [], "port_df": pd.DataFrame(), "spy_6mo": None,
+    ctx = {"ok": True, "errors": [], "port_df": _priced_frame(), "spy_6mo": None,
            "port_risk": {"beta": 1.2}}
     result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
     assert result["gate_degraded"] is False
@@ -469,23 +476,39 @@ def test_gate_degraded_when_ctx_ok_but_beta_missing():
 
 # ── CronSectorClaim: which fit leg actually ran (docs/plans/entry-fail-closed.md C0) ──
 
-def test_ctx_not_ok_reports_neither_fit_leg_read_and_email_does_not_claim_sector_ran():
+@pytest.mark.parametrize("reason", ["db_unavailable", "no_bundles", "empty_port_df", None])
+def test_ctx_not_ok_reports_neither_fit_leg_read_and_email_does_not_claim_sector_ran(reason):
+    """Only `no_holdings` reads as a checked (empty) book; every other not-ok ctx
+    is "holdings couldn't be loaded or priced" (C0 reviewer note 2)."""
     from stock_analyzer.notify import render_watchlist_entries_email
-    ctx = {"ok": False, "errors": ["no holdings"]}
+    ctx = {"ok": False, "errors": ["boom"]}
+    if reason is not None:
+        ctx["reason"] = reason
     result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
     assert result["gate_degraded"] is True
     assert result["fit_read"] is False
     assert result["beta_read"] is False
-    # Names are still emailed (wording/disclosure only in C0).
-    assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
+    assert result["fit_state"] == {"state": "unknown", "unpriced_sectors": None}
     _, html = render_watchlist_entries_email(
-        result["entries"], built_at=result["built_at"],
+        [_wl_card("NVDA")], built_at=result["built_at"],
         gate_degraded=result["gate_degraded"],
         fit_read=result["fit_read"], beta_read=result["beta_read"],
     )
     assert "still applied" not in html
     assert "Portfolio fit checks unavailable" in html
+    assert "couldn't be loaded or priced for this run" in html
     assert "Portfolio-beta fit check unavailable" not in html
+
+
+def test_ctx_ok_with_an_empty_frame_is_fit_unknown_not_read():
+    """C0 reviewer note 1: `ok: True` with no usable frame is NOT a read book."""
+    for frame in (pd.DataFrame(), None):
+        ctx = {"ok": True, "errors": [], "port_df": frame, "spy_6mo": None,
+               "port_risk": {"beta": 1.2}}
+        result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
+        assert result["fit_read"] is False
+        assert result["fit_state"]["state"] == "unknown"
+        assert result["gate_degraded"] is True
 
 
 def test_empty_book_is_read_not_degraded_and_email_has_no_fit_box():
@@ -496,7 +519,8 @@ def test_empty_book_is_read_not_degraded_and_email_has_no_fit_box():
     result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
     assert result["gate_degraded"] is False
     assert result["fit_read"] is True
-    assert result["beta_read"] is True
+    assert result["beta_read"] is True      # nothing to compute for an empty book
+    assert result["fit_state"] == {"state": "flat", "unpriced_sectors": None}
     assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
     _, html = render_watchlist_entries_email(
         result["entries"], built_at=result["built_at"],
@@ -509,7 +533,7 @@ def test_empty_book_is_read_not_degraded_and_email_has_no_fit_box():
 
 def test_ctx_ok_beta_none_reports_fit_read_but_not_beta_and_keeps_beta_box():
     from stock_analyzer.notify import render_watchlist_entries_email
-    ctx = {"ok": True, "errors": [], "port_df": pd.DataFrame(), "spy_6mo": None,
+    ctx = {"ok": True, "errors": [], "port_df": _priced_frame(), "spy_6mo": None,
            "port_risk": {"beta": None}}
     result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
     assert result["gate_degraded"] is True
@@ -527,7 +551,7 @@ def test_ctx_ok_beta_none_reports_fit_read_but_not_beta_and_keeps_beta_box():
 
 def test_both_legs_read_reports_both_true_and_no_box():
     from stock_analyzer.notify import render_watchlist_entries_email
-    ctx = {"ok": True, "errors": [], "port_df": pd.DataFrame(), "spy_6mo": None,
+    ctx = {"ok": True, "errors": [], "port_df": _priced_frame(), "spy_6mo": None,
            "port_risk": {"beta": 1.2}}
     result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
     assert result["gate_degraded"] is False
@@ -594,10 +618,11 @@ def test_emitted_entries_carry_sizing_economics_and_capital_fields():
 
 
 def test_sizing_fields_show_portfolio_unknown_marker_when_portfolio_value_zero():
-    """The default test fixture's ctx carries an empty port_df -> portfolio
-    value 0.0 -> _position_size_for_render's own 'portfolio' no-size marker
-    (F-261 cold-path posture) rather than a fabricated size."""
-    result = _run_watchlist_entries(watchlist=["NVDA"])
+    """A ctx whose frame sums to portfolio value 0.0 -> _position_size_for_render's
+    own 'portfolio' no-size marker (F-261 cold-path posture) rather than a
+    fabricated size. (The frame is non-empty: an `ok` ctx with an empty frame is
+    fit UNKNOWN since entry-fail-closed C2a.)"""
+    result = _run_watchlist_entries(watchlist=["NVDA"], ctx=_ctx_with_portfolio_value(0.0))
     entry = result["entries"][0]
     assert entry["sizing"].get("portfolio_unknown") is True
     assert "shares" not in entry["sizing"]

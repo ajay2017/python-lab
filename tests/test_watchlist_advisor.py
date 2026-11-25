@@ -1253,3 +1253,196 @@ def test_hold_off_at_exactly_composite_buy_reads_good_setup():
     assert rec["action"] == "HOLD_OFF_EARNINGS"
     assert "Good Setup" in rec["title"]
     assert f"clears the {COMPOSITE_BUY:.0f} Buy bar" in rec["summary"]
+
+
+# ─── entry-fail-closed C2a: fit_unknown / beta_unknown hard abstentions ──────
+# Only when the caller passes a `fit_state` in portfolio_ctx (the cron does; the
+# app's Watchlist doesn't until C2b). Placed AFTER the G-05 / G-06 breaches.
+from stock_analyzer.constants import TICKER_BETA_CRITICAL as _TBC  # noqa: E402
+from stock_analyzer.gate_ledger import build_watchlist_suppression_rows  # noqa: E402
+
+_READY = {"state": "ready", "unpriced_sectors": set()}
+_FLAT = {"state": "flat", "unpriced_sectors": None}
+_UNKNOWN = {"state": "unknown", "unpriced_sectors": None}
+
+
+def test_fit_state_unknown_holds_with_kind_fit_unknown_hard():
+    gate = _portfolio_risk_gate(1.0, {"fit_state": _UNKNOWN})
+    assert gate["severity"] == "hard" and gate["kind"] == "fit_unknown"
+    assert gate["gate_value"] is None and gate["gate_threshold"] is None
+    assert "$" not in gate["reason"] and "**" not in gate["reason"]
+    assert "next scan or page load" in gate["reason"]
+
+
+def test_fit_state_flat_lets_enter_now_through_even_with_unread_betas():
+    assert _portfolio_risk_gate(None, {"fit_state": _FLAT, "portfolio_beta": None}) is None
+    assert _portfolio_risk_gate(2.5, {"fit_state": _FLAT, "portfolio_beta": None}) is None
+
+
+def test_fit_state_ready_with_both_betas_read_and_no_breach_passes():
+    assert _portfolio_risk_gate(1.0, {"fit_state": _READY, "portfolio_beta": 1.0}) is None
+
+
+@pytest.mark.parametrize("bad", [None, "ready", 5, {}, {"state": "weird"}, {"state": None}])
+def test_fit_state_key_present_but_unreadable_fails_closed(bad):
+    gate = _portfolio_risk_gate(1.0, {"fit_state": bad, "portfolio_beta": 1.0})
+    assert gate["kind"] == "fit_unknown"
+
+
+def test_g05_boundary_unchanged_and_still_binds_before_fit_unknown():
+    for state in (_READY, _UNKNOWN):
+        at = _portfolio_risk_gate(
+            1.0, {"fit_state": state, "sector_weight_pct": SECTOR_CEILING,
+                  "sector_of_ticker": "Technology"})
+        assert at["kind"] == "sector", state          # 35.0 holds, as G-05
+    just_under = _portfolio_risk_gate(
+        1.0, {"fit_state": _READY, "portfolio_beta": 1.0,
+              "sector_weight_pct": SECTOR_CEILING - 0.01, "sector_of_ticker": "Technology"})
+    assert just_under is None or just_under["severity"] != "hard"      # 34.99 passes
+
+
+def test_real_beta_breach_still_binds_before_beta_unknown_and_fit_unknown():
+    ctx = {"fit_state": _READY, "portfolio_beta": PORTFOLIO_BETA_CEILING + 0.1}
+    assert _portfolio_risk_gate(_TBC + 0.2, ctx)["kind"] == "beta"
+    # even with the fit leg unknown the evaluable breach (both betas read) binds first
+    ctx2 = {"fit_state": _UNKNOWN, "portfolio_beta": PORTFOLIO_BETA_CEILING + 0.1}
+    assert _portfolio_risk_gate(_TBC + 0.2, ctx2)["kind"] == "beta"
+
+
+def test_sector_unknown_still_binds_before_the_new_abstentions():
+    ctx = {"fit_state": _UNKNOWN, "sector_classified": False}
+    assert _portfolio_risk_gate(1.0, ctx)["kind"] == "sector_unknown"
+
+
+def test_beta_unknown_ticker_beta_over_critical_with_port_beta_unread_holds():
+    ctx = {"fit_state": _READY, "portfolio_beta": None}
+    gate = _portfolio_risk_gate(1.81, ctx)
+    assert gate["severity"] == "hard" and gate["kind"] == "beta_unknown"
+    assert "portfolio's beta couldn't be computed" in gate["reason"]
+    assert _portfolio_risk_gate(1.80, ctx) is None            # strict >, as G-06
+
+
+def test_beta_unknown_port_beta_over_ceiling_with_ticker_beta_unread_holds():
+    gate = _portfolio_risk_gate(None, {"fit_state": _READY, "portfolio_beta": 1.41})
+    assert gate["kind"] == "beta_unknown"
+    assert "this name's beta couldn't be read" in gate["reason"]
+    assert _portfolio_risk_gate(None, {"fit_state": _READY, "portfolio_beta": 1.40}) is None
+
+
+def test_beta_unknown_both_unread_holds_and_says_neither_was_read():
+    gate = _portfolio_risk_gate(None, {"fit_state": _READY, "portfolio_beta": None})
+    assert gate["kind"] == "beta_unknown"
+    assert "neither" in gate["reason"]
+
+
+def test_beta_unknown_nan_ticker_beta_is_unread_not_a_pass():
+    gate = _portfolio_risk_gate(float("nan"), {"fit_state": _READY, "portfolio_beta": None})
+    assert gate["kind"] == "beta_unknown"
+
+
+# absent `fit_state` key = today's decisions exactly. Literal expected shapes
+# (severity, kind-if-hard) per (ctx, ticker_beta), written from the pre-C2a rules.
+_LEGACY_TABLE = [
+    (None, 1.0, None),
+    ({}, 2.0, None),
+    ({"portfolio_beta": None}, 2.0, None),
+    ({"portfolio_beta": 1.5}, None, None),
+    ({"portfolio_beta": 1.5}, 1.8, ("soft", None)),    # ticker beta not > CRITICAL: only the soft pair
+    ({"portfolio_beta": 1.5}, 2.0, ("hard", "beta")),
+    ({"portfolio_beta": 1.4}, 2.0, ("soft", None)),    # port beta not > CEILING: only the soft pair
+    ({"sector_weight_pct": 36.0, "sector_of_ticker": "Technology"}, 1.0, ("hard", "sector")),
+    ({"sector_weight_pct": 35.0, "sector_of_ticker": "Technology"}, 1.0, ("hard", "sector")),
+    ({"sector_weight_pct": 34.99, "sector_of_ticker": "Technology"}, 1.0, ("soft", None)),
+    ({"sector_classified": False}, 1.0, ("hard", "sector_unknown")),
+    ({"sector_classified": False, "sector_weight_pct": 40.0}, 1.0, ("hard", "sector")),
+    ({"portfolio_beta": 1.35}, 1.6, ("soft", None)),
+    ({"active_high_risk_alerts": ["Concentration Risk"]}, 1.0, ("soft", None)),
+]
+
+
+def _shape(gate):
+    if gate is None:
+        return None
+    return (gate["severity"], gate["kind"] if gate["severity"] == "hard" else None)
+
+
+@pytest.mark.parametrize("ctx, tb, expected", _LEGACY_TABLE)
+def test_absent_fit_state_key_keeps_todays_decision(ctx, tb, expected):
+    assert _shape(_portfolio_risk_gate(tb, ctx)) == expected
+
+
+def _beta_unread_could_bind(ctx, tb):
+    """The two table rows whose unread beta leg could bind G-06: by design they
+    become `beta_unknown` once a fit_state is passed (tested above)."""
+    pb = ctx.get("portfolio_beta")
+    return ((pb is None and tb is not None and tb > _TBC)
+            or (tb is None and pb is not None and pb > PORTFOLIO_BETA_CEILING))
+
+
+@pytest.mark.parametrize(
+    "ctx, tb, expected",
+    [r for r in _LEGACY_TABLE if r[0] and not _beta_unread_could_bind(r[0], r[1])])
+def test_a_ready_fit_state_with_betas_read_matches_the_legacy_decision(ctx, tb, expected):
+    """A fit_state that says "ready" must not change a decision whose betas were
+    both read or can't bind: the only new holds are the two abstentions."""
+    c = dict(ctx)
+    c["fit_state"] = _READY
+    assert _shape(_portfolio_risk_gate(tb, c)) == expected
+
+
+def test_the_gate_does_not_mutate_its_context():
+    ctx = {"portfolio_beta": 1.5, "fit_state": dict(_READY)}
+    snap = {"portfolio_beta": 1.5, "fit_state": dict(_READY)}
+    _portfolio_risk_gate(2.0, ctx)
+    assert ctx == snap
+
+
+def test_fit_unknown_card_is_a_near_entry_hold_with_no_ledger_row():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(risk_metrics={"beta": 1.0}),
+        portfolio_ctx={"fit_state": _UNKNOWN})
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["suppression_kind"] == "fit_unknown"
+    assert "Portfolio Fit Couldn't Be Checked" in rec["title"]
+    assert "breach" not in rec["summary"].lower()
+    assert "Do not open the position at full size" not in rec["detail"]
+    assert "**" not in rec["detail"] and "**" not in rec["summary"]
+    rows = build_watchlist_suppression_rows(
+        [rec], rec_date="2026-11-25", source="cron")
+    assert rows == []                                   # a data abstention: no ledger row
+
+
+def test_beta_unknown_card_is_a_near_entry_hold_with_no_ledger_row():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(risk_metrics={"beta": 1.9}),
+        portfolio_ctx={"fit_state": _READY, "portfolio_beta": None})
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["suppression_kind"] == "beta_unknown"
+    assert "Portfolio Beta Couldn't Be Checked" in rec["title"]
+    assert build_watchlist_suppression_rows([rec], rec_date="2026-11-25", source="cron") == []
+
+
+def test_flat_fit_state_keeps_the_clean_enter_now_card():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(), portfolio_ctx={"fit_state": _FLAT})
+    assert rec["action"] == "ENTER_NOW"
+    assert rec["suppression_kind"] is None
+
+
+def test_real_g05_card_still_ledgers_when_fit_state_is_passed():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(risk_metrics={"beta": 1.0}),
+        portfolio_ctx={"fit_state": _READY, "portfolio_beta": 1.0,
+                       "sector_weight_pct": SECTOR_CEILING, "sector_of_ticker": "Technology"})
+    assert rec["suppression_kind"] == "sector"
+    rows = build_watchlist_suppression_rows([rec], rec_date="2026-11-25", source="cron")
+    assert [r["gate_id"] for r in rows] == ["G-05"]
+
+
+def test_new_kinds_have_held_labels_in_plain_words():
+    from stock_analyzer.entry_eligibility import HELD_KIND_LABELS, held_label
+    assert HELD_KIND_LABELS["fit_unknown"] == "portfolio fit couldn't be checked"
+    assert HELD_KIND_LABELS["beta_unknown"] == "portfolio beta couldn't be checked"
+    assert held_label({"hold_kind": "fit_unknown"}) == "Held: portfolio fit couldn't be checked"
+    for v in HELD_KIND_LABELS.values():
+        assert "$" not in v and "**" not in v

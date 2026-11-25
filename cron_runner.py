@@ -483,6 +483,44 @@ def _log_watchlist_earnings_read(payload) -> None:
         _log(f"watchlist earnings read: count FAILED - {str(exc)[:120]} - continuing.")
 
 
+def _watchlist_checks_held_line(payload) -> "str | None":
+    """The scan-log line for names the Watchlist HELD because a buy check couldn't
+    run (entry-fail-closed C2a): "watchlist: N held, a check couldn't run
+    (fit_unknown: X, Y; beta_unknown: Z)", or None when there is nothing to say (no
+    `checks_held` in the payload, or none held). Pure; never raises (a malformed
+    payload reads as None)."""
+    try:
+        ch = payload.get("checks_held") if isinstance(payload, dict) else None
+        if not isinstance(ch, dict):
+            return None
+        parts, n = [], 0
+        for kind in ("fit_unknown", "beta_unknown"):
+            raw = ch.get(kind)
+            tickers = [str(t) for t in raw] if isinstance(raw, (list, tuple)) else []
+            if tickers:
+                n += len(tickers)
+                parts.append(f"{kind}: {', '.join(tickers)}")
+        if not n:
+            return None
+        return f"watchlist: {n} held, a check couldn't run ({'; '.join(parts)})"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _log_watchlist_checks_held(payload) -> None:
+    """Log `_watchlist_checks_held_line` when it has something to say. Additive and
+    exception-safe: it never touches the lane's failures or exit code."""
+    try:
+        line = _watchlist_checks_held_line(payload)
+        if line:
+            _log(line)
+    except Exception as exc:  # noqa: BLE001
+        try:
+            _log(f"watchlist held-checks line FAILED - {str(exc)[:120]} - continuing.")
+        except Exception:  # noqa: BLE001
+            pass       # a broken logger must never change the lane's outcome
+
+
 def _notify_lane_failure(lane: str, now_et, failures) -> None:
     """`_notify_failure` for a lane's accumulated failures. A run whose ONLY
     failures are news-feed outages emails at most once per ET day across lanes
@@ -2164,6 +2202,7 @@ def _run_scan(now_et, force: bool) -> int:
             for e in _wle_payload.get("errors", []):
                 _log(f"watchlist-entries engine note: {e}")
             _log_watchlist_earnings_read(_wle_payload)
+            _log_watchlist_checks_held(_wle_payload)
             # Explicit `is None` rather than `or []` so a genuine offline
             # sentinel can never be silently collapsed into "checked, nothing new".
             _wle_entries = _wle_payload.get("entries")

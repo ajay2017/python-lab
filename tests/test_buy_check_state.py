@@ -157,3 +157,166 @@ def test_module_is_pure_no_streamlit_db_and_no_clock_read():
     for banned in ("import streamlit", "from stock_analyzer import db", "market_time",
                    "utcnow", "date.today", "datetime.now", "time.time"):
         assert banned not in src, banned
+
+
+# ── entry-fail-closed C2a: fit_state / beta_leg_could_bind ───────────────────
+import pandas as pd  # noqa: E402
+
+from stock_analyzer.constants import (  # noqa: E402
+    PORTFOLIO_BETA_CEILING, TICKER_BETA_CRITICAL,
+)
+
+
+def _frame(dropped=None, attrs_key=True):
+    df = pd.DataFrame([{"Ticker": "MSFT", "Sector": "Technology",
+                        "Market Value": 1000.0}])
+    if attrs_key:
+        df.attrs["dropped_holdings"] = dropped if dropped is not None else []
+    return df
+
+
+_ONE_HOLDING = [{"Ticker": "MSFT", "Shares": 1, "Avg Cost ($)": 100.0}]
+
+
+def test_fit_state_empty_holdings_is_flat_whatever_the_frame():
+    for rows in ([], (), pd.DataFrame()):
+        for frame in (None, pd.DataFrame(), _frame()):
+            assert bcs.fit_state(rows, frame) == {"state": "flat", "unpriced_sectors": None}
+
+
+def test_fit_state_holdings_with_no_usable_frame_is_unknown():
+    for frame in (None, pd.DataFrame(), "frame", 7):
+        assert bcs.fit_state(_ONE_HOLDING, frame) == {"state": "unknown", "unpriced_sectors": None}
+
+
+def test_fit_state_holdings_dataframe_nonempty_counts_as_holdings():
+    rows = pd.DataFrame(_ONE_HOLDING)
+    assert bcs.fit_state(rows, None)["state"] == "unknown"
+    assert bcs.fit_state(rows, _frame())["state"] == "ready"
+
+
+def test_fit_state_ready_with_nothing_dropped_has_an_empty_set():
+    assert bcs.fit_state(_ONE_HOLDING, _frame()) == {"state": "ready", "unpriced_sectors": set()}
+    # an absent attrs key / a None value is "none dropped" too
+    assert bcs.fit_state(_ONE_HOLDING, _frame(attrs_key=False))["unpriced_sectors"] == set()
+    f = _frame(); f.attrs["dropped_holdings"] = None
+    assert bcs.fit_state(_ONE_HOLDING, f)["unpriced_sectors"] == set()
+
+
+def test_fit_state_unpriced_sector_is_the_curated_one():
+    from stock_analyzer.portfolio import resolve_sector
+    dropped = [{"ticker": "NVDA", "shares": 1.0, "avg_cost": 10.0, "reason": "no_price_data"}]
+    out = bcs.fit_state(_ONE_HOLDING, _frame(dropped))
+    assert out == {"state": "ready", "unpriced_sectors": {resolve_sector("NVDA")}}
+    assert resolve_sector("NVDA") != "Other"          # not vacuous: NVDA is curated
+
+
+def test_fit_state_other_drop_reasons_are_not_unpriced():
+    dropped = [{"ticker": "NVDA", "reason": "invalid_shares_or_cost"}]
+    assert bcs.fit_state(_ONE_HOLDING, _frame(dropped))["unpriced_sectors"] == set()
+
+
+def test_fit_state_unresolvable_unpriced_ticker_reads_all():
+    dropped = [{"ticker": "ZZZZQX", "reason": "no_price_data"}]
+    assert bcs.fit_state(_ONE_HOLDING, _frame(dropped))["unpriced_sectors"] == {"__ALL__"}
+
+
+def test_fit_state_mixed_dropped_rows_collect_sectors():
+    from stock_analyzer.portfolio import resolve_sector
+    dropped = [{"ticker": "NVDA", "reason": "no_price_data"},
+               {"ticker": "MSFT", "reason": "no_price_data"},
+               {"ticker": "AAA", "reason": "invalid_shares_or_cost"}]
+    out = bcs.fit_state(_ONE_HOLDING, _frame(dropped))["unpriced_sectors"]
+    assert out == {resolve_sector("NVDA"), resolve_sector("MSFT")}
+
+
+@pytest.mark.parametrize("bad", ["x", 5, [None], [{"reason": "no_price_data"}], [{"ticker": " ", "reason": "no_price_data"}]])
+def test_fit_state_unreadable_dropped_list_reads_all_never_empty(bad):
+    assert bcs.fit_state(_ONE_HOLDING, _frame(bad))["unpriced_sectors"] == {"__ALL__"}
+
+
+@pytest.mark.parametrize("rows", ["AAPL", 42, 3.5, object(), {"a": 1}])
+def test_fit_state_garbage_holdings_is_unknown_and_never_raises(rows):
+    assert bcs.fit_state(rows, _frame()) == {"state": "unknown", "unpriced_sectors": None}
+
+
+def test_fit_state_none_holdings_is_unknown():
+    assert bcs.fit_state(None, _frame()) == {"state": "unknown", "unpriced_sectors": None}
+
+
+def test_fit_state_frame_that_raises_is_unknown():
+    class _Boom:
+        @property
+        def empty(self):
+            raise RuntimeError("boom")
+    assert bcs.fit_state(_ONE_HOLDING, _Boom())["state"] == "unknown"
+
+
+def test_fit_state_inputs_not_mutated_and_results_independent():
+    f = _frame([{"ticker": "NVDA", "reason": "no_price_data"}])
+    snap = dict(f.attrs)
+    a = bcs.fit_state(_ONE_HOLDING, f)
+    a["unpriced_sectors"].add("X")
+    assert f.attrs == snap
+    assert "X" not in bcs.fit_state(_ONE_HOLDING, f)["unpriced_sectors"]
+
+
+# beta_leg_could_bind at the REAL constants (strict `>`, as _portfolio_risk_gate)
+def test_beta_boundaries_use_the_real_constants():
+    # the plan's table (ticker 1.81 / 1.80, port 1.41 / 1.40) assumes these values
+    assert TICKER_BETA_CRITICAL == 1.8 and PORTFOLIO_BETA_CEILING == 1.4
+
+
+def test_port_beta_unknown_binds_only_when_ticker_beta_is_over_critical():
+    assert bcs.beta_leg_could_bind(None, 1.81) is True
+    assert bcs.beta_leg_could_bind(None, TICKER_BETA_CRITICAL + 0.01) is True
+    assert bcs.beta_leg_could_bind(None, 1.80) is False
+    assert bcs.beta_leg_could_bind(None, TICKER_BETA_CRITICAL) is False   # strict >
+    assert bcs.beta_leg_could_bind(None, 0.9) is False
+
+
+def test_ticker_beta_unknown_binds_only_when_port_beta_is_over_ceiling():
+    assert bcs.beta_leg_could_bind(1.41, None) is True
+    assert bcs.beta_leg_could_bind(PORTFOLIO_BETA_CEILING + 0.01, None) is True
+    assert bcs.beta_leg_could_bind(1.40, None) is False
+    assert bcs.beta_leg_could_bind(PORTFOLIO_BETA_CEILING, None) is False  # strict >
+    assert bcs.beta_leg_could_bind(0.8, None) is False
+
+
+def test_both_betas_unknown_could_bind():
+    assert bcs.beta_leg_could_bind(None, None) is True
+
+
+def test_both_betas_known_is_false_the_gate_itself_decides():
+    assert bcs.beta_leg_could_bind(1.5, 2.0) is False
+    assert bcs.beta_leg_could_bind(1.0, 2.0) is False
+
+
+@pytest.mark.parametrize("unread", [float("nan"), float("inf"), "n/a", True, object()])
+def test_unreadable_beta_values_read_as_unknown(unread):
+    assert bcs.beta_leg_could_bind(unread, 1.81) is True
+    assert bcs.beta_leg_could_bind(unread, 1.0) is False
+    assert bcs.beta_leg_could_bind(1.5, unread) is True
+    assert bcs.beta_leg_could_bind(1.0, unread) is False
+    assert bcs.beta_leg_could_bind(unread, unread) is True
+
+
+def test_beta_mirrors_the_advisor_comparison_exactly():
+    """Pin the mirror: the advisor's hard G-06 branch uses strict `>` on both legs."""
+    import inspect
+    from stock_analyzer import watchlist_advisor as wa
+    src = inspect.getsource(wa._portfolio_risk_gate)
+    assert "port_beta > PORTFOLIO_BETA_CEILING and ticker_beta > TICKER_BETA_CRITICAL" in src
+    assert "PORTFOLIO_BETA_CEILING" in inspect.getsource(bcs.beta_leg_could_bind)
+    assert "TICKER_BETA_CRITICAL" in inspect.getsource(bcs.beta_leg_could_bind)
+
+
+def test_c2a_functions_read_no_clock(monkeypatch):
+    import time
+
+    def _boom(*a, **k):
+        raise AssertionError("read the clock")
+    monkeypatch.setattr(time, "time", _boom)
+    monkeypatch.setattr(time, "monotonic", _boom)
+    assert bcs.fit_state(_ONE_HOLDING, _frame())["state"] == "ready"
+    assert bcs.beta_leg_could_bind(None, 1.9) is True

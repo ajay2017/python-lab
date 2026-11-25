@@ -1174,7 +1174,10 @@ def render_watchlist_entries_email(
     headless_alert_engine.compute_watchlist_entries() — already filtered to
     NEWLY-transitioning, not-held, not-otherwise-announced names (D-B/D-C).
     Non-empty guaranteed by caller. `gate_degraded` (D-D): a portfolio-fit leg
-    couldn't be computed headlessly this run — disclosed, never withheld.
+    couldn't be computed headlessly this run — disclosed. (Since entry-fail-closed
+    C2a the scan holds a name whose fit check couldn't run, or whose unread beta
+    could have blocked it, so a name that reaches this email either passed those
+    checks or couldn't have been blocked by the unread leg.)
     `fit_read` / `beta_read` (CronSectorClaim) say which leg: the
     concentration/sector leg is claimed as having run only when `fit_read`
     (the holdings frame was read); when it is False neither sector nor beta
@@ -1220,7 +1223,7 @@ def render_watchlist_entries_email(
         if not fit_read:
             _deg_title = '⚠️ Portfolio fit checks unavailable this run'
             _deg_body = (
-                "Your holdings couldn't be loaded for this run, so neither the "
+                "Your holdings couldn't be loaded or priced for this run, so neither the "
                 "sector-concentration check nor the portfolio-beta check ran on "
                 "these names. Treat them as not checked against your book."
             )
