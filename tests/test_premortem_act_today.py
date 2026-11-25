@@ -63,6 +63,98 @@ def test_act_today_premortem_trigger_above_direction_wording():
     assert "above" in item["directive"]
 
 
+# PremortemPrice: the commitment card quotes the SAME price as a same-name
+# stop card (the book row's Price), not the monitor's older last-close bar.
+
+def _pmt_item(port_rows, **trigger_kw):
+    port_df = make_port_df(port_rows)
+    items = _act_today(port_df, [], [], [], [], TODAY,
+                        premortem_triggers=[_premortem_trigger(**trigger_kw)])
+    return find_item(items, port_rows[0]["ticker"])
+
+
+def test_premortem_why_quotes_the_book_row_price_not_the_monitor_close():
+    item = _pmt_item([{"ticker": "AAA", "price": 74.70}],
+                     trigger_price=75.0, current_price=75.28)
+    assert "the price is currently $74.70." in item["why"]
+    assert "75.28" not in item["why"]
+
+
+@pytest.mark.parametrize("bad_price", [float("nan"), 0, -1.0, None])
+def test_premortem_why_falls_back_to_last_close_when_row_price_unusable(bad_price):
+    item = _pmt_item([{"ticker": "AAA", "price": bad_price, "market_value": 1000.0}],
+                     trigger_price=75.0, current_price=75.28)
+    assert item["why"].endswith("trigger; the last close was $75.28.")
+    assert "currently" not in item["why"]
+
+
+def test_premortem_why_falls_back_to_last_close_when_row_price_missing_column():
+    port_df = make_port_df([{"ticker": "AAA"}]).drop(columns=["Price"])
+    items = _act_today(port_df, [], [], [], [], TODAY,
+                        premortem_triggers=[_premortem_trigger(
+                            ticker="AAA", trigger_price=75.0, current_price=75.28)])
+    item = find_item(items, "AAA")
+    assert item["why"].endswith("trigger; the last close was $75.28.")
+
+
+def test_premortem_why_falls_back_when_ticker_absent_from_port_df():
+    port_df = make_port_df([{"ticker": "OTHER", "price": 50.0}])
+    items = _act_today(port_df, [], [], [], [], TODAY,
+                        premortem_triggers=[_premortem_trigger(
+                            ticker="AAA", trigger_price=75.0, current_price=75.28)])
+    item = find_item(items, "AAA")
+    assert item is not None
+    assert item["why"].endswith("trigger; the last close was $75.28.")
+    assert item["weight"] is None and item["pnl_pct"] is None
+
+
+def test_premortem_card_fields_unchanged_apart_from_the_price_clause():
+    port_df = make_port_df([{"ticker": "AAA", "price": 74.70, "weight": 7.5,
+                             "pnl_pct": -12.0}])
+    items = _act_today(port_df, [], [], [], [], TODAY,
+                        premortem_triggers=[_premortem_trigger(
+                            ticker="AAA", trigger_price=75.0, current_price=75.28,
+                            first_breach_date=date(2024, 1, 10), days_since=5)])
+    item = find_item(items, "AAA")
+    assert item["kind"] == "premortem_triggered"
+    assert item["priority"] == "high"
+    assert item["icon"] == "🎯"
+    assert item["action"] == "YOUR OWN COMMITMENT FIRED"
+    assert item["directive"] == (
+        "You said you'd exit if it broke below $75.00. It happened on "
+        "2024-01-10 — 5 day(s) ago. You're still holding. What's changed?")
+    assert item["why"] == (
+        "Your Pre-Mortem exit commitment for this position stated a below "
+        "$75.00 trigger; the price is currently $74.70.")
+    assert item["trigger"] == (
+        "This is your own stated condition, not the algorithm's — "
+        "reconsider or explicitly recommit.")
+    assert item["weight"] == 7.5
+    assert item["pnl_pct"] == -12.0
+
+
+def test_premortem_price_above_trigger_still_reads_currently():
+    """A trigger fired on an older close; the live price may since be back above
+    the level. The card then says so truthfully (no current < trigger assumption)."""
+    item = _pmt_item([{"ticker": "AAA", "price": 84.10}],
+                     trigger_price=83.0, current_price=82.0)
+    assert "the price is currently $84.10." in item["why"]
+
+
+def test_stop_card_and_commitment_card_quote_the_same_price():
+    """The ANT incident: ⛔ stop card said $74.70, 🎯 card said $75.28."""
+    port_df = make_port_df([{"ticker": "AAA", "price": 74.70, "stop": 75.0,
+                             "gap_to_stop": -0.4}])
+    items = _act_today(port_df, [], [], [], [], TODAY,
+                        premortem_triggers=[_premortem_trigger(
+                            ticker="AAA", trigger_price=75.0, current_price=75.28)])
+    by_kind = {i["kind"]: i for i in items if i["ticker"] == "AAA"}
+    assert set(by_kind) == {"stop_breach", "premortem_triggered"}
+    assert "$74.70" in by_kind["stop_breach"]["why"]
+    assert "$74.70" in by_kind["premortem_triggered"]["why"]
+    assert "75.28" not in by_kind["premortem_triggered"]["why"]
+
+
 def test_act_today_premortem_coexists_with_deterioration_card_same_ticker():
     """The card raw-build stage: both kinds present for the same ticker
     before consolidation ever runs."""

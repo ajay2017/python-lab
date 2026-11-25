@@ -24,6 +24,7 @@ Verdict tiers:
 """
 
 import logging
+import math
 from datetime import date, datetime as _dt, timedelta
 
 import pandas as pd
@@ -2966,6 +2967,16 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         _pmt_weight = _f(_pmt_prow.iloc[0].get("Weight (%)"), None) if not _pmt_prow.empty else None
         _pmt_pnl    = _f(_pmt_prow.iloc[0].get("P&L (%)"), None) if not _pmt_prow.empty else None
         _pmt_dir_word = "below" if pmt["direction"] == "below" else "above"
+        # One freshness per number (PremortemPrice): quote the SAME price the
+        # same-name stop card prints (the book row's Price). The monitor's
+        # `current_price` is the last daily close of the history bars, an older
+        # bar; it is only the fallback, and is then worded as a close.
+        _pmt_live = (_f(_pmt_prow.iloc[0].get("Price"), None)
+                     if not _pmt_prow.empty else None)
+        if _pmt_live is not None and math.isfinite(_pmt_live) and _pmt_live > 0:
+            _pmt_price_text = f"the price is currently ${_pmt_live:.2f}."
+        else:
+            _pmt_price_text = f"the last close was ${pmt['current_price']:.2f}."
         items.append({
             "priority": "high",
             "icon":     "🎯",
@@ -2980,8 +2991,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             ),
             "why": (
                 f"Your Pre-Mortem exit commitment for this position stated a "
-                f"{_pmt_dir_word} ${pmt['trigger_price']:.2f} trigger; the price "
-                f"is currently ${pmt['current_price']:.2f}."
+                f"{_pmt_dir_word} ${pmt['trigger_price']:.2f} trigger; "
+                f"{_pmt_price_text}"
             ),
             "trigger": (
                 "This is your own stated condition, not the algorithm's — "
