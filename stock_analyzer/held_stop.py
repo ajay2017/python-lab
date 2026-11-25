@@ -139,9 +139,21 @@ def completed_bars(df: pd.DataFrame, as_of: date) -> pd.DataFrame:
 
 # ── episode ──────────────────────────────────────────────────────────────────
 def _episode(status: str, reason: str, start=None, first_buy_price=None,
-             split_ratio: float = 1.0, last_buy=None) -> dict:
+             split_ratio: float = 1.0, last_buy=None, journal_shares=None,
+             holdings_shares=None) -> dict:
+    # journal_shares / holdings_shares: additive (SlidingStop C1), the two numbers
+    # `episode_from_journal` compares against `shares_tol`; None when not known.
     return {"status": status, "start": start, "first_buy_price": first_buy_price,
-            "split_ratio": split_ratio, "reason": reason, "last_buy": last_buy}
+            "split_ratio": split_ratio, "reason": reason, "last_buy": last_buy,
+            "journal_shares": journal_shares, "holdings_shares": holdings_shares}
+
+
+def _num_or_none(v) -> float | None:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
 
 
 def episode_from_journal(ticker: str, trades_df: pd.DataFrame | None,
@@ -155,14 +167,18 @@ def episode_from_journal(ticker: str, trades_df: pd.DataFrame | None,
     distinct from an empty frame = no history. Timestamps convert to ET BEFORE
     taking the date; imported trades are NOT shifted (they anchor at 16:00 ET).
     """
+    held_sh = _num_or_none(holdings_shares)
     if trades_df is None:
-        return _episode("unreadable", "trade journal could not be read")
+        return _episode("unreadable", "trade journal could not be read",
+                        holdings_shares=held_sh)
     if len(trades_df) == 0 or "ticker" not in trades_df.columns:
-        return _episode("no_history", "no trade history for this ticker")
+        return _episode("no_history", "no trade history for this ticker",
+                        journal_shares=0.0, holdings_shares=held_sh)
     rows = trades_df[trades_df["ticker"].astype(str).str.upper().str.strip()
                      == str(ticker).upper().strip()].copy()
     if rows.empty:
-        return _episode("no_history", "no trade history for this ticker")
+        return _episode("no_history", "no trade history for this ticker",
+                        journal_shares=0.0, holdings_shares=held_sh)
 
     rows["_ts"] = pd.to_datetime(rows["traded_at"], errors="coerce", utc=True,
                                  format="ISO8601")
@@ -209,12 +225,15 @@ def episode_from_journal(ticker: str, trades_df: pd.DataFrame | None,
     if abs(total - float(holdings_shares)) > shares_tol:
         return _episode(
             "mismatch",
-            f"journal nets {total:g} shares but holdings show {float(holdings_shares):g}")
+            f"journal nets {total:g} shares but holdings show {float(holdings_shares):g}",
+            journal_shares=total, holdings_shares=held_sh)
     if start is None:
-        return _episode("no_history", "journal shows no open position")
+        return _episode("no_history", "journal shows no open position",
+                        journal_shares=total, holdings_shares=held_sh)
     return _episode("ok", "seeded from a SPLIT row" if seeded else "",
                     start=start, first_buy_price=first_price,
-                    split_ratio=ratio, last_buy=last_buy)
+                    split_ratio=ratio, last_buy=last_buy,
+                    journal_shares=total, holdings_shares=held_sh)
 
 
 # ── history sizing ───────────────────────────────────────────────────────────

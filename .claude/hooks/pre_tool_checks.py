@@ -1322,6 +1322,11 @@ _GATE_FILES = {
     # date / failed; later fit, beta and tone); a wrong state lets a buy through
     # on a check that never ran, or holds one that did.
     "stock_analyzer/buy_check_state.py",
+    # Added 2026-11-25 (SlidingStop C1, docs/plans/sliding-stop.md): the carried
+    # held stop for partial / prior-close stops (apply, write, sweep, notice tier);
+    # a wrong call lets a stop slide down with the price, or carries one into a
+    # different position.
+    "stock_analyzer/held_stop_carry.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully
