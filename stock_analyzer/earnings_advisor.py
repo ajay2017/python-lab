@@ -340,7 +340,7 @@ def _recommend_core(
                 "REDUCE",
                 "HIGH",
                 (
-                    f"Position is **{weight:.0f}% of your portfolio** — under the "
+                    f"Position is **{weight:.0f}% of your portfolio** — at or under the "
                     f"{r['floor_pct']:.1f}% earnings-week line, but over the "
                     f"{SINGLE_NAME_TRIM_TRIGGER:.0f}% single-name trigger. "
                     f"An estimated ±{est_move:.0f}% earnings move on a ${market_value:,.0f} position = "

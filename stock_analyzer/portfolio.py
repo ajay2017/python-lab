@@ -996,13 +996,13 @@ def rebalance_actions(
                 else:
                     _title = "Over the Single-Name Ceiling Going Into Earnings"
                     _trigger = (
-                        f"Weight {w:.1f}% with earnings {_when}: under the {_floor_pct:.1f}% "
+                        f"Weight {w:.1f}% with earnings {_when}: at or under the {_floor_pct:.1f}% "
                         f"earnings-week line but over the {SINGLE_NAME_TRIM_TRIGGER:.0f}% "
                         f"single-name trigger, so the standing trim to "
                         f"{SINGLE_NAME_CEILING:.0f}% applies"
                     )
                     _earn_note = (
-                        f"Earnings {_when}: under the {_floor_pct:.1f}% earnings-week line, "
+                        f"Earnings {_when}: at or under the {_floor_pct:.1f}% earnings-week line, "
                         f"so the standing {SINGLE_NAME_CEILING:.0f}% ceiling trim applies "
                         f"before the report (the same earnings-week rule the 🏠 Brief and "
                         f"🔔 Catalyst Watch use)."

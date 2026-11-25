@@ -100,6 +100,7 @@ from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map
 from stock_analyzer import macro_sector_gate as _macro_sector_gate
 from stock_analyzer.analyst_intel import trustworthy_composite
 from stock_analyzer import held_news_check
+from stock_analyzer import held_trim_owner
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.text_fmt import share_word
 from stock_analyzer import g32_shadow
@@ -399,9 +400,12 @@ _TUNEUP_RISK_TYPES = frozenset({"beta", "sharpe", "volatility", "drawdown", "tai
 
 # Of the Tune-up types, only these two name a concrete TRIM target (same scope
 # as `_trim_targets`) — so only these can double-surface against an Act Today
-# risk-off TRIM on the same high-beta name (both rank by β·weight). vol/drawdown/
-# tail/concentration recommend ADDING diversifiers, a different action, so they
-# never restate a trim and are left untouched (2026-08-04 audit).
+# risk-off TRIM on the same high-beta name (both rank by β·weight), and the
+# chip filter below keeps that broader "any flagged card" basis. vol/drawdown/
+# tail recommend ADDING diversifiers, a different action, so they are left
+# untouched (2026-08-04 audit). The single-name concentration card DOES restate
+# a trim ("Trim … toward the 15% ceiling"); it is deduped separately, only
+# against a Brief sell that names its own ticker, via `held_trim_owner` (EW C3).
 _TUNEUP_TRIM_DRIVER_TYPES = frozenset({"beta", "sharpe"})
 # Of the trim-drivers, only the beta card's recommendation prose is anchored to
 # a single headline name (`trim_ticker == root_tickers[0]`); sharpe's prose is a
@@ -411,7 +415,9 @@ _TUNEUP_TRIM_DRIVER_TYPES = frozenset({"beta", "sharpe"})
 _TUNEUP_PRIMARY_ANCHORED_TYPES = frozenset({"beta"})
 
 
-def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None) -> list[dict]:
+def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None,
+                      sell_tickers: set | None = None, earnings_days: dict | None = None,
+                      port_df=None, deferred_out: dict | None = None) -> list[dict]:
     """Slow-moving risk-metric recommendations surfaced as standing 'Portfolio
     Tune-up' items (awareness), not Act Today decisions. HIGH or MEDIUM only —
     OK/LOW aren't improvements to make. Shape is render-ready for app.py.
@@ -424,7 +430,17 @@ def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None) 
     rank the same high-beta names, so a fragile+risk-off render otherwise shows
     "trim NVDA" in both lanes). A beta card whose primary trim_ticker is acted is
     dropped whole; a merely SECONDARY overlap is filtered from the chip list only,
-    keeping the card's still-valid primary-anchored prose."""
+    keeping the card's still-valid primary-anchored prose.
+
+    EW C3 (docs/plans/earnings-week-trim-c3-spec.md): a single_name_concentration
+    card whose ticker a Brief sell names (`sell_tickers` = held_trim_owner.
+    brief_sell_tickers over the FINAL act / review lists) is dropped; the visible
+    reason AND the dropped card are written to `deferred_out[TICKER] = {"text",
+    "card"}` (the caller's dict, an out-parameter so the return stays a plain list;
+    `held_trim_owner.reconcile_tuneup` restores the card on Home when the view no
+    longer shows that sell). A name in earnings week with no
+    earnings-week decision keeps its card plus an `earnings_note` key. Every
+    other case keeps the card exactly as before."""
     acted = {str(t).upper() for t in (acted_tickers or set())}
     out: list[dict] = []
     for rec in (risk_recs or []):
@@ -443,14 +459,36 @@ def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None) 
             tickers = [t for t in tickers if str(t).upper() not in acted]
             if not tickers:
                 continue  # every named trim target already acted -> nothing to add
-        out.append({
+        card = {
             "type":           rtype,
             "priority":       rec.get("priority"),
             "title":          rec.get("title", "Portfolio metric"),
             "problem":        rec.get("problem", ""),
             "recommendation": rec.get("recommendation", ""),
             "tickers":        tickers,
-        })
+        }
+        if rtype == "single_name_concentration" and rt and rt[0].get("ticker"):
+            _sn = str(rt[0]["ticker"]).upper()
+            _inp = held_trim_owner.book_inputs(port_df, _sn)
+            _d = held_trim_owner.tuneup_single_name_disposition(
+                _sn, sell_tickers or set(), earnings_days or {},
+                _inp["weight_pct"], _inp["n_positions"], _inp["shares"])
+            # The card as it would show with NO live sell (what Home restores if
+            # the view demotes the sell): its earnings note, if any, is part of it.
+            _d0 = (held_trim_owner.tuneup_single_name_disposition(
+                       _sn, set(), earnings_days or {},
+                       _inp["weight_pct"], _inp["n_positions"], _inp["shares"])
+                   if _d["state"] == "brief_owns" else _d)
+            if _d0["state"] == "earnings_note":
+                card["earnings_note"] = _d0["text"]
+            if _d["state"] == "brief_owns":
+                # The payload carries the dropped card: Home settles this against
+                # the Act Today VIEW (a recovered stop breach is demoted out of Act
+                # Today after this build), restoring the card if the sell isn't live.
+                if deferred_out is not None:
+                    deferred_out[_sn] = {"text": _d["text"], "card": card}
+                continue
+        out.append(card)
     return out
 
 
@@ -3460,7 +3498,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             }
             if _edec["basis"] == "standing_in_window":
                 why = (
-                    f"Weight {weight:.1f}% is under your {_floor:.1f}% "
+                    f"Weight {weight:.1f}% is at or under your {_floor:.1f}% "
                     f"position-count-adjusted earnings-week line (N={_n_pos} positions) "
                     f"but over the {SINGLE_NAME_TRIM_TRIGGER:.0f}% single-name trigger, "
                     f"so the standing trim to {SINGLE_NAME_CEILING:.0f}% applies before "
@@ -3492,7 +3530,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             action = {"type": "WATCH"}
             if weight >= SINGLE_NAME_CEILING:
                 why = (
-                    f"Weight {weight:.1f}% is under the {_floor:.1f}% "
+                    f"Weight {weight:.1f}% is at or under the {_floor:.1f}% "
                     f"position-count-adjusted earnings-week line (N={_n_pos} positions), "
                     f"so the earnings-week rule sizes nothing before the report; it is over the "
                     f"{SINGLE_NAME_CEILING:.0f}% single-name ceiling (standing work)."
@@ -4256,7 +4294,14 @@ def build_daily_briefing(
     # News-only cards don't count (D-I): a news WATCH isn't a trim, so it must not
     # swallow the beta card.
     _acted_final = decision_bucket.all_flagged_tickers(act, review, ignore_news=True)
-    tuneup = _portfolio_tuneup(risk_recs, acted_tickers=_acted_final)
+    # EW C3: a single-name card on a name the Brief SELLS defers to that sell (with a
+    # visible caption via `portfolio_tuneup_deferred`); never raw reduce_call keys.
+    _tuneup_deferred: dict = {}
+    tuneup = _portfolio_tuneup(
+        risk_recs, acted_tickers=_acted_final,
+        sell_tickers=held_trim_owner.brief_sell_tickers(act, review),
+        earnings_days=_trim_sizing.earnings_days_by_ticker(held_data, today),
+        port_df=port_df, deferred_out=_tuneup_deferred)
     # News flags for OTHER surfaces (Rebalancer ADD cross-check), from the SAME
     # detectors/inputs/window the cards use but NOT from the cards: a held name
     # whose news card was de-duplicated away (another card/Act item) still has the
@@ -4267,6 +4312,7 @@ def build_daily_briefing(
         news_items or [], _nf_held, _news_ts, exclude=set(_nf_crit))
     _result = {"act_today": act, "review_list": review,
                "grow_today": grow, "portfolio_tuneup": tuneup,
+               "portfolio_tuneup_deferred": _tuneup_deferred,
                "news_flags": held_news_check.news_flags_from_detectors(_nf_crit, _nf_warn)}
     _nf_disclosure = brief_news_disclosure(news_feed)
     if _nf_disclosure is not None:

@@ -375,6 +375,7 @@ from stock_analyzer import r_multiple as _r_multiple
 from stock_analyzer import premortem_advisor as _pm_advisor
 from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import coord_freshness
+from stock_analyzer import held_trim_owner
 from stock_analyzer import home_risk_synthesis
 from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
@@ -7321,7 +7322,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 23  # bumped: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 24  # bumped: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -9812,6 +9813,16 @@ if page == "🏠 Home":
     _db_review = _daily_brief["review_list"]
     _db_grow   = _daily_brief.get("grow_today", {})
     _db_tuneup = _daily_brief.get("portfolio_tuneup", []) or []
+    # EW C3: single-name Tune-up cards deferred to a Brief sell ({TICKER: {"text",
+    # "card"}}); an older locked / memoized Brief without the key reads {} (nothing
+    # extra). The deferral is settled against `_act_view` (the post-demotion Act
+    # Today this page renders), so a stop breach that has since recovered no longer
+    # hides the card: the pure `reconcile_tuneup` restores it (R3-B1).
+    _db_tuneup_deferred = _daily_brief.get("portfolio_tuneup_deferred", {})
+    _db_tuneup_rec = held_trim_owner.reconcile_tuneup(
+        _db_tuneup, _db_tuneup_deferred, held_trim_owner.view_sell_tickers(_act_view))
+    _db_tuneup = _db_tuneup_rec["cards"]
+    _db_tuneup_deferred_texts = _db_tuneup_rec["deferred_texts"]
     _db_tone   = _market_context.get("tone", "flat")
     # F-5: publish market tone so the Trade Journal thesis-draft can add regime
     # context (best-effort; degrades to no regime if Home hasn't rendered yet).
@@ -13510,6 +13521,9 @@ if page == "🏠 Home":
                        f"{_md_bold(_tu.get('recommendation',''))}</div>" if _tu.get("recommendation") else "")
                     + (f"<div style='color:#64748b;font-size:0.76em;margin-top:4px'>"
                        f"Positions: {_tu_tk}</div>" if _tu_tk else "")
+                    + (f"<div style='color:#64748b;font-size:0.76em;margin-top:4px'>"
+                       f"{_safe_html(_tu['earnings_note'])}</div>"
+                       if isinstance(_tu.get("earnings_note"), str) and _tu.get("earnings_note") else "")
                     + "</div>",
                     unsafe_allow_html=True,
                 )
@@ -13517,6 +13531,10 @@ if page == "🏠 Home":
                 "These lift risk-adjusted quality over time — act on them when you're "
                 "rebalancing or have fresh capital, not on the clock."
             )
+        # EW C3: never a silent drop. A single-name card deferred to an Act Today
+        # sell says so here, even when every Tune-up card was deferred.
+        for _tud_t in sorted(_db_tuneup_deferred_texts):
+            st.caption("🔧 " + str(_db_tuneup_deferred_texts[_tud_t]))
 
         # News Sentiment Shift — brief awareness cards for held positions
         _sentiment_brief = _cached_sentiment(",".join(sorted(held_tickers))) if held_tickers else {}
@@ -19053,6 +19071,62 @@ elif page == "🔗 Risk Analysis":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+
+                    # EW C3: a ceiling-trim card on a name today's Act Today already
+                    # sells says so (S5); the decision lives in held_trim_owner. The
+                    # sells are read from the Act Today VIEW Home renders (the same
+                    # build 📡 Signals uses: a recovered stop breach is not a sell),
+                    # never from the raw Brief. An unverified read (Home not built
+                    # since the book changed, the Brief failed, `_reduce_calls`
+                    # stale) says that instead of staying silent. Never takes the
+                    # Action Plan down.
+                    if _rtype == "single_name_concentration":
+                        try:
+                            _sn_rt = _rec.get("root_tickers", [])
+                            _sn_t = _sn_rt[0]["ticker"] if _sn_rt else None
+                            if _sn_t:
+                                _sn_verified = (
+                                    _coord_cache_state("_reduce_calls") == "ready"
+                                    and not st.session_state.get("_daily_brief_offline", False)
+                                    and coord_freshness.classify(
+                                        st.session_state.get("_coord_stamps"), _coord_epoch(),
+                                        "_reduce_calls") == coord_freshness.FRESH
+                                )
+                                _sn_sell = None
+                                if _sn_verified:
+                                    from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT as _SN_STOP_REC_MARGIN
+                                    _sn_synth = st.session_state.get("_home_synth_cache")
+                                    _sn_bundle = _sn_synth.get("bundle") if isinstance(_sn_synth, dict) else None
+                                    if not isinstance(_sn_bundle, dict):
+                                        _sn_bundle = {}
+                                    _sn_view = act_today_view(
+                                        daily_brief      = _sn_bundle.get("_daily_brief"),
+                                        brief_offline    = bool(_sn_bundle.get("_daily_brief_offline", False)),
+                                        port_df_enriched = st.session_state.get("_port_df_enriched"),
+                                        live_prices      = st.session_state.get("_live_prices"),
+                                        margin_pct       = _SN_STOP_REC_MARGIN,
+                                        now              = _now_et(),
+                                    )
+                                    _sn_sell = held_trim_owner.view_sell_tickers(_sn_view)
+                                _sn_pdf = _get_or_offline(st.session_state, "_last_port_df")
+                                _sn_held = _get_or_offline(st.session_state, "_last_held_data")
+                                _sn_ed = (_trim_sizing.earnings_days_by_ticker(_sn_held, _today_et())
+                                          if _sn_held is not None else {})
+                                _sn_inp = held_trim_owner.book_inputs(_sn_pdf, _sn_t)
+                                _sn_line = held_trim_owner.risk_analysis_single_name_line(
+                                    _sn_t, _sn_sell, _sn_ed, _sn_inp["weight_pct"],
+                                    _sn_inp["n_positions"], _sn_inp["shares"])
+                                if _sn_line["tier"] == "info":
+                                    st.info(_sn_line["text"])
+                                elif _sn_line["tier"] == "caption":
+                                    st.caption(_sn_line["text"])
+                        except Exception as _sn_err:
+                            # Render nothing extra, but leave a trace (a cross-check
+                            # that silently never runs would read as "nothing to say").
+                            import logging as _sn_logging
+                            _sn_logging.getLogger(__name__).warning(
+                                "Risk Analysis single-name Act Today cross-check failed: %s",
+                                _sn_err, exc_info=True)
 
                     _left, _right = st.columns([1, 1])
 

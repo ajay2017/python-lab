@@ -193,7 +193,7 @@ def test_standing_basis_why_and_zero_share_watch_wording():
     assert item["action"]["type"] == "TRIM_TO_TARGET"
     assert item["action"]["reason_key"] == "earnings"
     assert item["why"] == (
-        f"Weight {w:.1f}% is under your {floor:.1f}% position-count-adjusted earnings-week "
+        f"Weight {w:.1f}% is at or under your {floor:.1f}% position-count-adjusted earnings-week "
         f"line (N={n} positions) but over the {SINGLE_NAME_TRIM_TRIGGER:.0f}% single-name "
         f"trigger, so the standing trim to {SINGLE_NAME_CEILING:.0f}% applies before the "
         f"report: earnings week never sizes looser than the week before.")
@@ -227,11 +227,11 @@ def test_signals_text_per_basis():
         assert a["basis"] == "standing_in_window"
         assert a["title"] == "Over the Single-Name Ceiling Going Into Earnings"
         assert a["trigger"] == (
-            f"Weight {w:.1f}% with earnings in 3d: under the {floor:.1f}% earnings-week line "
+            f"Weight {w:.1f}% with earnings in 3d: at or under the {floor:.1f}% earnings-week line "
             f"but over the {SINGLE_NAME_TRIM_TRIGGER:.0f}% single-name trigger, so the "
             f"standing trim to {SINGLE_NAME_CEILING:.0f}% applies")
         assert a["earnings_note"] == (
-            f"Earnings in 3d: under the {floor:.1f}% earnings-week line, so the standing "
+            f"Earnings in 3d: at or under the {floor:.1f}% earnings-week line, so the standing "
             f"{SINGLE_NAME_CEILING:.0f}% ceiling trim applies before the report (the same "
             f"earnings-week rule the 🏠 Brief and 🔔 Catalyst Watch use).")
     # ceiling (outside the window): unchanged text, no note
@@ -360,6 +360,67 @@ def test_low_gain_in_window_trim_writes_no_row_and_is_not_in_skipped_out():
     assert rows == [] and skipped == set()              # ... but history does not record it
 
 
+# -- EW C3 / S2: the Tune-up single-name card defers to the Brief's sell -------------------
+
+def _sn_rec(w):
+    return {
+        "type": "single_name_concentration", "priority": "HIGH", "title": f"AAA is {w:.1f}%",
+        "problem": "p", "recommendation": "Trim AAA toward the 15% ceiling",
+        "root_tickers": [{"ticker": "AAA"}],
+    }
+
+
+def _brief(w, n, days, pnl=_PNLS[1]):
+    from stock_analyzer.daily_briefing import build_daily_briefing
+    return build_daily_briefing(
+        port_df=_book(w, n, pnl), alert_list=[], risk_recs=[_sn_rec(w)], news_items=[],
+        macro_events=[], held_data=_held(days), scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+
+
+def _brief_sells_aaa(brief):
+    from stock_analyzer import held_trim_owner as hto
+    return "AAA" in hto.brief_sell_tickers(brief["act_today"], brief["review_list"])
+
+
+@pytest.mark.parametrize("n", range(5, 13))
+def test_s2_single_name_card_defers_exactly_when_the_brief_sells_the_name(n):
+    from stock_analyzer.constants import WEAK_CONVICTION_SCORE
+    assert 70.0 >= WEAK_CONVICTION_SCORE            # the book's AAA is not a weak-large holding
+    for w in _weights(n):
+        if w < SINGLE_NAME_CEILING:
+            continue
+        for days in _DAYS:
+            where = f"n={n} w={w} days={days}"
+            brief = _brief(w, n, days)
+            dec = ts.earnings_week_decision(w, n, _SHARES) if ts.in_earnings_window(days) else None
+            sold = dec is not None and dec["trim_shares"] >= 1
+            cards = [c for c in brief["portfolio_tuneup"] if c["type"] == "single_name_concentration"]
+            assert isinstance(brief["portfolio_tuneup_deferred"], dict), where
+            if sold:
+                assert _brief_sells_aaa(brief), where
+                assert cards == [], where
+                assert list(brief["portfolio_tuneup_deferred"]) == ["AAA"], where
+            else:
+                assert not _brief_sells_aaa(brief), where
+                assert len(cards) == 1 and brief["portfolio_tuneup_deferred"] == {}, where
+                # a note only when the window holds a known weight under the earnings-week line
+                in_win_no_dec = ts.in_earnings_window(days) and dec is None
+                assert ("earnings_note" in cards[0]) == in_win_no_dec, where
+
+
+def test_s2_boundary_n10_w15_keeps_the_card_with_a_note_w15_1_defers():
+    # N=10 -> earnings-week line 15.0 (== SINGLE_NAME_CEILING): 15.0 is NOT above it
+    keep = _brief(15.0, 10, 3)
+    cards = [c for c in keep["portfolio_tuneup"] if c["type"] == "single_name_concentration"]
+    assert len(cards) == 1 and "earnings_note" in cards[0]
+    assert keep["portfolio_tuneup_deferred"] == {} and not _brief_sells_aaa(keep)
+    over = _brief(15.1, 10, 3)
+    assert [c for c in over["portfolio_tuneup"] if c["type"] == "single_name_concentration"] == []
+    assert list(over["portfolio_tuneup_deferred"]) == ["AAA"] and _brief_sells_aaa(over)
+
+
 # -- app.py render branch (app.py has no unit tests) ----------------------------------------
 
 def test_signals_trim_branch_reads_the_note_and_gates_the_gain_sentence():
@@ -371,6 +432,135 @@ def test_signals_trim_branch_reads_the_note_and_gates_the_gain_sentence():
     gain = branch.index("This locks in a portion of")
     assert branch.rindex('act.get("basis") == "ceiling"', 0, gain) > branch.index("if ts >= 1:")
     assert 'act.get("basis") == "earnings_week"' not in branch
+
+
+def _app_src():
+    return Path(__file__).resolve().parents[1].joinpath("app.py").read_text(encoding="utf-8")
+
+
+def test_home_tuneup_settles_the_deferral_against_the_act_view_and_escapes_the_note():
+    src = _app_src()
+    assert '_db_tuneup_deferred = _daily_brief.get("portfolio_tuneup_deferred", {})' in src
+    # R3-B1: reconciled against `_act_view` (built earlier on the page), and the cards replaced
+    # so the Tune-up count and the render agree
+    recon = src.index("held_trim_owner.reconcile_tuneup(")
+    assert src.index("_act_view = act_today_view(") < recon
+    seg0 = src[recon:recon + 400]
+    assert "held_trim_owner.view_sell_tickers(_act_view)" in seg0
+    assert '_db_tuneup = _db_tuneup_rec["cards"]' in src[recon:recon + 600]
+    assert recon < src.index("_tuneup_n   = len(_db_tuneup)")
+    start = src.index("if _db_tuneup:")
+    seg = src[start:src.index("# News Sentiment Shift", start)]
+    # the earnings note goes through safe_html, as a string only
+    assert "_safe_html(_tu['earnings_note'])" in seg
+    assert 'isinstance(_tu.get("earnings_note"), str)' in seg
+    # one caption per surviving deferral, sorted, outside the `if _db_tuneup:` card block
+    assert "for _tud_t in sorted(_db_tuneup_deferred_texts)" in seg
+    assert seg.index("for _tud_t in sorted(_db_tuneup_deferred_texts)") > seg.index("act on them when you're")
+    assert "_db_tuneup_deferred or" not in src
+
+
+def test_risk_analysis_single_name_branch_reads_the_act_today_view_with_the_verified_check():
+    src = _app_src()
+    start = src.index('if _rtype == "single_name_concentration":')
+    seg = src[start:src.index("_left, _right = st.columns([1, 1])", start)]
+    assert "held_trim_owner.risk_analysis_single_name_line(" in seg
+    # R3-B1: the sells come from the view Home renders, never the raw `_reduce_calls` keys
+    assert "held_trim_owner.view_sell_tickers(_sn_view)" in seg
+    assert "act_today_view(" in seg and '"_home_synth_cache"' in seg
+    assert 'session_state.get("_reduce_calls")' not in seg
+    assert "sell_tickers_from_reduce_calls" not in src
+    assert '_coord_cache_state("_reduce_calls") == "ready"' in seg
+    assert '"_daily_brief_offline"' in seg
+    assert "coord_freshness.classify(" in seg and "coord_freshness.FRESH" in seg
+    assert '"_last_port_df"' in seg and '"_last_held_data"' in seg
+    # unverified => None (the pure helper then says "unverified"), never an empty set
+    assert "_sn_sell = None" in seg and "if _sn_verified:" in seg
+    # a cross-check must never take the Action Plan down, and a failure leaves a trace (R3-N4)
+    assert "except Exception as _sn_err:" in seg
+    assert "getLogger(__name__).warning(" in seg
+    assert "pass" not in seg.split("except Exception as _sn_err:")[1]
+
+
+# -- R3-B1: a recovered stop breach is not a sell (the view demotes it after the build) ----
+
+def _breach_book(w=19.0, n=8):
+    df = _book(w, n, _PNLS[1])
+    df.loc[0, "Price"], df.loc[0, "Stop"], df.loc[0, "Gap to Stop (%)"] = 40.0, 45.0, -11.0
+    return df
+
+
+def _breach_brief(w=19.0, n=8):
+    from stock_analyzer.daily_briefing import build_daily_briefing
+    return build_daily_briefing(
+        port_df=_breach_book(w, n), alert_list=[], risk_recs=[_sn_rec(w)], news_items=[],
+        macro_events=[], held_data={"AAA": {}}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+
+
+def _live_view(brief, gap):
+    from stock_analyzer.act_today_view import act_today_view
+    from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT
+    live = _breach_book()
+    live.loc[0, "Gap to Stop (%)"] = gap
+    return act_today_view(brief, False, live, {}, STOP_RECOVERY_MARGIN_PCT)
+
+
+def test_r3_b1_active_breach_keeps_the_deferral_and_risk_analysis_says_follow_the_call():
+    from stock_analyzer import held_trim_owner as hto
+    brief = _breach_brief()
+    assert [c for c in brief["portfolio_tuneup"] if c["type"] == "single_name_concentration"] == []
+    assert list(brief["portfolio_tuneup_deferred"]) == ["AAA"]
+    sells = hto.view_sell_tickers(_live_view(brief, -11.0))
+    assert sells == {"AAA"}
+    rec = hto.reconcile_tuneup(brief["portfolio_tuneup"], brief["portfolio_tuneup_deferred"], sells)
+    assert rec["cards"] == [] and list(rec["deferred_texts"]) == ["AAA"]
+    inp = hto.book_inputs(_breach_book(), "AAA")
+    line = hto.risk_analysis_single_name_line(
+        "AAA", sells, {}, inp["weight_pct"], inp["n_positions"], inp["shares"])
+    assert line["state"] == "brief_owns"
+
+
+def test_r3_b1_recovered_breach_restores_the_card_with_no_caption_and_no_follow_the_call():
+    from stock_analyzer import held_trim_owner as hto
+    from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT
+    brief = _breach_brief()
+    view = _live_view(brief, STOP_RECOVERY_MARGIN_PCT + 5.0)
+    assert [i["ticker"] for i in view["resolved"]] == ["AAA"] and view["active"] == []
+    sells = hto.view_sell_tickers(view)
+    assert sells == set()
+    rec = hto.reconcile_tuneup(brief["portfolio_tuneup"], brief["portfolio_tuneup_deferred"], sells)
+    assert [c["type"] for c in rec["cards"]] == ["single_name_concentration"]
+    assert rec["deferred_texts"] == {}
+    inp = hto.book_inputs(_breach_book(), "AAA")
+    line = hto.risk_analysis_single_name_line(
+        "AAA", sells, {}, inp["weight_pct"], inp["n_positions"], inp["shares"])
+    assert line["state"] != "brief_owns"
+
+
+def test_r3_b1_offline_view_restores_the_card_and_risk_analysis_says_unverified():
+    from stock_analyzer import held_trim_owner as hto
+    from stock_analyzer.act_today_view import act_today_view
+    from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT
+    brief = _breach_brief()
+    view = act_today_view(brief, True, _breach_book(), {}, STOP_RECOVERY_MARGIN_PCT)
+    sells = hto.view_sell_tickers(view)
+    assert sells is None
+    rec = hto.reconcile_tuneup(brief["portfolio_tuneup"], brief["portfolio_tuneup_deferred"], sells)
+    assert len(rec["cards"]) == 1 and rec["deferred_texts"] == {}
+    assert hto.risk_analysis_single_name_line("AAA", sells, {}, 19.0, 8, 100)["state"] == "unverified"
+
+
+def test_r3_b1_a_risk_attribution_plus_a_review_trim_on_one_name_reads_brief_owns():
+    # the old `_reduce_calls` first-item-per-ticker gap: an Act `risk` item must not hide the trim
+    from stock_analyzer import held_trim_owner as hto
+    view = {"state": "act", "resolved": [], "aware": [], "n_active": 2, "active": [
+        {"kind": "risk", "ticker": "AAA"},
+        {"ticker": "AAA", "action": {"type": "TRIM_TO_TARGET"}},
+    ]}
+    sells = hto.view_sell_tickers(view)
+    assert hto.risk_analysis_single_name_line("AAA", sells, {}, 19.0, 8, 100)["state"] == "brief_owns"
 
 
 # -- R2-N4: the other two date parses read the same first-10-chars string -----------------

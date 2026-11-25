@@ -526,8 +526,10 @@ def test_build_daily_briefing_top_level_keys_exclude_grow_today_fields():
         portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
     )
     assert set(brief.keys()) == {
-        "act_today", "review_list", "grow_today", "portfolio_tuneup", "news_flags",
+        "act_today", "review_list", "grow_today", "portfolio_tuneup",
+        "portfolio_tuneup_deferred", "news_flags",
     }
+    assert brief["portfolio_tuneup_deferred"] == {}
     grow_only_keys = (
         "tone", "sp500_pct", "new_picks", "sector_blocked_picks",
         "sector_unknown_picks",
@@ -1763,6 +1765,131 @@ def test_tuneup_non_trim_driver_types_never_filtered():
         out = _portfolio_tuneup([rec], acted_tickers={"NVDA"})
         assert len(out) == 1, rtype
         assert out[0]["tickers"] == ["NVDA"], rtype
+
+
+# ── _portfolio_tuneup — single-name card defers to a Brief sell (EW C3) ────────
+# docs/plans/earnings-week-trim-c3-spec.md: the 🔧 single-name "Trim ... toward the
+# 15% ceiling" card is dropped (with a visible reason in `deferred_out`) when a Brief
+# sell names ITS ticker; kept with an earnings_note in case B; kept otherwise.
+
+def _sn_rec(ticker="AAA", priority="HIGH"):
+    return {
+        "type": "single_name_concentration", "priority": priority, "title": "AAA is 19% of the book",
+        "problem": "p", "recommendation": "Trim AAA toward the 15% ceiling",
+        "root_tickers": [{"ticker": ticker}],
+    }
+
+
+def _sn_book(w, n=8, ticker="AAA", shares=100):
+    import pandas as pd
+    rows = [{"Ticker": ticker, "Weight (%)": w, "Shares": shares}]
+    rows += [{"Ticker": f"F{i}", "Weight (%)": 5.0, "Shares": 10} for i in range(n - 1)]
+    return pd.DataFrame(rows)
+
+
+def _sn_run(sells, days=None, w=19.0, n=8, rec=None, port=True):
+    from stock_analyzer import held_trim_owner as hto
+    deferred = {}
+    out = _portfolio_tuneup(
+        [rec or _sn_rec()], acted_tickers=set(),
+        sell_tickers=hto.brief_sell_tickers(*sells) if isinstance(sells, tuple) else sells,
+        earnings_days={} if days is None else {"AAA": days},
+        port_df=_sn_book(w, n) if port else None, deferred_out=deferred)
+    return out, deferred
+
+
+_SN_DEFER = ("AAA already has a sell in today's Act Today call; its single-name ceiling card "
+             f"returns if AAA is still over {SINGLE_NAME_CEILING:.0f}% after that.")
+
+
+def _sn_texts(deferred):
+    """{T: text} from the {T: {"text", "card"}} payload; also pins the payload shape."""
+    for t, v in deferred.items():
+        assert set(v) == {"text", "card"} and v["card"]["type"] == "single_name_concentration", t
+        assert v["card"]["tickers"] == [t]
+    return {t: v["text"] for t, v in deferred.items()}
+
+
+@pytest.mark.parametrize("act, review", [
+    ([], [{"ticker": "AAA", "action": {"type": "TRIM_TO_TARGET"}}]),     # earnings / standing trim
+    ([{"kind": "stop_breach", "ticker": "AAA"}], []),                    # an exit
+    ([{"kind": "deterioration_trim", "ticker": "AAA"}], []),
+    ([{"kind": "risk_off_derisk", "ticker": "AAA"}], []),
+])
+def test_tuneup_single_name_dropped_and_deferred_for_a_brief_sell(act, review):
+    out, deferred = _sn_run((act, review))
+    assert out == []
+    assert _sn_texts(deferred) == {"AAA": _SN_DEFER}
+
+
+@pytest.mark.parametrize("act, review", [
+    ([{"kind": "risk", "ticker": "AAA"}], []),                           # attribution, not a sell
+    ([{"kind": "critical_news", "ticker": "AAA"}], []),
+    ([], [{"ticker": "AAA", "action": {"type": "WATCH"}}]),              # earnings WATCH
+    ([{"kind": "stop_breach", "ticker": "ZZZ"}], []),                    # another name's exit
+])
+def test_tuneup_single_name_kept_when_no_brief_sell_names_it(act, review):
+    out, deferred = _sn_run((act, review))
+    assert [c["type"] for c in out] == ["single_name_concentration"]
+    assert "earnings_note" not in out[0]
+    assert deferred == {}
+
+
+def test_tuneup_single_name_case_b_keeps_card_with_earnings_note():
+    # N=8, w=16.0 (<= the 17.5 earnings-week line), earnings in 3d, no Brief sell
+    out, deferred = _sn_run(set(), days=3, w=16.0, n=8)
+    assert len(out) == 1 and deferred == {}
+    assert out[0]["earnings_note"].startswith("Earnings in 3d: at or under the 17.5% earnings-week line")
+
+
+@pytest.mark.parametrize("days", [8, -1, None])
+def test_tuneup_single_name_no_note_out_of_the_window(days):
+    out, _ = _sn_run(set(), days=days, w=16.0, n=8)
+    assert len(out) == 1 and "earnings_note" not in out[0]
+
+
+def test_tuneup_single_name_unknown_weight_keeps_card_without_a_note():
+    import pandas as pd
+    out, deferred = _sn_run(set(), days=3, port=False)          # no book at all
+    assert len(out) == 1 and "earnings_note" not in out[0] and deferred == {}
+    nan_book = pd.DataFrame([{"Ticker": "AAA", "Weight (%)": float("nan"), "Shares": 10}])
+    deferred = {}
+    out = _portfolio_tuneup([_sn_rec()], sell_tickers=set(), earnings_days={"AAA": 3},
+                            port_df=nan_book, deferred_out=deferred)
+    assert len(out) == 1 and "earnings_note" not in out[0] and deferred == {}
+
+
+def test_tuneup_single_name_boundary_n10_w15_note_w15_1_deferred():
+    # plan §7 item 4: N=10 -> floor 15.0 (== SINGLE_NAME_CEILING)
+    out, deferred = _sn_run(set(), days=3, w=15.0, n=10)
+    assert len(out) == 1 and "earnings_note" in out[0] and deferred == {}
+    review = [{"ticker": "AAA", "action": {"type": "TRIM_TO_TARGET"}}]
+    out, deferred = _sn_run(([], review), days=3, w=15.1, n=10)
+    assert out == [] and _sn_texts(deferred) == {"AAA": _SN_DEFER}
+
+
+def test_tuneup_deferred_payload_card_is_the_card_that_would_have_been_shown():
+    # R3-B1: Home restores exactly this dict when the Act Today view no longer sells the name
+    kept, _ = _sn_run(set(), days=3, w=16.0, n=8)
+    review = [{"ticker": "AAA", "action": {"type": "TRIM_TO_TARGET"}}]
+    out, deferred = _sn_run(([], review), days=3, w=16.0, n=8)
+    assert out == [] and deferred["AAA"]["card"] == kept[0]
+
+
+def test_tuneup_single_name_defaults_leave_old_callers_unchanged():
+    # no sell_tickers / port_df / deferred_out at all (every pre-C3 caller)
+    out = _portfolio_tuneup([_sn_rec()], acted_tickers={"AAA"})
+    assert len(out) == 1 and "earnings_note" not in out[0]
+
+
+def test_tuneup_deferral_never_touches_beta_or_other_single_name_cards():
+    deferred = {}
+    out = _portfolio_tuneup([_beta_rec(["BBB", "CCC"]), _sn_rec("AAA"), _sn_rec("DDD")],
+                            acted_tickers=set(), sell_tickers={"AAA", "BBB"},
+                            earnings_days={}, port_df=_sn_book(19.0), deferred_out=deferred)
+    assert [c["type"] for c in out] == ["beta", "single_name_concentration"]
+    assert out[1]["tickers"] == ["DDD"]
+    assert _sn_texts(deferred) == {"AAA": _SN_DEFER}
 
 
 # ── _act_today — deterioration TRIM/EXIT directive, sub-1-share holdings ──────
