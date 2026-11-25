@@ -168,7 +168,7 @@ def test_rebalancer_defers_only_when_reduce_calls_are_ok():
 @pytest.mark.parametrize("blank", [None, "", "   ", 5])
 def test_rebalancer_blank_directive_uses_the_plain_line(blank):
     d = hto.rebalancer_trim_disposition("aaa", {"AAA"}, True, {}, blank)
-    assert d == {"state": "brief_owns", "text": "Sized by today's Act Today call (🏠 Home)."}
+    assert d == {"state": "brief_owns", "text": "Today's Act Today call already sells this name (🏠 Home)."}
 
 
 def test_rebalancer_unverified_but_in_window_gets_the_earnings_line_not_a_deferral():

@@ -22957,12 +22957,55 @@ elif page == "🥧 Portfolio Overview":
                 today=_today_et(), brief_epoch=_get_or_offline(_rb_memo, "epoch"),
                 epoch=_coord_epoch())
 
+        # EW C4: a trim row for a name today's Act Today already sells is a
+        # deferred row (no share count of its own). The sells are read from the
+        # Act Today VIEW Home renders (a recovered stop breach is not a sell),
+        # built the way 🔗 Risk Analysis builds it (EW C3), never from the raw
+        # `_reduce_calls` keys (an Act `risk` card's ticker is an attribution).
+        # None = the cross-check couldn't run: nothing is deferred and a caption
+        # says so.
+        _rb_sells = None
+        if (_rb_reduce_verified
+                and coord_freshness.classify(
+                    st.session_state.get("_coord_stamps"), _coord_epoch(),
+                    "_reduce_calls") == coord_freshness.FRESH):
+            try:
+                from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT as _RB_STOP_REC_MARGIN
+                _rb_bundle = _get_or_offline(_rb_memo, "bundle")
+                if not isinstance(_rb_bundle, dict):
+                    _rb_bundle = {}
+                _rb_view = act_today_view(
+                    daily_brief      = _rb_brief,
+                    brief_offline    = bool(_rb_bundle.get("_daily_brief_offline", False)),
+                    port_df_enriched = st.session_state.get("_port_df_enriched"),
+                    live_prices      = st.session_state.get("_live_prices"),
+                    margin_pct       = _RB_STOP_REC_MARGIN,
+                    now              = _now_et(),
+                )
+                _rb_sells = held_trim_owner.view_sell_tickers(_rb_view)
+            except Exception as _rb_sell_err:
+                import logging as _rb_logging
+                _rb_logging.getLogger(__name__).warning(
+                    "Rebalancer Act Today cross-check failed: %s",
+                    _rb_sell_err, exc_info=True)
+                _rb_sells = None
+        _rb_earn_days = _trim_sizing.earnings_days_by_ticker(held_data, _today_et())
+        if _rb_sells is None:
+            st.caption(
+                "⚠️ Trim rows below aren't checked against today's Act Today calls "
+                "(🏠 Home's Act Today isn't available for the current book: not built "
+                "yet, failed, or out of date), so a trim here may repeat a sell Act "
+                "Today already sizes."
+            )
+
         _rb_plan  = build_rebalance_plan(
             _drift_df, total_val,
             news_flags=_rb_news_flags,
             risk_trim_set=_rb_risk_trim_set,
             reduce_call_set=_rb_reduce_set,
             add_verdicts=_rb_add_verdicts,
+            sell_tickers=_rb_sells,
+            earnings_days=_rb_earn_days,
         )
 
         # ── Gate Suppression Ledger capture: G-02 (roadmap B2, 2026-09-13) ──
@@ -22996,7 +23039,9 @@ elif page == "🥧 Portfolio Overview":
         _rb_k1.metric("Trim needed",    _n_trim,
                       delta=("Action required" if _rb_plan["trim_action_needed"]
                              else ("Watch" if _n_trim else None)),
-                      delta_color="inverse" if _rb_plan["trim_action_needed"] else "off")
+                      delta_color="inverse" if _rb_plan["trim_action_needed"] else "off",
+                      help=("Rows Act Today already sells today aren't counted."
+                            if _rb_plan["deferred_trims_count"] > 0 else None))
         _rb_k2.metric("Underweight",    _n_add,
                       help="Holdings below target weight by more than the tolerance. "
                            "Drift only: Grow Today decides adds.")
@@ -23051,20 +23096,28 @@ elif page == "🥧 Portfolio Overview":
             )
             st.plotly_chart(_rb_fig, width="stretch")
             st.caption(
-                "🔴 Red = overweight >5pp (trim)  ·  "
-                "🟡 Amber = overweight 2–5pp (watch)  ·  "
-                "🔵 Blue = underweight >2pp (drift; adds are Grow Today's call)  ·  "
-                "⬛ Gray = within ±2pp tolerance"
+                f"🔴 Red = overweight >{TOLERANCE_WATCH:.0f}pp (trim)  ·  "
+                f"🟡 Amber = overweight {TOLERANCE_OK:.0f}–{TOLERANCE_WATCH:.0f}pp (watch)  ·  "
+                f"🔵 Blue = underweight >{TOLERANCE_OK:.0f}pp (drift; adds are Grow Today's call)  ·  "
+                f"⬛ Gray = within ±{TOLERANCE_OK:.0f}pp tolerance"
             )
 
         # Trim recommendations
-        if _rb_plan["trims"]:
+        if _rb_plan["trims"] or _rb_plan["deferred_trims"]:
             st.markdown("#### ✂️ Trim Actions (Overweight)")
+            # EW C4: names today's Act Today sells are sized there, not here.
+            if _rb_plan["deferred_trims"]:
+                st.info("  \n".join(
+                    ["🏠 Today's Act Today call already sells these names, so no trim is sized for them here today; a row comes back if it is still over target after that sell:"]
+                    + [f"• {_dt['ticker']}: {_dt['current_pct']:.1f}% vs target "
+                       f"{_dt['target_pct']:.1f}% ({_dt['drift_pp']:+.1f}pp)"
+                       for _dt in _rb_plan["deferred_trims"]]
+                ))
             for _tr in _rb_plan["trims"]:
-                _tr_pri  = "HIGH" if (_tr["urgency"] >= 40 or _tr["status"] == "TRIM") else "MEDIUM"
+                _tr_pri  = _tr["priority"]
                 _tr_icon = "🔴" if _tr_pri == "HIGH" else "🟡"
                 _tr_bclr = "#ff4444" if _tr_pri == "HIGH" else "#ffbb33"
-                _tr_exp  = _tr["urgency"] >= 40
+                _tr_exp  = _tr["expanded"]
 
                 with st.expander(
                     f"{_tr_icon} **{_tr['ticker']}** — trim {_tr['drift_pp']:+.1f}pp  "
@@ -23098,6 +23151,9 @@ elif page == "🥧 Portfolio Overview":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+                    _tr_earn = _tr.get("earnings_note")
+                    if isinstance(_tr_earn, str) and _tr_earn:
+                        st.caption(_tr_earn)
                     with st.expander("Why this matters"):
                         st.markdown(_tr['institutional_lens'])
 
@@ -23254,10 +23310,11 @@ elif page == "🥧 Portfolio Overview":
         # In-tolerance positions
         if _rb_plan["ok"]:
             with st.expander(f"✅ {len(_rb_plan['ok'])} position(s) within tolerance", expanded=False):
-                st.caption(", ".join(_rb_plan["ok"]) + " — no action needed.")
+                st.caption(", ".join(_rb_plan["ok"]) + " — no rebalancing needed.")
 
         if not (_rb_plan["trims"] or _rb_plan["adds"] or _rb_plan["grow_paused_adds"]
-                or _rb_plan["reduce_blocked_adds"] or _rb_plan["risk_blocked_adds"]):
+                or _rb_plan["reduce_blocked_adds"] or _rb_plan["risk_blocked_adds"]
+                or _rb_plan["deferred_trims"]):
             st.success(
                 "✅ All positions are within tolerance of their target weights. "
                 "No rebalancing needed."

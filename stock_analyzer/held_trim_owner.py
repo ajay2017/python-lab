@@ -245,7 +245,7 @@ def rebalancer_trim_disposition(ticker, sell_tickers, reduce_calls_ok, earnings_
     if reduce_calls_ok is True and t in {_norm(x) for x in (sell_tickers or ())}:
         if isinstance(directive, str) and directive.strip():
             return {"state": "brief_owns", "text": f"Today's Act Today call: {directive}"}
-        return {"state": "brief_owns", "text": "Sized by today's Act Today call (🏠 Home)."}
+        return {"state": "brief_owns", "text": "Today's Act Today call already sells this name (🏠 Home)."}
     d = (earnings_days or {}).get(t)
     if trim_sizing.in_earnings_window(d):
         return {"state": "earnings_note",

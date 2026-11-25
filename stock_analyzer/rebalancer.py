@@ -9,8 +9,9 @@ when and how to rebalance.
 
 import pandas as pd
 
+from stock_analyzer import held_trim_owner
 from stock_analyzer.constants import (
-    COMPOSITE_HOLD, COMPOSITE_BUY, TOLERANCE_OK, TOLERANCE_WATCH,
+    COMPOSITE_HOLD, COMPOSITE_BUY, SINGLE_NAME_CEILING, TOLERANCE_OK, TOLERANCE_WATCH,
 )
 
 
@@ -114,6 +115,8 @@ def build_rebalance_plan(
     risk_trim_set: set | None = None,
     reduce_call_set: set | None = None,
     add_verdicts: dict | None = None,
+    sell_tickers: set | None = None,
+    earnings_days: dict | None = None,
 ) -> dict:
     """
     Generates trim actions with specific share counts and underweight (add)
@@ -147,11 +150,31 @@ def build_rebalance_plan(
        drift plus Grow Today's verdict (grow_call / grow_call_text). None means
        the cross-check couldn't run: every surviving add row reads "unknown".
 
+    sell_tickers (optional, EW C4): upper-cased tickers today's live Act Today
+       view sells (`held_trim_owner.view_sell_tickers(act_today_view(...))`).
+       A row for such a name is a DEFERRED row: an overweight row is kept out
+       of `trims` (no share count of its own, out of every trim total) and listed
+       in `deferred_trims`; an OK row (a custom target can read OK while Act
+       Today sells the name) stays in `ok` and is also listed there. An
+       underweight row is untouched (the ADD gates above handle it). None means
+       the cross-check couldn't run: nothing is deferred (fail toward showing
+       the trim).
+
+    earnings_days (optional, EW C4): {UPPER ticker: days to earnings}. An
+       overweight row that stays a trim and is in the earnings window gains an
+       "earnings_note" (a pointer to Act Today; never a size).
+
     Returns dict with:
       trims, adds, ok, total_trim_value, total_add_value, rebalance_pct,
       news_blocked_adds, risk_blocked_adds_count, reduce_blocked_adds,
       reduce_blocked_adds_count, grow_paused_adds, grow_paused_adds_count,
+      deferred_trims, deferred_trims_count,
       trim_pct (trims only; rebalance_pct still sums trim + add drift)
+
+    Every trim dict carries "priority" ("HIGH" | "MEDIUM") and "expanded"
+    (open its card by default): the render-side decision moved here from app.py.
+    rebalance_pct = (kept trims + adds) value / portfolio value; a deferred
+    overweight row is sized by Act Today, so it is not counted in it.
     """
     if drift_df.empty:
         return {"trims": [], "adds": [], "ok": [], "total_trim_value": 0,
@@ -160,6 +183,7 @@ def build_rebalance_plan(
                 "risk_blocked_adds": [],
                 "reduce_blocked_adds": [], "reduce_blocked_adds_count": 0,
                 "grow_paused_adds": [], "grow_paused_adds_count": 0,
+                "deferred_trims": [], "deferred_trims_count": 0,
                 "trim_pct": 0.0, "trim_action_needed": False}
 
     news_flags      = news_flags or {}
@@ -170,6 +194,7 @@ def build_rebalance_plan(
     risk_blocked_adds_list: list[dict] = []
     reduce_blocked_adds_list: list[dict] = []
     grow_paused_adds_list: list[dict] = []
+    deferred_list: list[dict] = []
 
     for _, row in drift_df.iterrows():
         ticker    = row["Ticker"]
@@ -191,8 +216,22 @@ def build_rebalance_plan(
         # score-mentioning rationale below may treat it as one.
         _score_ok = bool(row.get("Score Available", True))
 
+        # EW C4: what this row does against today's Act Today sells. Directive
+        # None: a deferred row never quotes the Brief's share count, so it can't
+        # mix the Brief's numbers with a newer book. sell_tickers None = the
+        # cross-check couldn't run -> no deferral (fail toward showing the trim).
+        _disp = held_trim_owner.rebalancer_trim_disposition(
+            ticker, sell_tickers or set(), sell_tickers is not None,
+            earnings_days or {}, None)
+        _deferred_row = {
+            "ticker": ticker, "status": status, "current_pct": current,
+            "target_pct": target, "drift_pp": drift_pp, "text": _disp["text"],
+        }
+
         if status == "OK":
             ok_list.append(ticker)
+            if _disp["state"] == "brief_owns":
+                deferred_list.append(_deferred_row)
             continue
 
         # Floor, never round up: a sub-one-share drift must not become a
@@ -202,6 +241,12 @@ def build_rebalance_plan(
         # Trim urgency scoring — score thresholds aligned with scoring.py
         # signal boundaries so the rebalancer speaks the same vocabulary as
         # the composite recommendation. Sell zone = score < COMPOSITE_HOLD.
+        if drift_pp > 0 and _disp["state"] == "brief_owns":
+            # Act Today already sells this name today (EW C4): no share
+            # count here, out of every trim total, listed under the banner.
+            deferred_list.append(_deferred_row)
+            continue
+
         if drift_pp > 0:
             urgency = 0
             if "Sell" in signal or "Strong Sell" in signal:
@@ -284,15 +329,15 @@ def build_rebalance_plan(
                     )
 
             inst_lens = (
-                "Institutional position sizing rule: no single name above 15% of portfolio,"
+                f"Institutional position sizing rule: no single name above {SINGLE_NAME_CEILING:.0f}% of portfolio, "
                 "regardless of conviction — and even high-conviction names should be "
-                "trimmed back to target when they outrun it by 5pp or more. "
+                f"trimmed back to target when they outrun it by {TOLERANCE_WATCH:.0f}pp or more. "
                 "The reason is not that you're wrong; it's that a concentrated winner "
                 "creates asymmetric downside if conditions change. "
                 "Trim the drift, not the thesis."
             )
 
-            trims.append({
+            trim_row = {
                 "ticker":        ticker,
                 "sector":        sector,
                 "signal":        signal,
@@ -308,7 +353,14 @@ def build_rebalance_plan(
                 "rationale":     rationale,
                 "action_detail": action_detail,
                 "institutional_lens":       inst_lens,
-            })
+                # Moved verbatim from app.py (EW C4). 40 is the urgency scale's
+                # "Sell signal" step (the `urgency += 40` above).
+                "priority": "HIGH" if (urgency >= 40 or status == "TRIM") else "MEDIUM",
+                "expanded": urgency >= 40,
+            }
+            if _disp["state"] == "earnings_note":
+                trim_row["earnings_note"] = _disp["text"]
+            trims.append(trim_row)
 
         else:  # underweight → ADD
             # Daily Brief reduce-call gate: suppress ADD entirely if today's
@@ -519,6 +571,8 @@ def build_rebalance_plan(
         "reduce_blocked_adds_count": len(reduce_blocked_adds_list),
         "grow_paused_adds":          grow_paused_adds_list,
         "grow_paused_adds_count":    len(grow_paused_adds_list),
+        "deferred_trims":            sorted(deferred_list, key=lambda r: str(r["ticker"])),
+        "deferred_trims_count":      len(deferred_list),
         # Only trims that size at least one share (the same shares_delta >= 1 test
         # as trim_action_needed): a drift under one share sells nothing, so it
         # must not count toward what the trims "would move".

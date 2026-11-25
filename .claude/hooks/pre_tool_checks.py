@@ -1304,6 +1304,9 @@ _GATE_FILES = {
     # hides a real sell behind another surface's call (a `risk` attribution card
     # is not a sell of its ticker) or leaves two sell sizes for one name.
     "stock_analyzer/held_trim_owner.py",
+    # Added 2026-11-24 (EW C4): sizes sells -- the Rebalancer's trim share counts;
+    # a wrong call sells the wrong size or a second time beside an Act Today sell.
+    "stock_analyzer/rebalancer.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully
