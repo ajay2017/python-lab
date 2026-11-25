@@ -15,6 +15,26 @@ PORTFOLIO_BETA_TARGET   = 1.0    # baseline equity-portfolio target
 PORTFOLIO_BETA_ELEVATED = 1.3    # soft warning above this
 PORTFOLIO_BETA_CEILING  = 1.4    # hard breach above this — institutional ceiling
 
+# ── Young holdings in the book's risk numbers (risk_window.py) ───────────────
+# Owner decision 2026-11-25 (docs/plans/risk-young-holding.md, RiskListwiseYoung):
+# a holding too new to have its own beta must not shrink the whole book's risk
+# window (the old listwise cut), nor be silently dropped. risk_window.book_returns
+# leaves it out of the book's return series, spreads its weight over the other
+# holdings, and says so.
+# BETA_MIN_RETURNS: the fewest daily returns a stock's beta needs, and the fewest a
+# holding needs to count in the book's risk series (so "young" = "its own beta
+# cannot be measured yet"). Same value as the bare 20s it will replace (C2) at
+# risk.py (beta_vs_market, pearson_corr_vs_benchmark, the book beta); value-neutral.
+# PORTFOLIO_RISK_UNMEASURED_MAX_PCT: the most of the book (% of weight) that may be
+# left out of the book's risk series on a day before portfolio risk reads
+# unknown (None). Inclusive at the cap. Beta is understated by about
+# share x (young beta - rest beta), so this is the owner's call (policy, 10 chosen).
+# PORTFOLIO_RISK_MIN_DAYS: the fewest kept days any book risk series may have;
+# same value as the literal at risk.py compute_portfolio_risk_metrics.
+BETA_MIN_RETURNS                  = 20
+PORTFOLIO_RISK_UNMEASURED_MAX_PCT = 10.0
+PORTFOLIO_RISK_MIN_DAYS           = 10
+
 # ── Defensive-sector diversifier sizing (risk_advisor beta + volatility recs) ──
 # Shared range so the two risk_advisor.py recommendations that both suggest
 # adding a Healthcare/Staples/Utilities diversifier can't quote different

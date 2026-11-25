@@ -1327,6 +1327,11 @@ _GATE_FILES = {
     # a wrong call lets a stop slide down with the price, or carries one into a
     # different position.
     "stock_analyzer/held_stop_carry.py",
+    # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
+    # which holdings count in the book's risk series and when portfolio risk reads
+    # unknown; a wrong call understates the book's beta / VaR or shrinks the window
+    # to a new holding's few days.
+    "stock_analyzer/risk_window.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully
