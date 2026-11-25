@@ -98,7 +98,7 @@ def _earn_days_until(earn_str: str | None) -> int | None:
     if not earn_str:
         return None
     try:
-        return (_datetime.strptime(earn_str, "%Y-%m-%d").date() - _today_et()).days
+        return (_datetime.strptime(str(earn_str)[:10], "%Y-%m-%d").date() - _today_et()).days
     except Exception:
         return None
 

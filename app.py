@@ -5532,7 +5532,7 @@ def _render_holdings_earnings(port_df, held_data):
         _trail_eps = _af["trail_eps"]
         _rev_growth = _af["rev_growth"]
         try:
-            _edate = datetime.strptime(_d, "%Y-%m-%d").date() if _d else None
+            _edate = datetime.strptime(str(_d)[:10], "%Y-%m-%d").date() if _d else None
         except Exception:
             _edate = None
         _days = (_edate - _today).days if _edate else None
@@ -15727,7 +15727,7 @@ elif page == "🧾 Summary":
             if not _sm_ed:
                 continue
             try:
-                _sm_edate = datetime.strptime(_sm_ed, "%Y-%m-%d").date()
+                _sm_edate = datetime.strptime(str(_sm_ed)[:10], "%Y-%m-%d").date()
             except Exception:
                 continue
             _sm_edays = (_sm_edate - _sm_today_d).days
@@ -17376,7 +17376,7 @@ elif page == "📡 Signals & Advice":
                         earn_flag = False
                         if earn:
                             try:
-                                days_to_earn = (datetime.strptime(earn, "%Y-%m-%d").date() - _today_et()).days
+                                days_to_earn = (datetime.strptime(str(earn)[:10], "%Y-%m-%d").date() - _today_et()).days
                                 if 0 <= days_to_earn <= 14:
                                     _check("🔴", f"Earnings in {days_to_earn}d ({earn}) — bearish signal + near earnings = reduce now.", "#ff4444")
                                     earn_flag = True
@@ -26961,7 +26961,7 @@ elif page == "📈 Analysis":
         earn_label = "—"
         if earn:
             try:
-                days = (datetime.strptime(earn, "%Y-%m-%d").date() - _today_et()).days
+                days = (datetime.strptime(str(earn)[:10], "%Y-%m-%d").date() - _today_et()).days
                 earn_label = f"{earn} ({days}d)" if days >= 0 else f"{earn} (past)"
             except Exception:
                 earn_label = earn
@@ -27857,7 +27857,7 @@ elif page == "📈 Analysis":
                     _earn_is_add = isinstance(_earn_add_v, dict) and _earn_add_v.get("state") == "add"
                     try:
                         if _earn_str:
-                            _earn_d = (datetime.strptime(_earn_str, "%Y-%m-%d").date() - _today_et()).days
+                            _earn_d = (datetime.strptime(str(_earn_str)[:10], "%Y-%m-%d").date() - _today_et()).days
                             if 0 <= _earn_d <= 21:
                                 _earn_note = (
                                     f" Earnings in **{_earn_d} days** ({_earn_str})"
@@ -28317,7 +28317,7 @@ elif page == "📈 Analysis":
                     try:
                         if _gc_earn_str:
                             _gc_earn_days = (
-                                datetime.strptime(_gc_earn_str, "%Y-%m-%d").date() - _today_et()
+                                datetime.strptime(str(_gc_earn_str)[:10], "%Y-%m-%d").date() - _today_et()
                             ).days
                             if _gc_earn_days < 0:
                                 _gc_earn_days = None  # past earnings date
@@ -28619,7 +28619,7 @@ elif page == "📈 Analysis":
                 earn = r["earnings"]
                 if earn:
                     try:
-                        days = (datetime.strptime(earn, "%Y-%m-%d").date() - _today_et()).days
+                        days = (datetime.strptime(str(earn)[:10], "%Y-%m-%d").date() - _today_et()).days
                         if 0 <= days <= 21:
                             # For held tickers on a Buy signal the earnings note is already
                             # merged into the "Already held" info box above — skip the duplicate.
