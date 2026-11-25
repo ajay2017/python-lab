@@ -21,6 +21,7 @@ this data structure feeds.
 from __future__ import annotations
 
 from stock_analyzer.constants import COMPOSITE_BUY
+from stock_analyzer.score_text import composite_score_text
 
 # ── Provenance tags ──────────────────────────────────────────────────────────
 # Five tags applied to every evidence line on the card so the reader always
@@ -431,7 +432,7 @@ def detect_tension(
             side_label = "Strong Buy" if analyst_consensus_side == "strong_buy" else "Buy"
             return (
                 f"Wall St. consensus leans {side_label} while the engine "
-                f"composite sits at {comp:.0f} — below the Buy band. "
+                f"composite sits at {composite_score_text(comp)} — below the Buy band. "
                 "Neither reading overrides the other."
             )
 

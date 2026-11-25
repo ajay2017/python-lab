@@ -642,3 +642,27 @@ def test_rank_defensive_candidates_composite_exactly_at_buy_gate():
     assert result["meets_floor"] is True
     assert result["actionable"] is True
     assert result["cost_note"] is None
+
+
+# ── ScoreRoundSiblings: the cost note never rounds up to the Buy gate ────────
+
+def test_rank_defensive_candidates_cost_note_does_not_round_up_to_buy_gate():
+    # A composite just under the gate used to read "composite 65 is below the
+    # Buy gate (65)".
+    just_under = _BUY_GATE - 0.4
+    candidates = [{"ticker": "MID", "beta": 0.5, "corr": 0.1, "composite": just_under}]
+    note = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]["cost_note"]
+    assert note is not None
+    assert f"composite {just_under:.1f} is below the Buy gate ({_BUY_GATE:.0f})" in note
+    assert f"composite {_BUY_GATE:.0f} is below" not in note
+
+
+def test_rank_defensive_candidates_cost_note_far_composite_stays_whole_number():
+    far = _BUY_GATE - 10.0
+    candidates = [{"ticker": "MID", "beta": 0.5, "corr": 0.1, "composite": far}]
+    note = rank_defensive_candidates(
+        candidates=candidates, target=_TARGET, hold_floor=_HOLD_FLOOR, buy_gate=_BUY_GATE,
+    )[0]["cost_note"]
+    assert f"composite {far:.0f} is below the Buy gate ({_BUY_GATE:.0f})" in note

@@ -11,6 +11,7 @@ import math as _math
 import pytz as _pytz
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
 
+from stock_analyzer.score_text import composite_score_text
 from stock_analyzer import revision_flag as _revflag
 from stock_analyzer.text_fmt import share_word
 from stock_analyzer.earnings_stop_cover import (
@@ -414,7 +415,7 @@ def _recommend_core(
             "REDUCE",
             "HIGH",
             (
-                f"Composite score **{score:.0f}/100** is in the Sell zone — going into a binary event "
+                f"Composite score **{composite_score_text(score)}/100** is in the Sell zone — going into a binary event "
                 "with weak fundamentals compounds the risk significantly. "
                 f"{_trim_sentence(trim_sh, _sz, EARNINGS_WEAK_TRIM_PCT)} "
                 "If earnings surprise to the upside and fundamentals improve, re-enter from a smaller base. "

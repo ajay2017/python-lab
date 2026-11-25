@@ -339,3 +339,21 @@ def test_detect_tension_never_raises_on_none_inputs():
     assert tc.detect_tension(None, None, None, "bear_wins") is None
     # non-numeric composite must not raise either.
     assert tc.detect_tension("not-a-number", "buy", None, None) is None
+
+
+# ── ScoreRoundSiblings: the tension line never rounds up to the Buy band ─────
+
+def test_detect_tension_composite_does_not_round_up_to_buy_edge():
+    from stock_analyzer.constants import COMPOSITE_BUY
+    just_under = COMPOSITE_BUY - 0.4
+    msg = tc.detect_tension(just_under, "buy", None, None)
+    assert msg is not None
+    assert f"sits at {just_under:.1f} " in msg
+    assert f"sits at {COMPOSITE_BUY} " not in msg
+
+
+def test_detect_tension_far_composite_stays_whole_number():
+    from stock_analyzer.constants import COMPOSITE_BUY
+    far = COMPOSITE_BUY - 15.0
+    msg = tc.detect_tension(far, "buy", None, None)
+    assert f"sits at {far:.0f} " in msg

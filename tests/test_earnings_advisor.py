@@ -856,3 +856,23 @@ def test_watch_reason_for_stop_and_flag_via_full():
     assert r[0] == "MONITOR" and r[4] == "revision_flag"
     r = ea._recommend_full(20, 60.0, 2.0, 0.0, 20.0, 0, "Hold", 20, 2_000.0, 5.0)
     assert r[0] == "HOLD" and r[4] is None
+
+
+# ── ScoreRoundSiblings: the Sell-zone REDUCE never rounds up to the Hold edge ─
+
+def test_recommend_reduce_weak_fundamentals_score_does_not_round_to_hold_edge():
+    from stock_analyzer.constants import COMPOSITE_HOLD
+    just_under = COMPOSITE_HOLD - 0.4
+    action, _, detail, _ = _rec(score=just_under, weight=8.0)
+    assert action == "REDUCE"
+    assert "Sell zone" in detail
+    assert f"**{just_under:.1f}/100**" in detail
+    assert f"**{COMPOSITE_HOLD}/100**" not in detail
+
+
+def test_recommend_reduce_weak_fundamentals_far_score_stays_whole_number():
+    from stock_analyzer.constants import COMPOSITE_HOLD
+    far = COMPOSITE_HOLD - 9.0
+    action, _, detail, _ = _rec(score=far, weight=8.0)
+    assert action == "REDUCE"
+    assert f"**{far:.0f}/100**" in detail

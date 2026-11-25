@@ -683,3 +683,22 @@ def test_trim_action_needed_false_when_action_trim_is_under_one_share():
     plan = reb.build_rebalance_plan(tiny, total_val=10_000.0)
     assert plan["trims"][0]["shares_delta"] == 0
     assert plan["trim_action_needed"] is False
+
+
+# ── ScoreRoundSiblings: Sell-zone rationale never rounds up to the edge ──────
+
+def test_trim_sell_zone_rationale_does_not_round_up_to_hold_edge():
+    # A score just under COMPOSITE_HOLD used to print "44/100, below 44".
+    just_under = COMPOSITE_HOLD - 0.4
+    df = pd.DataFrame([_drift_row("AAPL", "TRIM", 8.0, 8000.0, signal="Hold", score=just_under)])
+    rationale = reb.build_rebalance_plan(df, total_val=100_000.0)["trims"][0]["rationale"]
+    assert "Sell zone" in rationale
+    assert f"({just_under:.1f}/100, below {COMPOSITE_HOLD})" in rationale
+    assert f"({COMPOSITE_HOLD}/100, below" not in rationale
+
+
+def test_trim_sell_zone_rationale_far_score_stays_whole_number():
+    far = COMPOSITE_HOLD - 9.0
+    df = pd.DataFrame([_drift_row("AAPL", "TRIM", 8.0, 8000.0, signal="Hold", score=far)])
+    rationale = reb.build_rebalance_plan(df, total_val=100_000.0)["trims"][0]["rationale"]
+    assert f"({far:.0f}/100, below {COMPOSITE_HOLD})" in rationale

@@ -9,6 +9,7 @@ when and how to rebalance.
 
 import pandas as pd
 
+from stock_analyzer.score_text import composite_score_text
 from stock_analyzer import held_trim_owner
 from stock_analyzer.constants import (
     COMPOSITE_HOLD, COMPOSITE_BUY, SINGLE_NAME_CEILING, TOLERANCE_OK, TOLERANCE_WATCH,
@@ -293,7 +294,7 @@ def build_rebalance_plan(
             elif score < COMPOSITE_HOLD:
                 rationale = (
                     f"{ticker} is {drift_pp:+.1f}pp overweight with a score in the Sell zone "
-                    f"({score:.0f}/100, below {COMPOSITE_HOLD}). You've drifted into a large "
+                    f"({composite_score_text(score)}/100, below {COMPOSITE_HOLD}). You've drifted into a large "
                     f"position in a name where conviction is broken."
                 )
                 action_detail = (

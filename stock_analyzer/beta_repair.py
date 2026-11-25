@@ -67,6 +67,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from stock_analyzer.score_text import composite_score_text
+
 
 def _pos_float(val) -> float | None:
     """Safe float coercion -- None for None/NaN/non-numeric; does NOT reject
@@ -536,7 +538,7 @@ def rank_defensive_candidates(
             elif _comp < buy_gate:
                 _meets_floor = True
                 _cost_note = (
-                    f"composite {_comp:.0f} is below the Buy gate "
+                    f"composite {composite_score_text(_comp, buy_gate)} is below the Buy gate "
                     f"({buy_gate:.0f}) — a risk trade, not a conviction trade"
                 )
             else:
