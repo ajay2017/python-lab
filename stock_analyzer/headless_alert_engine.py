@@ -246,6 +246,7 @@ def _build_context(today: date) -> dict:
                                                    coverage_out=_risk_cov)
     except Exception:
         port_risk = None
+        _risk_cov = {}   # "not built", never full / partial beside a None port_risk
     fragility = None
     try:
         beta = _f(port_risk.get("beta")) if port_risk else None

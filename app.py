@@ -93,6 +93,7 @@ from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import macro_sector_gate as _macro_sector_gate
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import held_stop_view as _held_stop_view
+from stock_analyzer import risk_window
 from stock_analyzer import young_holding_stop as _young_holding_stop
 from stock_analyzer import thesis_review_status
 from stock_analyzer import signals_headline
@@ -10168,16 +10169,42 @@ if page == "🏠 Home":
                             f"</div>",
                             unsafe_allow_html=True,
                         )
+                        # Plain caption (not inside the raw-HTML block above): names a
+                        # holding the portfolio-risk window left out, when one was.
+                        _pr_c = st.session_state.get("_port_risk_cache")
+                        _fg_cov_note = risk_window.display_note(
+                            _pr_c.get("coverage") if isinstance(_pr_c, dict) else None
+                        )
+                        if _fg_cov_note is not None:
+                            st.caption("ℹ️ " + _fg_cov_note)
                 else:
                     # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
                     # computed — say so rather than imply zero exposure. Matches the
                     # fundamentals-gate "withhold with a visible reason" precedent.
-                    st.markdown(
-                        "<div style='color:#9ca3af;font-size:0.8em'>"
-                        "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed "
-                        "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
-                        unsafe_allow_html=True,
-                    )
+                    # Says WHY when the reason is a young / unpriced holding (then the
+                    # "market data offline?" guess is dropped from the line above it).
+                    _fg_live_note = None
+                    try:
+                        _fg_live_series, _fg_live_cov = risk_window.book_returns(port_df, held_data)
+                        if _fg_live_series is None:
+                            _fg_live_note = risk_window.display_note(_fg_live_cov)
+                    except Exception:
+                        _fg_live_note = None
+                    if _fg_live_note is None:
+                        st.markdown(
+                            "<div style='color:#9ca3af;font-size:0.8em'>"
+                            "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed "
+                            "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            "<div style='color:#9ca3af;font-size:0.8em'>"
+                            "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed. "
+                            "Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.caption(_fg_live_note)
 
     # Cross-asset macro note — shown when ≥ CROSS_ASSET_STRESS_BRIEF_SCORE signals are stressed
     from stock_analyzer.constants import CROSS_ASSET_STRESS_BRIEF_SCORE as _CA_BRIEF_MIN
@@ -18551,6 +18578,9 @@ elif page == "🔗 Risk Analysis":
             )
 
             _pr   = _port_risk
+            _ra_cov_note = risk_window.display_note(_pr.get("coverage"))
+            if _ra_cov_note is not None:
+                st.caption("ℹ️ " + _ra_cov_note)
             _beta = _pr.get("beta")
             _vol  = _pr.get("ann_volatility")
             _sh   = _pr.get("sharpe")
@@ -18915,6 +18945,16 @@ elif page == "🔗 Risk Analysis":
                    " — the last computation attempt failed. Re-check after "
                    "revisiting 🏠 Home.")
             )
+            # Why, when the reason is a young / unpriced holding. Computed here on
+            # this page, so labelled: its freshness differs from Home's build.
+            try:
+                _ra_live_series, _ra_live_cov = risk_window.book_returns(port_df, held_data)
+            except Exception:
+                _ra_live_series, _ra_live_cov = True, None   # skip the note
+            if _ra_live_series is None:
+                _ra_live_note = risk_window.display_note(_ra_live_cov)
+                if _ra_live_note is not None:
+                    st.caption("Checked now on this page (not 🏠 Home's risk build): " + _ra_live_note)
 
         # ── Diversification & Correlation ─────────────────────────────────────
         # `is None` FIRST: _corr_df_cache can be absent when _last_held_data was
@@ -47155,7 +47195,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, a **🧭 Sector Gaps** pointer (sectors you're underweight/unheld that could genuinely diversify this book, linking to the full Diversification Advisor), and Analytics (relative strength, sector rotation, rankings, and a **Portfolio vs. S&P 500** real-sector benchmark tilt — uses each holding's actual market sector, not this app's thematic groupings) for your current holdings.
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🎯 My Edge** — six retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side and Exit Signal Response patterns), **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost), and **🧭 Self vs Engine** (Buy-side and Sell-side alpha comparing your own calls to the engine's). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere. The Benchmark Mirror's figures are live (current prices); the close-based answer to "am I ahead of SPY" is on 🧾 Summary.
-- **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Awareness only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap. The **beta card**, when your portfolio beta breaches its target, states the exact dollar figure needed to trim your top contributor back to target (not a rough percentage), discloses whether that trim also improves or worsens your margin/leverage exposure (a margin-funded ADD can make the beta *number* look better while your actual exposure against your equity gets *worse* — the app now says so explicitly), and — inside a **"📊 Rank Defensive-Beta Candidates"** expander — ranks real defensive-sector candidates by how much beta relief they'd actually provide, disclosing (never hiding) when a candidate is below the app's normal Buy gate or structurally can't reach target at all. It never issues a buy call below that gate — ranking and disclosure only, the decision stays yours.
+- **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. A holding with fewer than 20 trading days since its first close (a recent IPO, say) is left out of the portfolio risk figures and its weight is spread over your other holdings; a note under the dashboard names it. If such holdings add up to more than 10% of your book, the figures read unavailable instead of being computed on too little of it. Awareness only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap. The **beta card**, when your portfolio beta breaches its target, states the exact dollar figure needed to trim your top contributor back to target (not a rough percentage), discloses whether that trim also improves or worsens your margin/leverage exposure (a margin-funded ADD can make the beta *number* look better while your actual exposure against your equity gets *worse* — the app now says so explicitly), and — inside a **"📊 Rank Defensive-Beta Candidates"** expander — ranks real defensive-sector candidates by how much beta relief they'd actually provide, disclosing (never hiding) when a candidate is below the app's normal Buy gate or structurally can't reach target at all. It never issues a buy call below that gate — ranking and disclosure only, the decision stays yours.
 - **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English, and (further down the same tab) a **Hidden Same-Bet Detector** — an on-demand check for positions that look diversified by sector and price correlation but secretly bet on the same underlying assumption, classifying each finding as unverified/possible/confirmed against the correlation data above. **🧭 Signal Coherence** (a 5th tab) mechanically joins three existing per-ticker surfaces — the composite score's own direction, the weekly Thesis Review status, and the most recent Bull/Bear debate verdict — and surfaces only names where they genuinely disagree; no synthesized explanation, just the raw signals side by side. Explicitly directional, not precise. Awareness only — never gates or reorders; composite score still decides which name to act on.
 - **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; signal-driven actions; the headline at the top states what to do: a red **⛔ Act first** when a stop is breached, naming Today's Brief only when the Brief lists that breach (otherwise "the stop rule says sell at the next open"); an ℹ️ note, a 🟢 alert line and no danger count when the live price has recovered above the stop; an amber **🔴 danger alerts below — review each** for other danger alerts; and the green all-clear only when there is nothing to act on and no warning) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations, plus a trim card for a danger-tier correlated pair you hold, when both names are scored). If the correlation sample behind a pair is too thin or couldn't be confirmed, no trim is recommended — the pair appears under **Correlated pairs — trim withheld** instead, and the Daily Brief keeps add-to-winner suggestions on both names paused. Likewise the green "well balanced" line only shows when the correlation check behind it is verified. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it, each dismissible for the session (a dismissed alert reappears if the target/floor changes or a new one fires, so nothing is silently suppressed permanently). Note: weight-*target* rebalancing (drift vs. a target allocation %) lives on 🥧 Portfolio Overview's ⚖️ Rebalancing tab — a different feature from this page's score-driven actions.
 - **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**; pick the trade date and, when asked, the fill time in Eastern Time from Robinhood. Before 9:30 AM ET on a trading day the date starts blank, so you choose between yesterday's after-hours fill and today's pre-market fill, and the fill time is required. During market hours a blank time records the moment you press Record. Type Robinhood's fill time if you have it; if you don't, leave it blank rather than estimate, because the app treats a blank as unknown and stays on the safe side. If you already logged that ticker today, the confirm card shows the order the trades will be stored in. On a past date the time is optional (blank places it at 4:00 PM ET) unless you already logged that ticker that day. The confirm card spells out the date and time it will record ("Logging as …"), asks for a tick on a weekend or holiday date or a time outside regular hours (extended-hours fills are fine), and refuses a time in the future or a SELL that would be replayed before the BUY covering it. It also checks the price against that day's trading range ("so far" for today until the close) and asks for the same tick when it sits outside; it says so when it couldn't check (no price data, an older trade, or a stock split since). It compares the entry with Robinhood fills still waiting in Pending Imports: an identical fill that day is linked to the entry and leaves Pending Imports once you confirm; the same size at a different price, or the same order dated a different day, asks for the tick. With nothing to flag it tells you whether Robinhood's fills for that date had synced yet; it never says the entry matches Robinhood. A wrong date can't auto-match your broker's own record and keeps showing up as an unmatched transaction in 💰 Account → Broker Sync. Backdating a Buy shows the same "🔮 Retrospective Pre-Mortem" framing broker-imported trades use — the pre-mortem is still required, just honestly reframed since the trade already happened), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).

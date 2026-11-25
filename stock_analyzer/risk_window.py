@@ -333,6 +333,17 @@ def coverage_note(coverage) -> str | None:
         return _GENERIC_NOTE
 
 
+def display_note(coverage) -> str | None:
+    """The note a screen shows for a coverage dict: coverage_note() when the
+    state is "partial" or "unmeasured"; None for "full", a non-dict, or a dict
+    with no state (a memoised pre-C2 bundle)."""
+    if not isinstance(coverage, dict):
+        return None
+    if coverage.get("state") not in ("partial", "unmeasured"):
+        return None
+    return coverage_note(coverage)
+
+
 def _number(value):
     """A real number (not bool) or ValueError, so a present-but-None setting
     cannot print as 'None needed'."""

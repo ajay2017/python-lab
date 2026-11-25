@@ -691,7 +691,10 @@ def test_compute_portfolio_risk_metrics_fifteen_closes_is_unmeasured():
 
 
 def test_compute_portfolio_risk_metrics_no_matching_weights_returns_none():
-    df = _price_df([100.0 * (1.01 ** i) for i in range(15)])
+    # 25 closes, so a short history can't be the reason: the book's only ticker
+    # (MSFT, 100%) has no bundle ("no_prices"), nothing is counted, and AAPL is
+    # never looked at because it isn't in port_df.
+    df = _price_df([100.0 * (1.01 ** i) for i in range(25)])
     port_df = pd.DataFrame([_port_row("MSFT", "Enterprise Tech", 100.0)])  # different ticker
     held_data = {"AAPL": {"df": df}}  # AAPL has data but isn't in port_df
     assert compute_portfolio_risk_metrics(port_df, held_data) is None

@@ -23,14 +23,16 @@ PORTFOLIO_BETA_CEILING  = 1.4    # hard breach above this — institutional ceil
 # holdings, and says so.
 # BETA_MIN_RETURNS: the fewest daily returns a stock's beta needs, and the fewest a
 # holding needs to count in the book's risk series (so "young" = "its own beta
-# cannot be measured yet"). Same value as the bare 20s it will replace (C2) at
-# risk.py (beta_vs_market, pearson_corr_vs_benchmark, the book beta); value-neutral.
+# cannot be measured yet"). Replaced the bare 20s (C2, 2026-11-25) in risk.py
+# (beta_vs_market, pearson_corr_vs_benchmark, the book beta),
+# portfolio.correlation_to_portfolio and beta_repair.aligned_beta; value-neutral.
 # PORTFOLIO_RISK_UNMEASURED_MAX_PCT: the most of the book (% of weight) that may be
 # left out of the book's risk series on a day before portfolio risk reads
 # unknown (None). Inclusive at the cap. Beta is understated by about
 # share x (young beta - rest beta), so this is the owner's call (policy, 10 chosen).
-# PORTFOLIO_RISK_MIN_DAYS: the fewest kept days any book risk series may have;
-# same value as the literal at risk.py compute_portfolio_risk_metrics.
+# PORTFOLIO_RISK_MIN_DAYS: the fewest kept daily returns any book risk series may
+# have (risk_window.book_returns); same value as the old literal in
+# risk.compute_portfolio_risk_metrics, which counted price rows.
 BETA_MIN_RETURNS                  = 20
 PORTFOLIO_RISK_UNMEASURED_MAX_PCT = 10.0
 PORTFOLIO_RISK_MIN_DAYS           = 10

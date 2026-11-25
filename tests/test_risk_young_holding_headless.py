@@ -88,6 +88,19 @@ def test_risk_computation_raising_leaves_port_risk_none_and_coverage_none():
     assert ctx["risk_coverage"] is None              # nothing was built at all
 
 
+def test_risk_computation_raising_after_filling_coverage_resets_it_to_none():
+    # The builder filled coverage_out and THEN raised: the half-built coverage
+    # must not read full / partial beside a None port_risk.
+    def _fill_then_raise(port_df, held_data, spy, rfr, coverage_out=None, **kw):
+        coverage_out.update({"state": "partial", "left_out": []})
+        raise RuntimeError("late failure")
+
+    with patch(_H + "compute_portfolio_risk_metrics", side_effect=_fill_then_raise):
+        ctx = _build_ctx(3.6)
+    assert ctx["port_risk"] is None
+    assert ctx["risk_coverage"] is None
+
+
 # ── through compute_watchlist_entries ────────────────────────────────────────
 def _watchlist_run(ctx):
     """compute_watchlist_entries over ctx; the recommendation builder is the REAL

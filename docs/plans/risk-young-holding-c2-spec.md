@@ -1,4 +1,4 @@
-# RiskListwiseYoung C2 — wiring spec (lead, 2026-11-26)
+# RiskListwiseYoung C2 — wiring spec (lead, 2026-11-25)
 
 Parent plan: `docs/plans/risk-young-holding.md` §8 item 2, §9, §10. C1 (`stock_analyzer/risk_window.py`, `22365ca0`) is the decision; C2 makes both book-return builders use it. No app.py display (that is C3) except the memo schema bump. Push before the Wed 12-02 close.
 
@@ -61,3 +61,47 @@ Parent plan: `docs/plans/risk-young-holding.md` §8 item 2, §9, §10. C1 (`stoc
 ## 9. Not in C2
 
 app.py captions (Risk Analysis, Home fragility chip), User Guide, requirements / architecture / bug-register / coordination-caches docs, the two plan dated lines: all C3 (lead). Siblings (RiskOffUnchecked, risk_budget, Analysis beta envelope, CorrYoung): C4.
+
+---
+
+# RiskListwiseYoung C3 — implementer part (lead, 2026-11-25)
+
+Display + the two small follow-ups from the C2 review. The lead writes the policy docs (requirements, architecture, bug register, constants comment, User Guide wording is given verbatim below).
+
+## A. `stock_analyzer/risk_window.py` — one pure decision for the display (gate file)
+
+- `display_note(coverage) -> str | None`: the note a screen shows. Returns `coverage_note(coverage)` when `coverage` is a dict whose `state` is `"partial"` or `"unmeasured"`; None for `"full"`, a non-dict, or a dict with no `state` (memoised pre-C2 bundles). Tested at each state.
+- No other change.
+
+## B. `app.py` — 🔗 Risk Analysis "Portfolio Risk Dashboard"
+
+1. Under the existing caption "All metrics derived from 6-month weighted daily portfolio returns. …" (~18547): `_ra_cov_note = risk_window.display_note(_pr.get("coverage"))`; when not None, `st.caption("ℹ️ " + _ra_cov_note)`. `coverage_note` text has no `$` and no `**` (plain text), so `st.caption` is safe.
+2. In the `else:` (unavailable) branch (~18907, after the existing `st.warning`): call `_ra_live_series, _ra_live_cov = risk_window.book_returns(port_df, held_data)` inside try/except (any exception → skip), and when `_ra_live_series is None` and `risk_window.display_note(_ra_live_cov)` is not None, `st.caption("Checked now on this page (not 🏠 Home's risk build): " + note)` (label as built after the C3 review). Only on the None path (labelled because its freshness differs from Home's build).
+
+## C. `app.py` — 🏠 Home fragility chip (~10073-10180)
+
+1. `_frag_ok` path, inside `with _fg_right:` AFTER the existing `st.markdown(...)`: `_fg_cov_note = risk_window.display_note((st.session_state.get("_port_risk_cache") or {}).get("coverage"))` — careful: use `util.get_or_offline` if the antipattern gate flags `or {}`; otherwise `_pr_c = st.session_state.get("_port_risk_cache")` then `_pr_c.get("coverage") if isinstance(_pr_c, dict) else None`. When not None: `st.caption("ℹ️ " + _fg_cov_note)`. (Not inside the raw-HTML block: no new dynamic `unsafe_allow_html`.)
+2. `else` path (beta couldn't be computed): keep the existing static line; after it, compute `risk_window.book_returns(port_df, held_data)` (try/except; Home's `held_data` / `port_df` are in scope — verify the names at that point) and if the series is None and `display_note(cov)` is not None, `st.caption(note)`. This replaces nothing; it says WHY when the reason is a young / unpriced holding.
+- Import: `from stock_analyzer import risk_window` near the other `from stock_analyzer import …` lines (~82-94).
+
+## D. `stock_analyzer/headless_alert_engine.py` (gate file) — reviewer note 4
+
+In `_build_context`'s `except Exception:` around `compute_portfolio_risk_metrics`, also reset `_risk_cov = {}` so `risk_coverage` becomes None ("not built") and never says full / partial beside a None `port_risk`. Add a test (monkeypatch `compute_portfolio_risk_metrics` to fill `coverage_out` then raise → ctx `risk_coverage` is None, `port_risk` None).
+
+## E. Tests
+
+- `tests/test_risk.py::test_compute_portfolio_risk_metrics_no_matching_weights_returns_none` (~693): lengthen its frames from 15 to 25 closes so AAPL is countable and the test proves the None comes from the missing weight / prices, not from short history; keep its assertion.
+- `display_note` unit tests (full → None, partial → text, unmeasured → text, None / {} / {"beta": 1} → None).
+- AST/text pins: if any test pins the Risk Analysis caption or the Home chip text, update honestly. Grep tests/ for "6-month weighted daily portfolio returns" and "Pullback-exposure read unavailable".
+
+## F. User Guide (app.py, `elif page == "📖 User Guide":`), verbatim
+
+In the 🔗 Risk Analysis bullet (~47158), after the first sentence ending "…naming your top beta contributors on a breach.", insert:
+
+" A holding with fewer than 20 trading days since its first close (a recent IPO, say) is left out of the portfolio risk figures and its weight is spread over your other holdings; a note under the dashboard names it. If such holdings add up to more than 10% of your book, the figures read unavailable instead of being computed on too little of it."
+
+Write 20 and 10 from `BETA_MIN_RETURNS` / `PORTFOLIO_RISK_UNMEASURED_MAX_PCT` via f-string if the User Guide block is an f-string at that point; if it is a plain string, keep the literals and add a test in the new test file that asserts the guide text contains `str(BETA_MIN_RETURNS)` and `f"{PORTFOLIO_RISK_UNMEASURED_MAX_PCT:g}%"` (so a constant change breaks the test, not the doc silently).
+
+## Checks
+
+py_compile app.py; the touched tests + tests/test_risk*.py + headless tests (`-n 4` max); `python scripts/check_antipatterns.py` (no new instances; `POLICY_DECISION_IN_RENDER` must stay clean: no comparison against a constants value in app.py); no full suite; no commit.
