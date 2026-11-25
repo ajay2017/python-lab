@@ -467,6 +467,103 @@ def test_gate_degraded_when_ctx_ok_but_beta_missing():
     assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
 
 
+# ── CronSectorClaim: which fit leg actually ran (docs/plans/entry-fail-closed.md C0) ──
+
+def test_ctx_not_ok_reports_neither_fit_leg_read_and_email_does_not_claim_sector_ran():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    ctx = {"ok": False, "errors": ["no holdings"]}
+    result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
+    assert result["gate_degraded"] is True
+    assert result["fit_read"] is False
+    assert result["beta_read"] is False
+    # Names are still emailed (wording/disclosure only in C0).
+    assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
+    _, html = render_watchlist_entries_email(
+        result["entries"], built_at=result["built_at"],
+        gate_degraded=result["gate_degraded"],
+        fit_read=result["fit_read"], beta_read=result["beta_read"],
+    )
+    assert "still applied" not in html
+    assert "Portfolio fit checks unavailable" in html
+    assert "Portfolio-beta fit check unavailable" not in html
+
+
+def test_empty_book_is_read_not_degraded_and_email_has_no_fit_box():
+    """reason "no_holdings" = the book was read and is empty: a sector weight
+    of 0.0 is true, so the email must not say the holdings couldn't be loaded."""
+    from stock_analyzer.notify import render_watchlist_entries_email
+    ctx = {"ok": False, "reason": "no_holdings", "errors": ["no holdings"]}
+    result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
+    assert result["gate_degraded"] is False
+    assert result["fit_read"] is True
+    assert result["beta_read"] is True
+    assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
+    _, html = render_watchlist_entries_email(
+        result["entries"], built_at=result["built_at"],
+        gate_degraded=result["gate_degraded"],
+        fit_read=result["fit_read"], beta_read=result["beta_read"],
+    )
+    assert "Portfolio fit checks unavailable" not in html
+    assert "Portfolio-beta fit check unavailable" not in html
+
+
+def test_ctx_ok_beta_none_reports_fit_read_but_not_beta_and_keeps_beta_box():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    ctx = {"ok": True, "errors": [], "port_df": pd.DataFrame(), "spy_6mo": None,
+           "port_risk": {"beta": None}}
+    result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
+    assert result["gate_degraded"] is True
+    assert result["fit_read"] is True
+    assert result["beta_read"] is False
+    _, html = render_watchlist_entries_email(
+        result["entries"], built_at=result["built_at"],
+        gate_degraded=result["gate_degraded"],
+        fit_read=result["fit_read"], beta_read=result["beta_read"],
+    )
+    assert "Portfolio-beta fit check unavailable" in html
+    assert "still applied" in html
+    assert "Portfolio fit checks unavailable" not in html
+
+
+def test_both_legs_read_reports_both_true_and_no_box():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    ctx = {"ok": True, "errors": [], "port_df": pd.DataFrame(), "spy_6mo": None,
+           "port_risk": {"beta": 1.2}}
+    result = _run_watchlist_entries(watchlist=["NVDA"], ctx=ctx)
+    assert result["gate_degraded"] is False
+    assert result["fit_read"] is True
+    assert result["beta_read"] is True
+    _, html = render_watchlist_entries_email(
+        result["entries"], built_at=result["built_at"],
+        gate_degraded=result["gate_degraded"],
+        fit_read=result["fit_read"], beta_read=result["beta_read"],
+    )
+    assert "fit check unavailable" not in html
+    assert "fit checks unavailable" not in html
+
+
+def test_render_legacy_gate_degraded_only_call_keeps_todays_beta_box():
+    """A caller that passes only gate_degraded=True (no fit_read / beta_read)
+    behaves exactly as before the CronSectorClaim change."""
+    from stock_analyzer.notify import render_watchlist_entries_email
+    _, html = render_watchlist_entries_email(
+        [_wl_card("NVDA")], built_at="2026-09-10T09:45:00", gate_degraded=True,
+    )
+    assert "Portfolio-beta fit check unavailable" in html
+    assert "The concentration/sector check below still applied" in html
+    assert "Portfolio fit checks unavailable" not in html
+
+
+def test_render_fit_not_read_shows_fit_box_even_without_gate_degraded_flag():
+    from stock_analyzer.notify import render_watchlist_entries_email
+    _, html = render_watchlist_entries_email(
+        [_wl_card("NVDA")], built_at="2026-09-10T09:45:00", fit_read=False,
+    )
+    assert "Portfolio fit checks unavailable" in html
+    assert "Treat them as not checked against your book." in html
+    assert "still applied" not in html
+
+
 # ── sizing/economics parity fields (2026-09-22) ─────────────────────────────
 # The "Ready to Enter" email showed ticker/score/entry-zone/R:R/stop/prose
 # only, with none of the sizing or dollar-risk detail the interactive page

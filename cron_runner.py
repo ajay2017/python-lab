@@ -2420,12 +2420,19 @@ def _run_scan(now_et, force: bool) -> int:
                     and _wle_state.get("last_fingerprint") == _wle_fp and not force):
                 _log(f"watchlist-entries: same set already sent today (fp={_wle_fp}) — skip.")
             else:
+                # CronSectorClaim: forward which fit leg ran ONLY when the payload
+                # carries it; a payload without the keys renders as before.
+                _wle_leg_kwargs = {
+                    _k: _wle_payload[_k] for _k in ("fit_read", "beta_read")
+                    if _wle_payload.get(_k) is not None
+                }
                 _wle_subject, _wle_html = render_watchlist_entries_email(
                     entries=_wle_entries,
                     built_at=_wle_payload.get("built_at", today_str),
                     gate_degraded=_wle_payload.get("gate_degraded", False),
                     budget=_budget_for_email,
                     entry_run=_wle_payload.get("entry_run"),
+                    **_wle_leg_kwargs,
                 )
                 _wle_sent = _send_email("watchlist-entries", _wle_subject, _wle_html)
                 # Save dedup state ONLY on a real send — a transient Resend

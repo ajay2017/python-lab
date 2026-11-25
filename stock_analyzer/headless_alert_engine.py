@@ -932,7 +932,8 @@ def compute_watchlist_entries(
     entry_context: dict | None = None,
 ) -> dict:
     """Return {"entries": [...] | None, "built_at": <ET iso>, "errors": [...],
-    "reason": str | None, "gate_degraded": bool, "entry_run": {...},
+    "reason": str | None, "gate_degraded": bool, "fit_read": bool,
+    "beta_read": bool, "entry_run": {...},
     "gate_ledger_rows": [...]}.
 
     `entry_context` (shared-entry-check chunk 5): compute_morning_picks'
@@ -994,11 +995,14 @@ def compute_watchlist_entries(
     `errors` rather than risk announcing wrongly.
 
     D-D: the portfolio-fit gate (sector weight from port_df + portfolio beta)
-    is best-effort. Sector/concentration reliably runs off port_df; beta is
-    the leg genuinely at risk of not being buildable headlessly (a fragility/
-    risk-metrics computation failure, or no portfolio context at all) —
-    tracked via `gate_degraded`, never silently dropped. An otherwise-
-    qualifying name is still included when degraded, never withheld.
+    is best-effort. Sector/concentration runs off port_df ONLY when the
+    portfolio context was built (`fit_read`); when it wasn't, port_df is None,
+    the sector weight reads 0.0 and the G-05 ceiling could not run. Beta is the
+    other leg (`beta_read`: a fragility/risk-metrics computation failure also
+    loses it). Both are reported in the return dict, and `gate_degraded` is
+    True when either leg is missing -- never silently dropped. An otherwise-
+    qualifying name is still included when degraded, never withheld (a later
+    chunk of docs/plans/entry-fail-closed.md changes that).
 
     Never raises; faults are collected in `errors`.
     """
@@ -1047,16 +1051,24 @@ def compute_watchlist_entries(
     if ctx is None:
         ctx = _build_context(today)
     gate_degraded = False
+    # CronSectorClaim: which legs of the fit gate really ran. `fit_read` = the
+    # holdings frame (sector weights) was read; `beta_read` = portfolio beta was
+    # computed. `gate_degraded` stays "either failed" for existing callers.
+    fit_read = False
+    beta_read = False
     port_df = None
     portfolio_beta = None
     spy_for_bundles = None
     if ctx.get("ok"):
         port_df = ctx["port_df"]
+        fit_read = True
         spy_for_bundles = ctx.get("spy_6mo")
         port_risk = ctx.get("port_risk")
         portfolio_beta = _f(port_risk.get("beta")) if port_risk else None
         if portfolio_beta is None:
             gate_degraded = True
+        else:
+            beta_read = True
     else:
         # _build_context always sets "errors" to a list on both its ok and
         # not-ok branches (never omits or nulls it) — direct index, not
@@ -1064,7 +1076,14 @@ def compute_watchlist_entries(
         # compute_morning_picks's own convention for this same ctx dict.
         _ctx_errors = ctx["errors"] if "errors" in ctx else []
         errors.extend(_ctx_errors)
-        gate_degraded = True
+        if ctx.get("reason") == "no_holdings":
+            # An empty book was READ, not missed: a sector weight of 0.0 and no
+            # portfolio beta are true, so neither leg is degraded and the email
+            # must not say the holdings couldn't be loaded (CronSectorClaim).
+            fit_read = True
+            beta_read = True
+        else:
+            gate_degraded = True
         try:
             spy_for_bundles = fetch_spy("6mo")
         except Exception:
@@ -1457,6 +1476,7 @@ def compute_watchlist_entries(
     return {
         "entries": new_entries, "built_at": built_at, "errors": errors,
         "reason": None, "gate_degraded": gate_degraded,
+        "fit_read": fit_read, "beta_read": beta_read,
         "entry_run": _entry_run, "gate_ledger_rows": gate_ledger_rows,
         # Additive -- news_feed.feed_state over the watchlist bundles loaded.
         "news_feed": news_feed.feed_state(_news_status_map),

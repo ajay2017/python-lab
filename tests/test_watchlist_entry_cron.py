@@ -609,10 +609,10 @@ def _morning_payload(**extra):
             "budget_inputs": {}, **extra}
 
 
-def _wle_payload(entries=(), rows=(), entry_run=None):
+def _wle_payload(entries=(), rows=(), entry_run=None, **extra):
     return {"entries": list(entries), "built_at": "2026-09-10T09:46:00", "errors": [],
             "reason": None, "gate_degraded": False,
-            "entry_run": entry_run, "gate_ledger_rows": list(rows)}
+            "entry_run": entry_run, "gate_ledger_rows": list(rows), **extra}
 
 
 def test_scan_passes_the_same_tone_read_to_the_watchlist_computation(monkeypatch):
@@ -637,6 +637,27 @@ def test_scan_all_deferred_sends_no_watchlist_email_but_still_ledgers(monkeypatc
     assert budget_calls == [] or budget_calls == [[]]       # nothing allocated
     wl_rows = [r for call in gl_calls for r in call if r.get("gate_id") == "G-29"]
     assert [(r["ticker"], r["source"]) for r in wl_rows] == [(SEMIS, "cron")]
+
+
+def test_scan_email_says_fit_checks_unavailable_when_payload_fit_not_read(monkeypatch):
+    """CronSectorClaim: cron_runner forwards fit_read / beta_read, so a run
+    whose holdings frame wasn't read never claims the sector check applied."""
+    payload = _wle_payload(entries=[_enter_card("AAA")], gate_degraded=True,
+                           fit_read=False, beta_read=False)
+    _rc, sent, *_ = _scan(monkeypatch, morning=_morning_payload(), wle=payload)
+    (label, html), = [s for s in sent if s[0] == "watchlist-entries"]
+    assert "Portfolio fit checks unavailable" in html
+    assert "still applied" not in html
+
+
+def test_scan_email_payload_without_leg_keys_keeps_todays_beta_box(monkeypatch):
+    """A payload that predates fit_read / beta_read renders exactly as before."""
+    payload = _wle_payload(entries=[_enter_card("AAA")], gate_degraded=True)
+    assert "fit_read" not in payload and "beta_read" not in payload
+    _rc, sent, *_ = _scan(monkeypatch, morning=_morning_payload(), wle=payload)
+    (label, html), = [s for s in sent if s[0] == "watchlist-entries"]
+    assert "Portfolio-beta fit check unavailable" in html
+    assert "Portfolio fit checks unavailable" not in html
 
 
 def test_scan_emails_only_ready_names_and_allocates_only_them(monkeypatch):

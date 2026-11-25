@@ -1163,6 +1163,7 @@ def _email_section(title: str, content: str, section_colours: dict) -> str:
 def render_watchlist_entries_email(
     entries: list[dict], built_at: str, gate_degraded: bool = False,
     budget: "dict | None" = None, entry_run: "dict | None" = None,
+    fit_read: bool = True, beta_read: bool = True,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the Watchlist "Ready to Enter" proactive
     email — the headless counterpart to opening 📋 Watchlist and seeing an
@@ -1172,9 +1173,13 @@ def render_watchlist_entries_email(
     `entries` are ENTER_NOW cards from
     headless_alert_engine.compute_watchlist_entries() — already filtered to
     NEWLY-transitioning, not-held, not-otherwise-announced names (D-B/D-C).
-    Non-empty guaranteed by caller. `gate_degraded` (D-D): the portfolio-beta
-    fit leg couldn't be computed headlessly this run — disclosed, never
-    withheld; the concentration/sector leg still ran off port_df.
+    Non-empty guaranteed by caller. `gate_degraded` (D-D): a portfolio-fit leg
+    couldn't be computed headlessly this run — disclosed, never withheld.
+    `fit_read` / `beta_read` (CronSectorClaim) say which leg: the
+    concentration/sector leg is claimed as having run only when `fit_read`
+    (the holdings frame was read); when it is False neither sector nor beta
+    ran. Defaults of True keep a legacy `gate_degraded=True`-only caller on
+    the beta-only box.
 
     Mirrors render_buy_picks_email's structure/style: dark cards, subject
     convention, footer disclaimer. The card's own `summary` prose is advisor
@@ -1211,15 +1216,27 @@ def render_watchlist_entries_email(
     )
 
     degraded_html = ""
-    if gate_degraded:
+    if gate_degraded or not fit_read or not beta_read:
+        if not fit_read:
+            _deg_title = '⚠️ Portfolio fit checks unavailable this run'
+            _deg_body = (
+                "Your holdings couldn't be loaded for this run, so neither the "
+                "sector-concentration check nor the portfolio-beta check ran on "
+                "these names. Treat them as not checked against your book."
+            )
+        else:
+            _deg_title = '⚠️ Portfolio-beta fit check unavailable this run'
+            _deg_body = (
+                'The concentration/sector check below still applied — only the '
+                'portfolio-beta leg could not be computed headlessly this run.'
+            )
         degraded_html = (
             '<div style="border-left:4px solid #f59e0b;background:#1c1710;border-radius:0 6px 6px 0;'
             'padding:10px 16px;margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif">'
             '<div style="color:#f59e0b;font-weight:700;font-size:12px">'
-            '⚠️ Portfolio-beta fit check unavailable this run</div>'
+            f'{_deg_title}</div>'
             '<div style="color:#cbd5e1;font-size:12px;margin-top:3px">'
-            'The concentration/sector check below still applied — only the portfolio-beta '
-            'leg could not be computed headlessly this run.</div>'
+            f'{_deg_body}</div>'
             '</div>'
         )
 
