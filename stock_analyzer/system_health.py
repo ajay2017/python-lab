@@ -175,6 +175,11 @@ _INVENTORY: tuple[_Store, ...] = (
     # held names with a full-history stop that night; a nightly re-write of a continuing
     # episode upserts the same key); DDL applied by hand. Existence-only.
     _Store("held_stop_floors",           "Saved held-stop floors",                    "eod",    "daily", False),
+    # Carried held stops (SlidingStop C2, 2026-11-25): EOD cron, conditional (one row per
+    # held name, overwritten nightly, but a night with nothing held, or where the seed
+    # guard / a journal read failure skips every name, writes nothing); DDL applied by
+    # hand. Existence-only.
+    _Store("held_stop_carry",            "Carried held stops",                        "eod",    "daily", False),
     # rec_events (Recommendation-Outcomes-Measurement Phase 1b, 2026-09-17):
     # written by the EOD cron alongside portfolio_risk_snapshots, but
     # CONDITIONAL like gate_suppressions above — a day with no qualifying
