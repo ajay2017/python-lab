@@ -489,12 +489,19 @@ SURFACE_KEYS: dict[str, tuple] = {
     "sm":    ("_alert_list_cache", "_div_label_cache", "_div_score_cache",
               "_dpnl_cache", "_fragility_cache", "_leverage_cache", "_reduce_calls",
               "_structural_alert_cache", "_corr_unchecked_cache"),
+    # U6b: "aa" (📡 Signals: its "Today's Brief says sell" headline and breach demotion
+    # come from Home's Brief) and "ra" (🔗 Risk Analysis: the beta card reads raw
+    # `_reduce_calls`, app.py ~19302) name "Reduce/Exit calls" when stale. "cw" (🔔
+    # Catalyst Watch) does NOT: its EXIT / REDUCE cards are built live from the current
+    # book, and its Act Today mention fails closed when `_reduce_calls` is stale (the
+    # unverified caption is the disclosure), so a "from before your last trade … can
+    # SUPPRESS" warning there would be false (Opus review 2026-11-25).
     "aa":    ("_actions_cache", "_alert_list_cache", "_div_recs_cache", "_grow_composites",
-              "_risk_advisor_recs_cache"),
+              "_reduce_calls", "_risk_advisor_recs_cache"),
     "ra":    ("_avg_corr_cache", "_corr_coverage_cache", "_corr_df_cache", "_div_label_cache",
               "_div_score_cache", "_fragility_cache", "_leverage_cache", "_pi_factor_tilt_cache",
-              "_port_risk_cache", "_risk_advisor_recs_cache", "_risk_pairs_cache",
-              "_corr_unchecked_cache"),
+              "_port_risk_cache", "_reduce_calls", "_risk_advisor_recs_cache",
+              "_risk_pairs_cache", "_corr_unchecked_cache"),
     "pi":    ("_corr_df_cache", "_pi_factor_tilt_cache"),
     "pa":    ("_acct_gate_cache", "_brief_news_flags_cache", "_div_recs_cache",
               "_reduce_calls", "_risk_advisor_recs_cache"),

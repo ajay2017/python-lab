@@ -200,19 +200,38 @@ class TestSurfaceNarrowing:
             assert "SUPPRESS" in msg, suffix
 
     def test_a_decorative_only_surface_stays_a_caption(self):
-        """🔔 Catalyst Watch reads only _grow_composites (decorative).
+        """🔔 Catalyst Watch (`cw`) reads only decorative keys, so it stays a caption.
 
-        This used 💰 Account until 2026-08-28, when review found that mapping
-        was a FALSE claim — app.py ~30041 says Account computes its leverage
-        panel live, "NOT from _leverage_cache" — so `acct` is now () and the
-        test's premise no longer held. The failure was correct and is recorded
-        rather than papered over: a surface list is a claim about what a page
-        reads, and a wrong one captions a live figure as stale."""
+        U6b (2026-11-25) briefly added `_reduce_calls` to `cw`; the Opus review
+        found the resulting warning false there: Catalyst's EXIT / REDUCE cards are
+        built live from the current book, nothing on the page is held back by
+        `_reduce_calls`, and its Act Today mention fails closed when `_reduce_calls`
+        is stale (act_sell_mention's unverified caption is the disclosure). History:
+        the test first used 💰 Account until 2026-08-28, when review found that
+        mapping was a FALSE claim — app.py ~30041 says Account computes its leverage
+        panel live, "NOT from _leverage_cache" — so `acct` is now (). A surface list
+        is a claim about what a page reads, and a wrong one captions a live figure
+        as stale."""
+        assert "_reduce_calls" not in cf.SURFACE_KEYS["cw"]
         sev, msg = cf.decide_stale_banner(
             cf.not_fresh_keys(self._stale(), 2, cf.keys_for_surface("cw"))
         )
         assert sev == "caption"
         assert "SUPPRESS" not in msg
+
+    def test_u6b_surfaces_that_mention_an_act_sell_name_the_reduce_calls(self):
+        """📡 Signals (aa) and 🔗 Risk Analysis (ra) show content built from
+        `_reduce_calls` / Home's Brief (Signals' "Today's Brief says sell" headline;
+        the Risk Analysis beta card's raw `_reduce_calls` read), so a stale one
+        names "Reduce/Exit calls" and warns (it is gate tier). 🔔 Catalyst Watch is
+        deliberately not here (see the test above)."""
+        for suffix in ("aa", "ra"):
+            assert "_reduce_calls" in cf.SURFACE_KEYS[suffix], suffix
+            sev, msg = cf.decide_stale_banner(
+                cf.not_fresh_keys(self._stale(), 2, cf.keys_for_surface(suffix))
+            )
+            assert sev == "warn", suffix
+            assert "reduce/exit calls" in msg.lower(), suffix
 
     def test_watchlist_warns_because_its_sector_gate_is_gate_tier(self):
         """📋 Watchlist is the ENTER NOW / sizing surface. It reads

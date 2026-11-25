@@ -489,17 +489,18 @@ def test_risk_analysis_single_name_branch_reads_the_act_today_view_with_the_veri
     start = src.index('if _rtype == "single_name_concentration":')
     seg = src[start:src.index("_left, _right = st.columns([1, 1])", start)]
     assert "held_trim_owner.risk_analysis_single_name_line(" in seg
-    # R3-B1: the sells come from the view Home renders, never the raw `_reduce_calls` keys
-    assert "held_trim_owner.view_sell_tickers(_sn_view)" in seg
-    assert "act_today_view(" in seg and '"_home_synth_cache"' in seg
+    # U6b C3: the sells come from the shared helper (the view Home renders + the liveness
+    # and build-date gate live there, pinned in test_act_sell_mention_wiring.py), never the
+    # raw `_reduce_calls` keys
+    assert "_sn_sell = _verified_act_today_sells()" in seg
+    assert "act_today_view(" not in seg and "held_trim_owner.view_sell_tickers" not in seg
     assert 'session_state.get("_reduce_calls")' not in seg
     assert "sell_tickers_from_reduce_calls" not in src
-    assert '_coord_cache_state("_reduce_calls") == "ready"' in seg
-    assert '"_daily_brief_offline"' in seg
-    assert "coord_freshness.classify(" in seg and "coord_freshness.FRESH" in seg
     assert '"_last_port_df"' in seg and '"_last_held_data"' in seg
-    # unverified => None (the pure helper then says "unverified"), never an empty set
-    assert "_sn_sell = None" in seg and "if _sn_verified:" in seg
+    # unverified => None (the pure helper then says "unverified"), never an empty set; the
+    # caption is the shared one, which also names "built on an earlier day"
+    assert '_sn_line["state"] == "unverified"' in seg
+    assert 'act_sell_mention.unverified_caption("risk", _sn_t)' in seg
     # a cross-check must never take the Action Plan down, and a failure leaves a trace (R3-N4)
     assert "except Exception as _sn_err:" in seg
     assert "getLogger(__name__).warning(" in seg

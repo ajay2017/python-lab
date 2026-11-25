@@ -227,18 +227,20 @@ def _rebalancer_seg():
 
 
 def test_the_rebalancer_builds_its_sells_from_the_act_today_view_behind_the_verified_check():
+    # U6b C3: the Act Today view + the liveness / date gate moved into the shared
+    # `_verified_act_today_sells()` helper (pinned in test_act_sell_mention_wiring.py);
+    # the Rebalancer only calls it and shows the shared caption.
     seg = _rebalancer_seg()
     assert "sell_tickers=_rb_sells" in seg and "earnings_days=_rb_earn_days" in seg
-    assert "held_trim_owner.view_sell_tickers(_rb_view)" in seg and "act_today_view(" in seg
+    assert "_rb_sells = _verified_act_today_sells()" in seg
+    assert "held_trim_owner.view_sell_tickers" not in seg and "act_today_view(" not in seg
     # never the raw `_reduce_calls` keys for the deferral (the ADD gate keeps using them)
-    assert "view_sell_tickers" in seg and seg.count('session_state.get("_reduce_calls")') == 1
+    assert seg.count('session_state.get("_reduce_calls")') == 1
     assert '_coord_cache_state("_reduce_calls") == "ready"' in seg
     assert '"_daily_brief_offline"' in seg
-    assert "coord_freshness.classify(" in seg and "coord_freshness.FRESH" in seg
-    # unverified => None (a caption says so), never an empty set; a failure leaves a trace
-    assert "_rb_sells = None" in seg
-    assert "Trim rows below aren't checked against today's Act Today calls" in seg
-    assert "except Exception as _rb_sell_err:" in seg and "getLogger(__name__).warning(" in seg
+    # unverified => None (a caption says so), never an empty set
+    assert "if _rb_sells is None:" in seg
+    assert 'act_sell_mention.unverified_caption("rebalancer")' in seg
     assert "_trim_sizing.earnings_days_by_ticker(held_data, _today_et())" in seg
 
 

@@ -1312,6 +1312,11 @@ _GATE_FILES = {
     # and demotes the rest to non-trade cards; a wrong call sells less than a card
     # said to, or leaves two sell sizes for one name.
     "stock_analyzer/brief_trim_merge.py",
+    # Added 2026-11-25 (U6b C1, docs/plans/signals-catalyst-act-trim-mention-u6b.md):
+    # decides when 📡 Signals / 🔔 Catalyst Watch say a held name has an Act Today
+    # sell, and the Signals all-clear headline; a wrong call hides a sell or names
+    # one that isn't there.
+    "stock_analyzer/act_sell_mention.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

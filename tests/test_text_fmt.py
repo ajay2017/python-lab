@@ -64,3 +64,27 @@ def test_plural_singular_only_for_one():
     assert plural(0, "downgrade") == "0 downgrades"
     assert plural(3, "upgrade") == "3 upgrades"
     assert plural(None, "upgrade") == "— upgrades"
+
+
+def test_mask_plain_usd_hides_every_dollar_figure():
+    # Hide values (owner 2026-11-25): the 🔔 Catalyst Watch playbook text quotes
+    # the position's dollars; every figure is masked, the words around it stay.
+    from stock_analyzer.text_fmt import mask_plain_usd
+    txt = ("An estimated ±16% earnings move on a $1,355 position = ±$217 in a single "
+           "session. **Trim to ≈10% weight: sell 2 shares (≈$542)** before earnings. "
+           "Stop $253.39, worst day -$45.")
+    out = mask_plain_usd(txt)
+    assert "$" not in out
+    assert "a •••••• position = •••••• in" in out
+    assert "(≈••••••)" in out
+    assert "Stop ••••••, worst day ••••••." in out
+    assert "±16%" in out and "≈10% weight" in out          # percentages untouched
+    assert "**Trim to" in out                               # markdown kept for _md_bold
+
+
+def test_mask_plain_usd_edge_inputs():
+    from stock_analyzer.text_fmt import mask_plain_usd
+    assert mask_plain_usd(None) == ""
+    assert mask_plain_usd("no money here, 15% weight") == "no money here, 15% weight"
+    assert mask_plain_usd("costs $5", mask="X") == "costs X"
+    assert mask_plain_usd("a lone $ sign") == "a lone $ sign"

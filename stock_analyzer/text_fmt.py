@@ -5,6 +5,11 @@ Kept out of the gate modules so display wording fixes stay cheap to change.
 from __future__ import annotations
 
 import math
+import re
+
+# A plain-text dollar figure, with an optional sign or ± in front: "$1,355",
+# "±$217", "-$45", "$253.39". The "≈" / "(" around it are left in place.
+_PLAIN_USD_RE = re.compile(r"[-+±]?\$\d[\d,]*(?:\.\d+)?")
 
 # SumGap (owner 2026-11-02, no backfill): one line shown with the Tax Report and
 # the trade-behaviour statistics, defined once so every surface says the same thing.
@@ -49,6 +54,16 @@ def signed_count(n, word: str) -> str:
     except (TypeError, ValueError):
         return f"— {word}"
     return f"{i} {word}"
+
+
+def mask_plain_usd(text, mask: str = "••••••") -> str:
+    """Every plain dollar figure in `text` replaced by `mask` (🙈 Hide values for
+    advisor text that quotes money, e.g. the 🔔 Catalyst Watch playbook's "a $1,355
+    position = ±$217"). Per-share prices in the text are masked too: over-hiding is
+    the safe side of a privacy toggle that promises "all dollar amounts". For
+    markdown text with backslash-escaped dollars use
+    `period_attribution.mask_usd`. None reads as ""."""
+    return _PLAIN_USD_RE.sub(mask, "" if text is None else str(text))
 
 
 def plural(n, noun: str) -> str:

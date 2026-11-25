@@ -376,6 +376,7 @@ from stock_analyzer import premortem_advisor as _pm_advisor
 from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import coord_freshness
 from stock_analyzer import held_trim_owner
+from stock_analyzer import act_sell_mention
 from stock_analyzer import brief_trim_merge
 from stock_analyzer import home_risk_synthesis
 from stock_analyzer import portfolio_intelligence
@@ -427,6 +428,7 @@ from stock_analyzer.text_fmt import signed_dollars as _signed_usd
 from stock_analyzer.text_fmt import share_word as _share_word
 from stock_analyzer.text_fmt import signed_count as _signed_count
 from stock_analyzer.text_fmt import plural as _plural
+from stock_analyzer.text_fmt import mask_plain_usd as _mask_plain_usd
 from stock_analyzer.text_fmt import TRADE_HISTORY_GAP_NOTE as _TRADE_GAP_NOTE
 from stock_analyzer.util import pillar_tile as _pillar_tile
 from stock_analyzer.util import ETF_PILLAR_NA_SHORT, ETF_PILLAR_NA_REASON
@@ -5508,6 +5510,47 @@ with st.container(key=home_dock.DOCK_KEY):
                     print(f"[market_trend] dock chips failed: {type(_dk_ce).__name__}: {_dk_ce}")
                     st.caption("Trend chips couldn't be drawn this run.")
 
+def _verified_act_today_sells():
+    """The upper-cased tickers today's Act Today call sells, or None = couldn't check.
+
+    U6b: ONE gate for every page that says "this name has an Act Today sell" (📡
+    Signals, 🔔 Catalyst Watch, 🔗 Risk Analysis, ⚖️ Rebalancer). Render-only wiring:
+    the decision lives in `act_sell_mention.verified_sells` (reduce cache ready, the
+    session's Brief online, `_reduce_calls` fresh for the current book, Home's build
+    date = today ET, and an online Act Today view). The view is built the way
+    🔗 Risk Analysis built it (EW C3): from Home's memoized Brief, never the raw
+    `_reduce_calls` keys (an Act `risk` card's ticker is an attribution). None never
+    becomes an empty set. A failure logs a warning and returns None."""
+    try:
+        from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT as _VS_STOP_REC_MARGIN
+        _vs_memo = _get_or_offline(st.session_state, "_home_synth_cache")
+        _vs_bundle = _get_or_offline(_vs_memo, "bundle")
+        if not isinstance(_vs_bundle, dict):
+            _vs_bundle = {}
+        _vs_view = act_today_view(
+            daily_brief      = _vs_bundle.get("_daily_brief"),
+            brief_offline    = bool(_vs_bundle.get("_daily_brief_offline", False)),
+            port_df_enriched = st.session_state.get("_port_df_enriched"),
+            live_prices      = st.session_state.get("_live_prices"),
+            margin_pct       = _VS_STOP_REC_MARGIN,
+            now              = _now_et(),
+        )
+        return act_sell_mention.verified_sells(
+            reduce_state         = _coord_cache_state("_reduce_calls"),
+            session_brief_offline = st.session_state.get("_daily_brief_offline", False),
+            freshness            = coord_freshness.classify(
+                st.session_state.get("_coord_stamps"), _coord_epoch(), "_reduce_calls"),
+            built_date           = _get_or_offline(_vs_memo, "date"),
+            today                = _today_et(),
+            view                 = _vs_view,
+        )
+    except Exception as _vs_err:
+        import logging as _vs_logging
+        _vs_logging.getLogger(__name__).warning(
+            "Act Today sell cross-check failed: %s", _vs_err, exc_info=True)
+        return None
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — MY PORTFOLIO
 # ═════════════════════════════════════════════════════════════════════════════
@@ -5716,6 +5759,11 @@ def _render_holdings_earnings(port_df, held_data):
             "Covers analyst expectations, position risk vs estimated volatility, "
             "a specific pre-earnings action, and what to monitor during the report."
         )
+        # U6b: the Act Today sells, verified for today's book (None = couldn't check,
+        # never an empty set). Display only: every card keeps its own size and text.
+        _pb_sells = _verified_act_today_sells()
+        if _pb_sells is None:
+            st.caption(act_sell_mention.unverified_caption("catalyst"))
 
         # KPI summary strip
         _pb_imminent = sum(1 for p in _playbook if p["urgency"] == "IMMINENT")
@@ -5768,17 +5816,18 @@ def _render_holdings_earnings(port_df, held_data):
                    else "")
                 + "  "
                 f"| {_urg_icon} {_earn_dt_str} ({_pb['days_until']}d)  "
-                f"| Est. move ±{_pb['est_move']:.0f}%{_cnbc_badge}",
+                f"| Est. move ±{_pb['est_move']:.0f}%{_cnbc_badge}"
+                f"{act_sell_mention.card_tag(_pb['ticker'], _pb_sells)}",
                 expanded=_expand,
             ):
                 # Metrics strip
                 _pb_mc = st.columns(5)
                 _pb_mc[0].metric("Weight",       f"{_pb['weight']:.1f}%")
-                _pb_mc[1].metric("Market Value",  f"${_pb['market_value']:,.0f}")
+                _pb_mc[1].metric("Market Value",  _m(f"${_pb['market_value']:,.0f}"))
                 _pb_mc[2].metric("P&L",           f"{_pb['pnl_pct']:+.1f}%")
                 _pb_mc[3].metric("Est. Move",     f"±{_pb['est_move']:.0f}%")
                 _pb_mc[4].metric("Earnings Risk",
-                    f"±${_pb['earn_risk']:,.0f}",
+                    _m(f"±${_pb['earn_risk']:,.0f}"),
                     delta="Stop at risk" if _pb["stop_at_risk"] else None,
                     delta_color="inverse" if _pb["stop_at_risk"] else "off",
                 )
@@ -5883,17 +5932,30 @@ def _render_holdings_earnings(port_df, held_data):
                     else:
                         st.markdown(f"**Score:** composite withheld · **Signal:** {_pb['signal']}")
 
-                # Action recommendation
+                # Action recommendation. The playbook text quotes the position's
+                # dollars ("a $1,355 position = ±$217", "sell N shares (≈$542)"), so
+                # 🙈 Hide values masks every dollar figure in it, as `_m` does for
+                # the tiles above (owner 2026-11-25: Hide values promises "all
+                # dollar amounts").
+                _pb_detail = _pb["detail"]
+                if st.session_state.get("_privacy", True):
+                    _pb_detail = _mask_plain_usd(_pb_detail)
                 st.markdown(
                     f"<div style='padding:12px 16px;background:#0d1117;"
                     f"border-radius:6px;border-left:4px solid {_safe_html(_bclr)};margin:10px 0'>"
                     f"<span style='font-size:0.72em;color:{_safe_html(_bclr)};font-weight:700;"
                     f"letter-spacing:0.09em;text-transform:uppercase'>"
                     f"{_safe_html(_act_icon)} Pre-Earnings Action: {_safe_html(_act_label)}</span><br>"
-                    f"<span style='color:#eee;font-size:0.9em'>{_md_bold(_pb['detail'])}</span>"
+                    f"<span style='color:#eee;font-size:0.9em'>{_md_bold(_pb_detail)}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
+                # U6b: a name today's Act Today call sells -> do that first (the card's
+                # own plan applies to any shares kept). Display only.
+                _pb_sell_line = act_sell_mention.catalyst_line(
+                    _pb["ticker"], _action, _pb_sells)
+                if _pb_sell_line:
+                    st.info(_pb_sell_line)
 
                 # Watch flags ride along under any action (a flag-Watch card already
                 # carries them in its detail). Plain text; none of them sizes a trim.
@@ -17000,6 +17062,9 @@ elif page == "📡 Signals & Advice":
     with _sa_tab1:
         # Defaults for the offline path (nothing below renders alerts then).
         _sa_bstate, _sa_active_br, _sa_resolved = "not_built", frozenset(), frozenset()
+        # U6b: the Act Today sells, verified for today's book. None = couldn't check
+        # (never an empty set); computed once, independent of `_sa_offline`.
+        _sa_sells = _verified_act_today_sells()
         if _sa_offline:
             st.warning(
                 "⚠ **Risk analysis offline** — the gates that compute alerts and "
@@ -17028,14 +17093,35 @@ elif page == "📡 Signals & Advice":
             _sa_head = signals_headline.decide(
                 actions, alert_list, _sa_offline, brief_state=_sa_bstate,
                 active_breach=_sa_active_br, resolved=_sa_resolved)
+            # U6b: fold today's Act Today sells into the headline. breach_named = the
+            # breached alerts' tickers that the headline / alerts already name with the
+            # Brief's sell clause (`_sa_active_br` is empty unless the Brief is built).
+            _sa_mention = act_sell_mention.signals_headline(
+                _sa_head, _sa_sells,
+                [_a_act["ticker"] for _a_act in actions],
+                {str(_a_al.get("ticker") or "").strip().upper()
+                 for _a_al in alert_list if _a_al.get("breached")} & set(_sa_active_br))
+            _sa_head = _sa_mention["head"]
             if _sa_head["kind"] == "act":
                 st.error(_sa_head["text"])
             elif _sa_head["kind"] == "attention":
                 st.warning(_sa_head["text"])
             elif _sa_head["kind"] == "clear":
                 st.success(_sa_head["text"])
+            elif _sa_head["kind"] == "act_elsewhere":
+                st.info(_sa_head["text"])
             if _sa_head["note"]:
                 st.caption(_sa_head["note"])
+            if _sa_mention["line"]:
+                st.caption(_sa_mention["line"])
+        if _sa_sells is None:
+            st.caption(act_sell_mention.unverified_caption("signals"))
+        elif _sa_offline:
+            # Offline page: no headline above, but the Act Today sells are still known.
+            _sa_off_line = act_sell_mention.signals_headline(
+                {"kind": "offline", "text": None, "note": None}, _sa_sells, [], set())["line"]
+            if _sa_off_line:
+                st.caption(_sa_off_line)
 
         # ── Active Alerts — grouped by category ──────────────────────────────
         _danger_alerts, _warning_alerts, _info_alerts = signals_headline.split_alert_levels(
@@ -17276,7 +17362,8 @@ elif page == "📡 Signals & Advice":
                 icon = {"review": "📉", "trim": "✂️", "add": "➕"}.get(act["type"], "💡")
 
                 with st.expander(
-                    f"{icon} **{ticker}** — {act['title']}  ·  {urgency_badge}",
+                    f"{icon} **{ticker}** — {act['title']}  ·  {urgency_badge}"
+                    f"{act_sell_mention.card_tag(ticker, _sa_sells)}",
                     expanded=(urgency == "high"),
                 ):
                     # ── Trigger ──────────────────────────────────────────────
@@ -17287,6 +17374,12 @@ elif page == "📡 Signals & Advice":
                         f"<span style='color:#eee'>{act['trigger']}</span></div>",
                         unsafe_allow_html=True,
                     )
+                    # U6b: a name today's Act Today call sells -> follow that call first
+                    # (display only; this card keeps its own size and Log button).
+                    _sa_card_line = act_sell_mention.signals_card_line(
+                        ticker, act["type"], _sa_sells)
+                    if _sa_card_line:
+                        st.info(_sa_card_line)
 
                     ev_col, check_col = st.columns([1, 1])
 
@@ -19101,29 +19194,8 @@ elif page == "🔗 Risk Analysis":
                             _sn_rt = _rec.get("root_tickers", [])
                             _sn_t = _sn_rt[0]["ticker"] if _sn_rt else None
                             if _sn_t:
-                                _sn_verified = (
-                                    _coord_cache_state("_reduce_calls") == "ready"
-                                    and not st.session_state.get("_daily_brief_offline", False)
-                                    and coord_freshness.classify(
-                                        st.session_state.get("_coord_stamps"), _coord_epoch(),
-                                        "_reduce_calls") == coord_freshness.FRESH
-                                )
-                                _sn_sell = None
-                                if _sn_verified:
-                                    from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT as _SN_STOP_REC_MARGIN
-                                    _sn_synth = st.session_state.get("_home_synth_cache")
-                                    _sn_bundle = _sn_synth.get("bundle") if isinstance(_sn_synth, dict) else None
-                                    if not isinstance(_sn_bundle, dict):
-                                        _sn_bundle = {}
-                                    _sn_view = act_today_view(
-                                        daily_brief      = _sn_bundle.get("_daily_brief"),
-                                        brief_offline    = bool(_sn_bundle.get("_daily_brief_offline", False)),
-                                        port_df_enriched = st.session_state.get("_port_df_enriched"),
-                                        live_prices      = st.session_state.get("_live_prices"),
-                                        margin_pct       = _SN_STOP_REC_MARGIN,
-                                        now              = _now_et(),
-                                    )
-                                    _sn_sell = held_trim_owner.view_sell_tickers(_sn_view)
+                                # U6b-5: the shared gate (adds the build-date leg).
+                                _sn_sell = _verified_act_today_sells()
                                 _sn_pdf = _get_or_offline(st.session_state, "_last_port_df")
                                 _sn_held = _get_or_offline(st.session_state, "_last_held_data")
                                 _sn_ed = (_trim_sizing.earnings_days_by_ticker(_sn_held, _today_et())
@@ -19132,7 +19204,10 @@ elif page == "🔗 Risk Analysis":
                                 _sn_line = held_trim_owner.risk_analysis_single_name_line(
                                     _sn_t, _sn_sell, _sn_ed, _sn_inp["weight_pct"],
                                     _sn_inp["n_positions"], _sn_inp["shares"])
-                                if _sn_line["tier"] == "info":
+                                if _sn_line["state"] == "unverified":
+                                    # The caption names "built on an earlier day" too.
+                                    st.caption(act_sell_mention.unverified_caption("risk", _sn_t))
+                                elif _sn_line["tier"] == "info":
                                     st.info(_sn_line["text"])
                                 elif _sn_line["tier"] == "caption":
                                     st.caption(_sn_line["text"])
@@ -22980,39 +23055,12 @@ elif page == "🥧 Portfolio Overview":
         # `_reduce_calls` keys (an Act `risk` card's ticker is an attribution).
         # None = the cross-check couldn't run: nothing is deferred and a caption
         # says so.
-        _rb_sells = None
-        if (_rb_reduce_verified
-                and coord_freshness.classify(
-                    st.session_state.get("_coord_stamps"), _coord_epoch(),
-                    "_reduce_calls") == coord_freshness.FRESH):
-            try:
-                from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT as _RB_STOP_REC_MARGIN
-                _rb_bundle = _get_or_offline(_rb_memo, "bundle")
-                if not isinstance(_rb_bundle, dict):
-                    _rb_bundle = {}
-                _rb_view = act_today_view(
-                    daily_brief      = _rb_brief,
-                    brief_offline    = bool(_rb_bundle.get("_daily_brief_offline", False)),
-                    port_df_enriched = st.session_state.get("_port_df_enriched"),
-                    live_prices      = st.session_state.get("_live_prices"),
-                    margin_pct       = _RB_STOP_REC_MARGIN,
-                    now              = _now_et(),
-                )
-                _rb_sells = held_trim_owner.view_sell_tickers(_rb_view)
-            except Exception as _rb_sell_err:
-                import logging as _rb_logging
-                _rb_logging.getLogger(__name__).warning(
-                    "Rebalancer Act Today cross-check failed: %s",
-                    _rb_sell_err, exc_info=True)
-                _rb_sells = None
+        # U6b-5: the shared gate (`_verified_act_today_sells`) adds the build-date
+        # leg: a Brief built on an earlier ET day no longer defers today's trims.
+        _rb_sells = _verified_act_today_sells()
         _rb_earn_days = _trim_sizing.earnings_days_by_ticker(held_data, _today_et())
         if _rb_sells is None:
-            st.caption(
-                "⚠️ Trim rows below aren't checked against today's Act Today calls "
-                "(🏠 Home's Act Today isn't available for the current book: not built "
-                "yet, failed, or out of date), so a trim here may repeat a sell Act "
-                "Today already sizes."
-            )
+            st.caption(act_sell_mention.unverified_caption("rebalancer"))
 
         _rb_plan  = build_rebalance_plan(
             _drift_df, total_val,
@@ -46592,7 +46640,7 @@ The footer line beneath the cards states **risk, not capital** — "if every sto
 - **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, negative news on a holding (any headline at or below −0.05 since the previous trading day; the card says how many more tier-1/2 headlines would move it to Act Today), a broad macro event to hold through. Only headlines whose title names the company (or its ticker) count — a story that just mentions it in passing, like a market wrap or a rival's earnings, is ignored everywhere news is used; 📈 Analysis lists those under "Not counted" (if the app has no usable company name for a ticker, every tagged headline still counts, and Analysis says so). If the optional AI news noise filter is set up and couldn't check some negative headlines, a one-line note above this section says so — those cards use raw sentiment. When it does run, a line in the same place says how many headlines it re-read and how many it raised. While a hold is on a deterioration watch, the app also **won't nudge you to add to it** — even if its score still reads Strong Buy — and shows a "🟡 Add Suppressed — Early Deterioration Watch" note instead (don't add to a weakening name).
 - **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown, a single name over the 15% ceiling). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock. When Act Today already sells a name, its single-name ceiling card steps aside with one line ("🔧 X already has a sell in today's Act Today call; …") and comes back if the name is still over 15% after that sell.
 
-**Earnings week (a holding reports within 7 days):** one rule sizes the trim, and the Brief, 📡 Signals and 🔔 Catalyst Watch all show the same number. Above the earnings-week line (equal weight plus 5 points, between 12% and 22%, so 17.5% with 8 holdings) the trim is to about 10%. With 7 or fewer holdings that line is above 18%, so a name between 18% and the line still gets the usual trim to 15%: earnings week never sizes looser than the week before. Under the line nothing is sized for the report, and the Brief says so. The 🔧 Tune-up, 🔗 Risk Analysis and the ⚖️ Rebalancer don't add a second sell on a name Act Today already sells; each says so in a line instead.
+**Earnings week (a holding reports within 7 days):** one rule sizes the trim, and the Brief, 📡 Signals and 🔔 Catalyst Watch show the same earnings-week number when the Brief sizes one. Whenever 🏠 Act Today sells that name (its own earnings-week trim, or another sell such as a low-score trim to 8%, which wins when larger), 📡 Signals and 🔔 Catalyst Watch tag the card "🏠 Act Today sell" and tell you to follow that call first (they never quote its size; on a day Act Today sells a name, Signals' green all-clear becomes a blue note naming it). Above the earnings-week line (equal weight plus 5 points, between 12% and 22%, so 17.5% with 8 holdings) the trim is to about 10%. With 7 or fewer holdings that line is above 18%, so a name between 18% and the line still gets the usual trim to 15%: earnings week never sizes looser than the week before. Under the line nothing is sized for the report, and the Brief says so. The 🔧 Tune-up, 🔗 Risk Analysis and the ⚖️ Rebalancer don't add a second sell on a name Act Today already sells; each says so in a line instead. All of this needs 🏠 Home's Act Today from today for your current book; otherwise each page says it couldn't check.
 
 **Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop), ⛔ Exit (a stop card on a name Act Today already says to sell). A name gets one Act Today card: when a composite Sell and a weak-large trim hit the same holding, the Sell card carries the minimum trim; and when two Review trims would hit the same holding (earnings week, a low score, a profit-lock, a pre-event macro trim), the one that sells the most shares stays in Act Today, and the others move to Monitoring reading "covered by today's Act Today trim of X; no separate trade" (the Act card says what it also covers); an early-deterioration 👁️ Watch on that holding reads the same, keeping its Why and Trigger for the shares you keep. A raise-stop card shows only when the new stop is at least 1% of price above your current one. A **↔ Steady vs yesterday** chip means the signal is unchanged from yesterday — continuity, not a fresh call.
 
