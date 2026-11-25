@@ -50,7 +50,7 @@ def test_grow_shown_lists_both_new_keys():
 
 
 def test_schema_version_bumped_to_23():
-    assert re.search(r"_SYNTH_SCHEMA_VER = 26\b", _SRC)  # 25 -> 26 by U6 sibling
+    assert re.search(r"_SYNTH_SCHEMA_VER = 27\b", _SRC)  # 26 -> 27 by RiskListwiseYoung C2
 
 
 def test_no_direct_nav_page_assignment_added():

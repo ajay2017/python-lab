@@ -114,3 +114,39 @@ def test_premarket_no_failure_flag_is_green_and_footer_has_only_notes(monkeypatc
         monkeypatch, payload, datetime.datetime(2026, 12, 1, 8, 30))
     assert rc == 0 and len(sent) == 1
     assert renders[0]["footer_lines"] == ["AAPL (Stop Unavailable): n"]   # window over: no go-live line
+
+
+# ── RiskListwiseYoung C2: the coverage line and the unmeasured footer note ────
+def _cov_payload(coverage):
+    return {"alerts": [{"kind": "stop_breach", "ticker": "AAPL"}], "built_at": "x",
+            "errors": [], "held_stops_failed": None, "held_stop_notes": [],
+            "risk_coverage": coverage}
+
+
+_LATE = datetime.datetime(2026, 12, 1, 8, 30)   # after the go-live footer window
+
+
+def test_premarket_unmeasured_risk_coverage_adds_the_note_to_the_footer(monkeypatch, capsys):
+    from stock_analyzer import risk_window
+    cov = {"state": "unmeasured", "left_out": [
+        {"ticker": "ANT", "reason": "short_history", "n_returns": 3, "weight_pct": 15.0}],
+        "window_returns": 0, "min_returns": 20, "max_unmeasured_pct": 10.0,
+        "unmeasured_pct": 15.0, "late_start": []}
+    rc, sent, saved, renders, notified = _run_pm(monkeypatch, _cov_payload(cov), _LATE)
+    lines = renders[0]["footer_lines"]
+    assert lines == [risk_window.coverage_note(cov)] and "can't be measured" in lines[0]
+    assert "portfolio risk coverage: state=unmeasured left_out=ANT:short_history:3:15.0"         in capsys.readouterr().out
+
+
+def test_premarket_partial_or_full_risk_coverage_logs_but_adds_no_footer(monkeypatch, capsys):
+    for state in ("partial", "full"):
+        cov = {"state": state, "left_out": [], "window_returns": 120, "unmeasured_pct": 0.0}
+        rc, sent, saved, renders, notified = _run_pm(monkeypatch, _cov_payload(cov), _LATE)
+        assert renders[0]["footer_lines"] == []
+        assert f"portfolio risk coverage: state={state}" in capsys.readouterr().out
+
+
+def test_premarket_missing_risk_coverage_logs_not_built(monkeypatch, capsys):
+    rc, sent, saved, renders, notified = _run_pm(monkeypatch, _cov_payload(None), _LATE)
+    assert renders[0]["footer_lines"] == []
+    assert "portfolio risk coverage: not built" in capsys.readouterr().out

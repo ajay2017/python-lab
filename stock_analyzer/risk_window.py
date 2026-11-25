@@ -74,6 +74,13 @@ def _closes_by_session(data) -> pd.Series | None:
     return closes if len(closes) else None
 
 
+def session_closes(frame) -> pd.Series | None:
+    """One row per session date, sorted, NaN closes dropped (a duplicate date
+    keeps the last), or None when the frame has no usable Close. For a benchmark
+    frame (SPY) that must join the book series on the same session-date index."""
+    return _closes_by_session({"df": frame})
+
+
 def _weight_pct(value) -> float | None:
     """A Weight (%) cell as a finite float, else None (unknown size)."""
     try:
@@ -283,6 +290,31 @@ def _names(items: list[dict]) -> str:
     if len(parts) <= 1:
         return "".join(parts)
     return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def coverage_log_text(coverage) -> str:
+    """One cron log line for a coverage dict (premarket and EOD print the same
+    text): state, who was left out (TICKER:reason:n_returns:weight_pct), the worst
+    kept-day unmeasured share and the window length. Never raises; a missing or
+    malformed coverage reads 'not built'."""
+    if not isinstance(coverage, dict) or not coverage:
+        return "portfolio risk coverage: not built"
+    try:
+        items = []
+        raw_left = coverage.get("left_out")
+        for x in (raw_left if raw_left is not None else []):
+            w = x.get("weight_pct")
+            wtxt = "?" if w is None else f"{w:.1f}"
+            items.append(f"{x.get('ticker')}:{x.get('reason')}:{x.get('n_returns')}:{wtxt}")
+        left = ",".join(items) if items else "none"
+        share = coverage.get("unmeasured_pct")
+        stxt = "n/a" if share is None else f"{share:.1f}"
+        return (
+            f"portfolio risk coverage: state={coverage.get('state')} left_out={left} "
+            f"unmeasured_pct={stxt} window={coverage.get('window_returns')}"
+        )
+    except Exception:
+        return "portfolio risk coverage: not built"
 
 
 _GENERIC_NOTE = "Portfolio risk was measured without some holdings."

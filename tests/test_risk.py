@@ -671,10 +671,23 @@ def test_compute_portfolio_risk_metrics_empty_held_data_returns_none():
 
 
 def test_compute_portfolio_risk_metrics_insufficient_history_returns_none():
-    short_df = _price_df([100.0, 101.0, 102.0])  # only 3 rows, needs >= 10
+    short_df = _price_df([100.0, 101.0, 102.0])  # only 3 rows, needs BETA_MIN_RETURNS returns
     port_df = pd.DataFrame([_port_row("AAPL", "Consumer Tech", 100.0)])
     held_data = {"AAPL": {"df": short_df}}
-    assert compute_portfolio_risk_metrics(port_df, held_data) is None
+    cov: dict = {}
+    assert compute_portfolio_risk_metrics(port_df, held_data, coverage_out=cov) is None
+    assert cov["state"] == "unmeasured"   # filled on the None path too
+    assert [x["ticker"] for x in cov["left_out"]] == ["AAPL"]
+
+
+def test_compute_portfolio_risk_metrics_fifteen_closes_is_unmeasured():
+    # 14 returns < BETA_MIN_RETURNS: the old code accepted 10+ closes; the book
+    # series now needs a holding's beta-measurable history (RiskListwiseYoung).
+    df = _price_df([100.0 * (1.01 ** i) for i in range(15)])
+    port_df = pd.DataFrame([_port_row("AAPL", "Consumer Tech", 100.0)])
+    cov: dict = {}
+    assert compute_portfolio_risk_metrics(port_df, {"AAPL": {"df": df}}, coverage_out=cov) is None
+    assert cov["state"] == "unmeasured"
 
 
 def test_compute_portfolio_risk_metrics_no_matching_weights_returns_none():
@@ -697,8 +710,9 @@ def test_compute_portfolio_risk_metrics_happy_path_returns_full_shape():
     assert set(result.keys()) == {
         "beta", "ann_volatility", "sharpe", "sortino",
         "var_95_pct", "cvar_95_pct", "max_drawdown",
-        "drawdown_series", "cum_returns",
+        "drawdown_series", "cum_returns", "coverage",
     }
+    assert result["coverage"]["state"] == "full"
     assert result["beta"] is not None
     assert result["ann_volatility"] >= 0
 
@@ -707,11 +721,11 @@ def test_compute_portfolio_risk_metrics_weights_renormalize_to_100pct():
     # port_df's weights don't need to sum to 100 on their own (e.g. only a
     # subset of holdings has price history) -- the function renormalizes
     # among the tickers it can actually price.
-    df = _price_df([100.0 * (1.01 ** i) for i in range(15)])
+    df = _price_df([100.0 * (1.01 ** i) for i in range(25)])
     port_df = pd.DataFrame([_port_row("AAPL", "Consumer Tech", 60.0)])  # 60%, not 100%
     held_data = {"AAPL": {"df": df}}
     result = compute_portfolio_risk_metrics(port_df, held_data)
-    assert result != {}  # should not fail just because weights don't sum to 100
+    assert result is not None and result != {}  # should not fail just because weights don't sum to 100
 
 
 def test_compute_portfolio_risk_metrics_flat_portfolio_sortino_stays_zero():
@@ -730,7 +744,7 @@ def test_compute_portfolio_risk_metrics_flat_portfolio_sortino_stays_zero():
 
 
 def test_compute_portfolio_risk_metrics_beta_absent_without_spy():
-    df = _price_df([100.0 * (1.01 ** i) for i in range(15)])
+    df = _price_df([100.0 * (1.01 ** i) for i in range(25)])
     port_df = pd.DataFrame([_port_row("AAPL", "Consumer Tech", 100.0)])
     held_data = {"AAPL": {"df": df}}
     result = compute_portfolio_risk_metrics(port_df, held_data, spy_df=None)

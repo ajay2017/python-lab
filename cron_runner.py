@@ -98,6 +98,7 @@ from stock_analyzer import held_stop_view as _held_stop_view
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import llm
 from stock_analyzer import news_feed
+from stock_analyzer import risk_window
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
     render_daily_action_email, render_intraday_entry_email, send_email_resend,
@@ -671,6 +672,14 @@ def _run_premarket(now_et, force: bool) -> int:
     _recalc_line = _held_stop_view.email_notice_line(now_et.date())
     if _recalc_line:
         _footer_lines.insert(0, _recalc_line)
+    # RiskListwiseYoung C2: how much of the book the risk series covered. One log
+    # line every run; the footer note only when the beta could not be measured.
+    _risk_cov = payload.get("risk_coverage")
+    _log(risk_window.coverage_log_text(_risk_cov))
+    if isinstance(_risk_cov, dict) and _risk_cov.get("state") == "unmeasured":
+        _risk_cov_note = risk_window.coverage_note(_risk_cov)
+        if _risk_cov_note:
+            _footer_lines.append(_risk_cov_note)
     _log(f"computed {len(alerts)} protective alert(s): "
          + (", ".join(f"{a.get('kind')}/{a.get('ticker')}" for a in alerts) or "(none)"))
     # A dead news feed (docs/plans/news-feed-restore.md, D-4): the lane still does
@@ -1121,6 +1130,7 @@ def _run_eod(now_et, force: bool) -> int:
             # (or a cold-start None) into something else and defeat the
             # None/[]/list three-state contract correlation_unchecked relies on
             # (2026-10-09, correlation-verification follow-on to G-25/G-26).
+            _log(risk_window.coverage_log_text(payload.get("risk_coverage")))
             _risk_diag: dict = {}
             _risk_row = build_portfolio_risk_snapshot(
                 now_et.date(), payload.get("port_df"), payload.get("port_risk"),

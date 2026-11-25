@@ -240,8 +240,10 @@ def _build_context(today: date) -> dict:
         return {"ok": False, "reason": "empty_port_df",
                 "errors": errors + ["portfolio frame empty after load"]}
 
+    _risk_cov: dict = {}
     try:
-        port_risk = compute_portfolio_risk_metrics(port_df, held_data, spy_6mo, rfr)
+        port_risk = compute_portfolio_risk_metrics(port_df, held_data, spy_6mo, rfr,
+                                                   coverage_out=_risk_cov)
     except Exception:
         port_risk = None
     fragility = None
@@ -275,6 +277,10 @@ def _build_context(today: date) -> dict:
             # (caller must treat a missing/None beta as "couldn't be built",
             # never as "beta is zero").
             "port_risk": port_risk,
+            # Additive (RiskListwiseYoung C2): the young-holding coverage of the
+            # book risk series (risk_window.book_returns), filled even when
+            # `port_risk` is None. `None` = no coverage could be built at all.
+            "risk_coverage": _risk_cov or None,
             # Additive (2026-10-09, portfolio-risk-snapshot correlation-
             # verification follow-on) — the RAW held-ticker list this run
             # expected, built above BEFORE the per-ticker bundle-load loop
@@ -530,6 +536,9 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         # Additive -- news_feed.feed_state over the held bundles this run loaded
         # (None = no bundles). The cron reddens the heartbeat on an outage.
         "news_feed": news_feed.feed_state(held_data),
+        # Additive (RiskListwiseYoung C2): the book risk series' young-holding
+        # coverage (None = not built); the premarket lane logs it and footers it.
+        "risk_coverage": ctx.get("risk_coverage"),
     }
 
 
@@ -1886,6 +1895,9 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
             # callers must treat that as "couldn't be built", never as beta=0,
             # same contract _build_context's own docstring already states).
             "port_df": ctx.get("port_df"), "port_risk": ctx.get("port_risk"),
+            # Additive (RiskListwiseYoung C2): the same coverage, logged beside the
+            # portfolio_risk_snapshot write (None = not built).
+            "risk_coverage": ctx.get("risk_coverage"),
             # Additive (2026-10-09) — the same raw held-ticker list
             # `_build_context` returns (see its own comment above); feeds
             # `risk_metric_history.build_portfolio_risk_snapshot`'s

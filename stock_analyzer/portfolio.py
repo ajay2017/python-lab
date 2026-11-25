@@ -3,11 +3,12 @@ import pandas as pd
 import numbers
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS, REDEPLOY_CORR_DIVERSIFIER_MAX, REDEPLOY_CORR_CORRELATED_MIN, CORR_MIN_OBS_TRUSTED
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS, REDEPLOY_CORR_DIVERSIFIER_MAX, REDEPLOY_CORR_CORRELATED_MIN, CORR_MIN_OBS_TRUSTED, BETA_MIN_RETURNS
 from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer import asset_type
 from stock_analyzer import revision_flag as _revision_flag
 from stock_analyzer import trim_sizing as _trim_sizing
+from stock_analyzer import risk_window as _risk_window
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 from stock_analyzer.sector_vocab import to_curated as _to_curated_sector
 
@@ -1904,47 +1905,22 @@ def trailing_return(close, trading_days: int) -> float | None:
 def portfolio_return_series(port_df: pd.DataFrame, held_data: dict) -> pd.Series | None:
     """The book's weighted daily-RETURN Series (for correlation_to_portfolio).
 
-    Mirrors the weighting in `risk.compute_portfolio_risk_metrics` (which computes
-    the same `port_returns` internally but does not expose it): per-name daily
-    returns from each holding's Close history, weighted by current Weight (%),
-    renormalised to the names that actually have price history. Returns None when
-    there is insufficient data. Pure / no I/O.
+    The same builder as `risk.compute_portfolio_risk_metrics`
+    (`risk_window.book_returns`), so the book-beta window and
+    `beta_repair.aligned_beta`'s window are one series by construction: a young
+    holding is left out (not truncating the book) and its weight is spread over
+    the others. Returns None when insufficient data. Pure / no I/O.
     """
     if port_df is None or port_df.empty or not held_data:
         return None
-    series: dict[str, pd.Series] = {}
-    for ticker, data in (held_data or {}).items():
-        hist = data.get("df") if data.get("df") is not None else data.get("history")
-        if hist is not None and not hist.empty and "Close" in hist.columns:
-            series[ticker] = _to_tz_naive(hist["Close"])
-    if not series:
-        return None
-    prices = pd.DataFrame(series).ffill().dropna()
-    if len(prices) < 10:
-        return None
-    daily_returns = prices.pct_change().dropna()
-    weights: dict[str, float] = {}
-    for _, row in port_df.iterrows():
-        t = row["Ticker"]
-        if t in daily_returns.columns:
-            try:
-                weights[t] = float(row["Weight (%)"]) / 100.0
-            except (TypeError, ValueError):
-                continue
-    total_w = sum(weights.values())
-    if total_w <= 0:
-        return None
-    weights = {t: w / total_w for t, w in weights.items()}
-    port_returns = pd.Series(0.0, index=daily_returns.index)
-    for t, w in weights.items():
-        port_returns += daily_returns[t] * w
-    return port_returns
+    series, _cov = _risk_window.book_returns(port_df, held_data)
+    return series
 
 
 def correlation_to_portfolio(
     candidate_close: pd.Series,
     port_returns: pd.Series,
-    min_overlap: int = 20,
+    min_overlap: int = BETA_MIN_RETURNS,
 ) -> float | None:
     """Pearson correlation of a candidate's daily returns to the BOOK's daily returns.
 

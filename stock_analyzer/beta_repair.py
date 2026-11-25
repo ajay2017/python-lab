@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from stock_analyzer.constants import BETA_MIN_RETURNS
 from stock_analyzer.score_text import composite_score_text
 
 
@@ -259,16 +260,17 @@ def aligned_beta(
     candidate_close: "pd.Series | None",
     spy_close: "pd.Series | None",
     on_index: "pd.Index | pd.Series | None",
-    min_obs: int = 20,
+    min_obs: int = BETA_MIN_RETURNS,
 ) -> tuple[float | None, int]:
     """Candidate beta vs SPY, regressed on the SAME date index the BOOK's own
     portfolio-return series was built on -- not just the candidate's own full
     overlap with SPY.
 
-    Why this exists: portfolio beta (risk.compute_portfolio_risk_metrics)
-    regresses a listwise intersection across every holding's history, so one
-    short/degraded holding can truncate the window for the WHOLE book. A
-    candidate's beta computed against its own full 6mo overlap with SPY can
+    Why this exists: portfolio beta (risk.compute_portfolio_risk_metrics) is
+    regressed on the book series from risk_window.book_returns (a young
+    holding is left out of it, so it no longer truncates the window for the
+    whole book; `on_index` is still that series' index). A candidate's beta
+    computed against its own full 6mo overlap with SPY can
     therefore share the same SPY window as the book's beta but NOT the same
     stock-side window -- comparing them directly mixes two different
     lookback periods. This function fixes that: it discards any date not in
