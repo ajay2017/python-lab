@@ -39,10 +39,10 @@ def _weights(n):
             SINGLE_NAME_TRIM_TRIGGER + 0.1, 22.1)
 
 
-def _book(weight, n, pnl, shares=_SHARES):
+def _book(weight, n, pnl, shares=_SHARES, score=70.0):
     rows = [{
         "Ticker": "AAA", "Weight (%)": weight, "P&L (%)": pnl, "Price": _PRICE,
-        "Shares": shares, "Signal": "Hold", "Score": 70.0, "Stop": _PRICE * 0.9,
+        "Shares": shares, "Signal": "Hold", "Score": score, "Stop": _PRICE * 0.9,
         "Gap to Stop (%)": 10.0, "Market Value": shares * _PRICE,
         "Avg Cost": _PRICE / 1.5, "Stop Type": "ATR Stop", "Sector": "Tech",
     }]
@@ -142,6 +142,30 @@ def test_cross_surface_matrix_equals_the_decision(n):
                         assert t4 == SINGLE_NAME_CEILING, where
                     else:
                         assert t4 == _NO_TRIM, where
+
+
+@pytest.mark.parametrize("n", range(5, 13))
+def test_weak_score_variant_the_earnings_card_is_covered_by_the_one_act_trim(n):
+    """U6 (docs/plans/brief-one-trim-per-name-u6.md): the matrix above uses score 70 (no
+    weak-large rule). With score 50 the weak-large trim to 8% sells at least what any
+    earnings decision sells, so in the window the 📅 card is a Watch covered by that one
+    Act trim, and the Act trim is never smaller than the earnings decision's shares."""
+    for w in _weights(n):
+        for days in _DAYS:
+            if not ts.in_earnings_window(days):
+                continue
+            where = f"n={n} w={w} days={days}"
+            items = _review_list(_book(w, n, _PNLS[1], score=50.0), [], [], _held(days), _TODAY,
+                                 portfolio_value=100_000.0)
+            acts = [i for i in items if i["ticker"] == "AAA"
+                    and i["action"]["type"] in ("TRIM_TO_TARGET", "TRIM_AND_TIGHTEN", "PROTECTIVE_TRIM")]
+            assert len(acts) == 1, where
+            assert acts[0]["action"]["reason_key"] == "weak_large", where
+            dec = ts.earnings_week_decision(w, n, _SHARES)
+            if dec is not None:
+                assert acts[0]["action"]["trim_shares"] >= dec["trim_shares"], where
+            e = next(i for i in items if i["ticker"] == "AAA" and i["icon"] == "📅")
+            assert e["action"] == {"type": "WATCH", "covered_by": "AAA"}, where
 
 
 @pytest.mark.parametrize("n", range(5, 13))

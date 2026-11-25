@@ -376,6 +376,7 @@ from stock_analyzer import premortem_advisor as _pm_advisor
 from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import coord_freshness
 from stock_analyzer import held_trim_owner
+from stock_analyzer import brief_trim_merge
 from stock_analyzer import home_risk_synthesis
 from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
@@ -1547,6 +1548,12 @@ def _fmt_action(action: dict) -> tuple[str, str, str]:
     if t == "WATCH":
         # "Watch" is the display label; the comparison above still keys on
         # the internal "WATCH" action type.
+        # U6: a card whose trade was folded into today's Act Today trim of the
+        # same name reads that, not "no action today" (the decision text lives in
+        # brief_trim_merge.covered_action_text).
+        _covered = brief_trim_merge.covered_action_text(action)
+        if _covered is not None:
+            return (_HOME_CALM, "Watch", _covered)
         return (_HOME_CALM, "Watch",
                 "no action today — see Trigger below for what would escalate.")
     if t == "TIGHTEN_ONLY":
@@ -7322,7 +7329,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 24  # bumped: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 25  # bumped: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -46578,7 +46585,7 @@ The footer line beneath the cards states **risk, not capital** — "if every sto
 
 **Earnings week (a holding reports within 7 days):** one rule sizes the trim, and the Brief, 📡 Signals and 🔔 Catalyst Watch all show the same number. Above the earnings-week line (equal weight plus 5 points, between 12% and 22%, so 17.5% with 8 holdings) the trim is to about 10%. With 7 or fewer holdings that line is above 18%, so a name between 18% and the line still gets the usual trim to 15%: earnings week never sizes looser than the week before. Under the line nothing is sized for the report, and the Brief says so. The 🔧 Tune-up, 🔗 Risk Analysis and the ⚖️ Rebalancer don't add a second sell on a name Act Today already sells; each says so in a line instead.
 
-**Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop), ⛔ Exit (a stop card on a name Act Today already says to sell). A name gets one Act Today card: when a composite Sell and a weak-large trim hit the same holding, the Sell card carries the minimum trim. A raise-stop card shows only when the new stop is at least 1% of price above your current one. A **↔ Steady vs yesterday** chip means the signal is unchanged from yesterday — continuity, not a fresh call.
+**Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop), ⛔ Exit (a stop card on a name Act Today already says to sell). A name gets one Act Today card: when a composite Sell and a weak-large trim hit the same holding, the Sell card carries the minimum trim; and when two Review trims would hit the same holding (earnings week, a low score, a profit-lock, a pre-event macro trim), the one that sells the most shares stays in Act Today, and the others move to Monitoring reading "covered by today's Act Today trim of X; no separate trade" (the Act card says what it also covers). A raise-stop card shows only when the new stop is at least 1% of price above your current one. A **↔ Steady vs yesterday** chip means the signal is unchanged from yesterday — continuity, not a fresh call.
 
 **🧾 Tax note on exit cards:** when an Act Today **EXIT** or Review Before Close **TRIM** lands on a position that's within ~30 days of long-term-capital-gains eligibility, the card shows an amber note flagging how soon it turns long-term and that waiting can cut the tax rate *if* you'd be selling at a gain. It's **context only — the recommendation itself doesn't change**. Separately, logging a **SELL at a loss** within 30 days of a recent buy on the same ticker surfaces a **wash-sale** heads-up on the confirm step (the sale isn't blocked). For the full per-position picture, see the 💰 Tax Efficiency Advisor.
 

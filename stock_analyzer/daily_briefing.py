@@ -23,6 +23,7 @@ Verdict tiers:
   Caution    — earnings within 7 days regardless of other signals (amber)
 """
 
+import logging
 from datetime import date, datetime as _dt, timedelta
 
 import pandas as pd
@@ -101,6 +102,7 @@ from stock_analyzer import macro_sector_gate as _macro_sector_gate
 from stock_analyzer.analyst_intel import trustworthy_composite
 from stock_analyzer import held_news_check
 from stock_analyzer import held_trim_owner
+from stock_analyzer import brief_trim_merge
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.text_fmt import share_word
 from stock_analyzer import g32_shadow
@@ -3237,6 +3239,22 @@ def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
 _dynamic_overweight_floor = _trim_sizing.earnings_overweight_floor
 
 
+_log = logging.getLogger(__name__)
+
+
+def _under_reduce_tighten(ticker, gap, pnl_pct, new_stop) -> tuple[dict, str]:
+    """The stop-only action + why for a name whose Act Today reduce call already
+    covers the sale. ONE source for the in-section `_under_reduce` branch and for
+    brief_trim_merge's demoted-stop wording (U6), so the two cannot drift."""
+    action = {"type": "TIGHTEN_ONLY", "new_stop": new_stop}
+    why = (
+        f"Gap {gap:.1f}% above stop; P&L {pnl_pct:+.1f}%. Today's Brief "
+        f"already says to reduce {ticker}, so this only tightens the "
+        "stop on the shares you keep."
+    )
+    return action, why
+
+
 def _review_list(port_df, news_items, macro_events, held_data, today,
                  portfolio_value: float = 0.0,
                  act_today: list | None = None,
@@ -3395,15 +3413,13 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             trim_shares = _trim_sizing.fraction_trim_shares(shares, STOP_PROFIT_LOCK_TRIM_PCT)
         else:
             trim_shares = 0
+        # U6 carrier: what this card becomes if another Review trim on the same
+        # name sells at least as much (brief_trim_merge reads it, then drops it).
+        _u6_ur_action, _u6_ur_why = _under_reduce_tighten(ticker, gap, pnl_pct, new_stop)
         if _under_reduce:
             # Today's Brief already says to reduce this name: this card only
             # manages the stop on the shares that are kept.
-            action = {"type": "TIGHTEN_ONLY", "new_stop": new_stop}
-            why = (
-                f"Gap {gap:.1f}% above stop; P&L {pnl_pct:+.1f}%. Today's Brief "
-                f"already says to reduce {ticker}, so this only tightens the "
-                "stop on the shares you keep."
-            )
+            action, why = _u6_ur_action, _u6_ur_why
         elif is_critical and lock_profits and trim_shares >= 1:
             trim_dollars = round(trim_shares * price, 0)
             action = {
@@ -3443,6 +3459,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "trigger":  "Stop break = full exit next open.",
             "weight":   weight,
             "lifecycle": _lifecycle,
+            "_u6_tighten": {"new_stop": new_stop, "why": _u6_ur_why},
         })
 
     # 2 — Earnings within 7 days
@@ -3542,6 +3559,13 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                     f"N={_n_pos} positions). Existing sizing already conservative for the binary risk."
                 )
             trigger = _esc.brief_earnings_trigger(_esc_state, _esc_gap, _esc_est, trimmed=False)
+        # U6 carriers: the Trigger this card gets if today's Act Today trim of the
+        # name (from another section) covers it; the no-re-entry variant is for a
+        # name sold on a low score. Read and dropped by brief_trim_merge.
+        _u6_trig = _esc.brief_earnings_trigger(
+            _esc_state, _esc_gap, _esc_est, trimmed=True)
+        _u6_trig_nre = _esc.brief_earnings_trigger(
+            _esc_state, _esc_gap, _esc_est, trimmed=True, reentry=False)
         # Rating-change Watch flag (shared rule/wording): its own field, never
         # appended to `why` (the Snapshot caps `why`), never changes the
         # action, sizing or priority.
@@ -3556,6 +3580,9 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "trigger":  trigger,
             "weight":   weight,
             **({"revision_flag_line": _rf_line} if _rf_line else {}),
+            "_u6_kind": "earnings",
+            "_u6_trigger_trimmed": _u6_trig,
+            "_u6_trigger_trimmed_no_reentry": _u6_trig_nre,
         })
 
     # 3 — Weak large positions (weight ≥ LARGE_POSITION_WEIGHT_PCT, Score < WEAK_CONVICTION_SCORE)
@@ -3650,6 +3677,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 ),
                 "trigger": _wl_trigger,
                 "weight":  weight,
+                "_u6_kind": "weak_large",
+                "_u6_score": score,
             })
             continue
         items.append({
@@ -3672,6 +3701,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             ),
             "trigger": "Already flagged — act before close, don't wait.",
             "weight":  weight,
+            "_u6_kind": "weak_large",
+            "_u6_score": score,
         })
 
     # 4 — Warning news on held positions: any in-window headline ≤ NEWS_SENTIMENT_WARN on a
@@ -3942,7 +3973,21 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             # headline (MacroAff, `_rewrite_macro_affected`).
             "_affected_all": list(ev.get("affected_tickers", [])),
             "_headline_head": f"{ev.get('event','Macro event')} in {days}d ({ev_date})",
+            "_u6_event_date": str(ev_date),
         })
+
+    # U6: one Act trim per name. The sections above size independently, so one
+    # name can carry several Act trims (or an Act trim beside a Watch that says
+    # "sizes nothing"); the largest sale by shares wins and the rest become
+    # non-trade cards (brief_trim_merge). Runs before the news dedup so that sees
+    # the final actioned set. On any failure the unmerged list is kept (every sell
+    # stays visible), carriers stripped, and the failure is logged.
+    try:
+        items = brief_trim_merge.one_trim_per_name(items)
+    except Exception as _e:  # noqa: BLE001 — fail toward showing every sell
+        _log.warning("brief one-trim-per-name merge failed, keeping the unmerged "
+                     "Review list: %s: %s", type(_e).__name__, _e)
+        items = brief_trim_merge.strip_carriers(items)
 
     # Final-pass news-WATCH dedup. The inline check above suppresses a
     # negative-news WATCH for any ticker actioned by an EARLIER block or Act

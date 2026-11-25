@@ -68,13 +68,20 @@ def stop_cover_state(gap_to_stop, est_move) -> str:
     return "covered"
 
 
-def brief_earnings_trigger(state, gap_to_stop, est_move, *, trimmed: bool) -> str:
+def brief_earnings_trigger(state, gap_to_stop, est_move, *, trimmed: bool,
+                           reentry: bool = True) -> str:
     """The Brief's earnings-week Trigger sentence. Plain text: no `$`, no `**`.
 
     'covered' only means gap >= EARNINGS_STOP_COVER_FRAC x move, so the wording
     splits on gap >= move ("beyond") vs. in between ("just inside"); it never
-    claims the stop "covers" or "protects"."""
-    _beat = "Beat → re-enter post-print if composite holds; Miss → "
+    claims the stop "covers" or "protects".
+
+    `reentry=False` (only meaningful with trimmed=True) drops the "Beat → re-enter
+    post-print if composite holds;" clause: the name was sold for a low score, so
+    advising a re-entry would contradict the sale (U6, brief_trim_merge). The
+    default keeps every caller's text byte-identical."""
+    _beat = ("Beat → re-enter post-print if composite holds; Miss → "
+             if reentry else "Miss → ")
     if state == "covered":
         if gap_to_stop >= est_move:
             if trimmed:
@@ -117,6 +124,6 @@ def brief_earnings_trigger(state, gap_to_stop, est_move, *, trimmed: bool) -> st
         "Stop data unavailable, so the app can't say whether it covers the "
         "expected move: set a stop before the report."
     )
-    if trimmed:
+    if trimmed and reentry:
         return "Beat → re-enter post-print if composite holds; s" + _unk[1:]
     return _unk

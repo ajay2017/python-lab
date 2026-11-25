@@ -1307,6 +1307,11 @@ _GATE_FILES = {
     # Added 2026-11-24 (EW C4): sizes sells -- the Rebalancer's trim share counts;
     # a wrong call sells the wrong size or a second time beside an Act Today sell.
     "stock_analyzer/rebalancer.py",
+    # Added 2026-11-24 (U6, docs/plans/brief-one-trim-per-name-u6.md): merges the
+    # Brief Review list's same-name Act trims into ONE (the largest sale by shares)
+    # and demotes the rest to non-trade cards; a wrong call sells less than a card
+    # said to, or leaves two sell sizes for one name.
+    "stock_analyzer/brief_trim_merge.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

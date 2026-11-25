@@ -125,3 +125,36 @@ def test_playbook_and_brief_agree_on_stop_at_risk():
         else:
             assert "go through it" not in trig and ("just inside" in trig or "beyond" in trig)
             assert "only" not in trig
+
+
+# -- U6: reentry=False drops the "Beat -> re-enter" clause for a low-score sale -------------
+
+_TRIM_CASES = [("covered", 12.0, 6.0), ("covered", 4.0, 6.0), ("at_risk", 1.0, 6.0),
+               ("unknown", None, 6.0)]
+_BEAT = "Beat → re-enter post-print if composite holds; "
+
+
+@pytest.mark.parametrize("state,gap,est", _TRIM_CASES)
+@pytest.mark.parametrize("trimmed", [True, False])
+def test_reentry_default_is_byte_identical(state, gap, est, trimmed):
+    assert (brief_earnings_trigger(state, gap, est, trimmed=trimmed)
+            == brief_earnings_trigger(state, gap, est, trimmed=trimmed, reentry=True))
+
+
+@pytest.mark.parametrize("state,gap,est", _TRIM_CASES)
+def test_reentry_false_drops_only_the_beat_clause_when_trimmed(state, gap, est):
+    with_beat = brief_earnings_trigger(state, gap, est, trimmed=True)
+    without = brief_earnings_trigger(state, gap, est, trimmed=True, reentry=False)
+    assert with_beat.startswith(_BEAT)
+    assert "re-enter" not in without and "Beat" not in without
+    assert without != with_beat
+    if state == "unknown":
+        assert without.startswith("Stop data unavailable")      # capitalised, no lead-in
+    else:
+        assert without == "Miss → " + with_beat[len(_BEAT) + len("Miss → "):]
+
+
+@pytest.mark.parametrize("state,gap,est", _TRIM_CASES)
+def test_reentry_false_changes_nothing_when_not_trimmed(state, gap, est):
+    assert (brief_earnings_trigger(state, gap, est, trimmed=False, reentry=False)
+            == brief_earnings_trigger(state, gap, est, trimmed=False))

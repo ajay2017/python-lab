@@ -101,7 +101,11 @@ def _consolidated():
 def test_consolidated_news_primary_keeps_its_sector_flag_beside_an_earnings_trim():
     act = _consolidated()
     held = {"AAA": {"earnings": "2026-10-29"}}
-    review = db._review_list(_port(), [], [], held, date(2026, 10, 26),
+    # U6: _port() has no Score column, so AAA also reads as a weak-large holding and the
+    # weak-large trim (8%) would now WIN over this earnings trim (10%), which becomes a
+    # covered Watch. A score above the weak-conviction line keeps this test about what it
+    # always pinned: the earnings trim beside the sector flag.
+    review = db._review_list(_port().assign(Score=70.0), [], [], held, date(2026, 10, 26),
                              portfolio_value=100_000.0, act_today=act)
     trim = next(i for i in review if i["ticker"] == "AAA" and i["icon"] == "📅")
     assert trim["action"]["type"] == "TRIM_TO_TARGET"       # U5: news card doesn't skip it
