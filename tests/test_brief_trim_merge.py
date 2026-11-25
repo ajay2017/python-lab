@@ -331,3 +331,76 @@ def test_strip_carriers_drops_only_u6_keys_and_copies():
 
 def test_empty_and_none_inputs():
     assert btm.one_trim_per_name([]) == [] and btm.one_trim_per_name(None) == []
+
+
+# -- U6 sibling: a same-name DETERIORATION_WATCH beside an Act trim ---------------------------
+
+def det(t="SNOW"):
+    """The 👁️ Monitoring card `_review_list` builds in section 0 (early deterioration)."""
+    return {"priority": "low", "icon": "👁️", "ticker": t,
+            "headline": "down 12.0% from $60.00 peak, below SMA50",
+            "action": {"type": "DETERIORATION_WATCH"},
+            "why": "Early deterioration: drawdown 12.0%, below the 50-day trend. Not an action "
+                   "yet — watching for follow-through.",
+            "trigger": "A 2-of-3 close below the trend with market underperformance → TRIM.",
+            "weight": 17.4, "lifecycle": "", "pnl_pct": -3.0, "price": 52.8,
+            "dd_from_peak_pct": 12.0, "below_ma_count": 2, "rel_strength": -1.5}
+
+
+def _det_of(out):
+    [d] = [i for i in out if (i.get("action") or {}).get("type") == "DETERIORATION_WATCH"]
+    return d
+
+
+def test_deterioration_watch_beside_a_trim_keeps_its_type_and_gains_only_covered_by():
+    w, d = weak("SNOW", n=2), det("SNOW")
+    out = btm.one_trim_per_name([w, d])
+    got = _det_of(out)
+    assert got["action"] == {**d["action"], "covered_by": "SNOW"}
+    assert got["action"]["type"] == "DETERIORATION_WATCH"
+    assert {k: v for k, v in got.items() if k != "action"} == {
+        k: v for k, v in d.items() if k != "action"}
+    assert btm.covered_action_text(got["action"]) == (
+        "covered by today's Act Today trim of SNOW; no separate trade.")
+    win = next(i for i in out if i["icon"] == "🔍")
+    assert win["action"] == w["action"] and win["why"] == w["why"]       # the Act trim is untouched
+    assert _no_carriers(out) and len(out) == 2
+
+
+def test_deterioration_watch_on_a_name_with_no_act_trim_is_unchanged():
+    d = det("SNOW")
+    out = btm.one_trim_per_name([d, weak("BBB", n=30)])
+    assert _det_of(out) == d
+    assert "covered_by" not in _det_of(out)["action"]
+
+
+@pytest.mark.parametrize("bad", [0, 1.5])
+def test_deterioration_watch_is_unchanged_when_the_trim_cannot_be_proved_safe(bad):
+    w = weak("SNOW", n=2)
+    w["action"]["trim_shares"] = bad
+    d = det("SNOW")
+    out = btm.one_trim_per_name([w, d])
+    assert _det_of(out) == d and "covered_by" not in _det_of(out)["action"]
+
+
+def test_deterioration_watch_beside_a_macro_trim_is_covered_by_its_trim_ticker():
+    d = det("SNOW")
+    out = btm.one_trim_per_name([macro("SNOW", n=10), d])
+    assert _det_of(out)["action"] == {"type": "DETERIORATION_WATCH", "covered_by": "SNOW"}
+    [win] = _acts(out, "SNOW")
+    assert win["action"]["type"] == "PROTECTIVE_TRIM" and win["ticker"] is None
+
+
+def test_deterioration_watch_result_is_independent_of_input_order():
+    base = [weak("SNOW", n=2), det("SNOW")]
+    want = _canon(btm.one_trim_per_name(base))
+    assert _canon(btm.one_trim_per_name(list(reversed(base)))) == want
+    for perm in itertools.permutations(base + [earn("SNOW", n=1)]):
+        assert _det_of(btm.one_trim_per_name(list(perm)))["action"]["covered_by"] == "SNOW"
+
+
+def test_deterioration_watch_merge_does_not_mutate_the_input():
+    base = [weak("SNOW", n=2), det("SNOW")]
+    snapshot = copy.deepcopy(base)
+    btm.one_trim_per_name(base)
+    assert base == snapshot and "covered_by" not in base[1]["action"]

@@ -460,3 +460,14 @@ def test_fmt_action_routes_covered_watch_through_the_pure_text():
     watch = body[body.index('if t == "WATCH":'):body.index('if t == "TIGHTEN_ONLY":')]
     assert "no action today" in watch                        # the default text is unchanged
     assert watch.index("covered_action_text") < watch.rindex("no action today")
+
+
+def test_fmt_action_routes_covered_deterioration_watch_through_the_pure_text():
+    src = _APP.read_text(encoding="utf-8")
+    start = src.index("def _fmt_action(")
+    body = src[start:src.index("def _render_holdings_table", start)]
+    det = body[body.index('if t == "DETERIORATION_WATCH":'):body.index('return (_HOME_CALM, "—"')]
+    assert "brief_trim_merge.covered_action_text(action)" in det
+    assert "no action today" in det                          # the default text is unchanged
+    assert det.index("covered_action_text") < det.rindex("no action today")
+    assert "covered by today's Act Today trim" not in det    # render-only

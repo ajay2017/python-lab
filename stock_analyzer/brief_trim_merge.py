@@ -15,6 +15,10 @@ finished list:
       target, stop are never recomputed). Every other T item becomes a non-trade
       Monitoring card with reworded text. The winner gains one "also covers"
       sentence when a sized trim was demoted.
+      A same-name DETERIORATION_WATCH card beside the winning trim keeps its type and
+      text and gains only `covered_by` in its action (its type is read by the
+      exit_signals WATCH capture and the judgment opinions in app.py, so it is never
+      retyped or dropped).
   covered_action_text(action) -> str | None
       The render text of a Watch card whose action carries `covered_by` (app.py
       `_fmt_action` prints it instead of "no action today").
@@ -239,6 +243,11 @@ def _merge_subject(group: list[dict]) -> list[dict] | None:
                 f"Weight {float(w):.1f}% ≥ {LARGE_POSITION_WEIGHT_PCT:.0f}% AND score "
                 f"{sc} < {WEAK_CONVICTION_SCORE}. {sell}; this check sizes no trade of its own.")
             new["trigger"] = f"Covered by today's Act Today trim of {t}."
+        elif a.get("type") == "DETERIORATION_WATCH":
+            # Keeps its type and every other key: the exit_signals WATCH capture and
+            # the judgment opinions in app.py read the type, so it is only reworded
+            # at render time (covered_by), never retyped or dropped (plan, sibling).
+            new["action"] = {**a, "covered_by": t}
         elif a.get("type") == "TIGHTEN_ONLY":
             tg = it.get("_u6_tighten")
             if isinstance(tg, dict) and isinstance(tg.get("why"), str):
