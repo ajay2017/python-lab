@@ -12,6 +12,8 @@ streamlit, no I/O; inputs are never mutated) so app.py stays render-only.
   signals_card_line(...)     -> str | None
   catalyst_line(...)         -> str | None
   signals_headline(...)      -> {"head": dict, "line": str | None}
+  signals_no_alerts_note(sells) -> (kind, text)  (Signals' no-alerts line)
+  catalyst_header_label(action) -> str         (Catalyst Watch card header word)
 
 THE None-vs-empty-set CONTRACT (the offline-sentinel rule):
   None       = COULDN'T CHECK (Home not built, the Brief failed, the book changed since
@@ -176,6 +178,40 @@ def catalyst_line(ticker, playbook_action, sells) -> str | None:
             if playbook_action == "HOLD_OR_ADD" else "")
     return (f"🏠 {ticker} has a sell in today's Act Today call (see 🏠 Home for the size). "
             f"Do that first; this card's {label} plan applies to any shares you keep{tail}.")
+
+
+def catalyst_header_label(action) -> str:
+    """The word a 🔔 Catalyst Watch card HEADER shows for a playbook action.
+
+    `CATALYST_ACTION_LABELS` ("Exit", "Reduce", "Watch", "Hold", "Hold or add"), so the
+    header never prints the raw internal value ("HOLD_OR_ADD"; EWSiblings (23)). An
+    unmapped action reads as itself with underscores as spaces, capitalised (a header
+    needs a word; the card line's generic "earnings" fallback would read oddly there)."""
+    a = str(action or "").strip()
+    if a in CATALYST_ACTION_LABELS:
+        return CATALYST_ACTION_LABELS[a]
+    return a.replace("_", " ").capitalize() if a else "Earnings"
+
+
+# 📡 Signals' alerts section when there are no alerts (EWSiblings (25)).
+_ALERTS_CLEAR = "✅ No active alerts — portfolio is within normal parameters."
+_ALERTS_NONE_BUT_ACT_SELL = ("ℹ️ No active alerts on this page — today's Act Today call "
+                             "still has a sell (see 🏠 Home).")
+
+
+def signals_no_alerts_note(sells) -> tuple[str, str]:
+    """`(kind, text)` for 📡 Signals' alerts section on a day with no alerts.
+
+    `sells` = `verified_sells(...)`. A non-empty set -> ("info", …): the green "within
+    normal parameters" all-clear would contradict a live Act Today sell. The text points
+    to 🏠 Home, never "above": when every sold name has its own Signals card, nothing
+    above the alerts section names it (the tagged cards render below). An empty
+    set or None (couldn't check; the unverified caption shows above) -> ("success", the
+    unchanged all-clear)."""
+    s = _as_set(sells)
+    if s:
+        return "info", _ALERTS_NONE_BUT_ACT_SELL
+    return "success", _ALERTS_CLEAR
 
 
 def _join(names) -> str:

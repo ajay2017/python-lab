@@ -544,3 +544,50 @@ def test_module_reads_no_clock_and_does_not_import_streamlit():
            / "act_sell_mention.py").read_text(encoding="utf-8")
     assert "import streamlit" not in src and "utcnow" not in src and "date.today" not in src
     assert "market_time" not in src
+
+
+# ── EWSiblings (23): the 🔔 Catalyst Watch card header word ─────────────────
+
+@pytest.mark.parametrize("action, word", [
+    ("EXIT", "Exit"), ("REDUCE", "Reduce"), ("MONITOR", "Watch"),
+    ("HOLD", "Hold"), ("HOLD_OR_ADD", "Hold or add"),
+])
+def test_catalyst_header_label_maps_every_playbook_action(action, word):
+    assert asm.catalyst_header_label(action) == word
+
+
+def test_catalyst_header_label_never_prints_an_underscore():
+    for a in ("HOLD_OR_ADD", "SOME_NEW_ACTION", "", None):
+        assert "_" not in asm.catalyst_header_label(a)
+    assert asm.catalyst_header_label("SOME_NEW_ACTION") == "Some new action"
+    assert asm.catalyst_header_label(None) == "Earnings"
+
+
+def test_catalyst_header_label_covers_every_action_earnings_advisor_emits():
+    # earnings_advisor's documented action set (its docstring: EXIT | REDUCE |
+    # MONITOR | HOLD | HOLD_OR_ADD) is fully mapped, so no header falls back.
+    assert set(asm.CATALYST_ACTION_LABELS) == {"EXIT", "REDUCE", "MONITOR", "HOLD", "HOLD_OR_ADD"}
+
+
+# ── EWSiblings (25): 📡 Signals' no-alerts line beside an Act Today sell ─────
+
+def test_no_alerts_note_is_info_when_act_today_sells_a_name():
+    kind, text = asm.signals_no_alerts_note({"SNOW"})
+    assert kind == "info"
+    assert "within normal parameters" not in text
+    assert text == ("ℹ️ No active alerts on this page — today's Act Today call still "
+                    "has a sell (see 🏠 Home).")
+    assert "above" not in text   # the tagged cards may render BELOW the alerts
+
+
+@pytest.mark.parametrize("sells", [set(), None, [], "SNOW", {"": None}])
+def test_no_alerts_note_keeps_the_green_all_clear_otherwise(sells):
+    # empty = checked, nothing sold; None / malformed = couldn't check (the
+    # unverified caption shows above) -> the unchanged all-clear.
+    assert asm.signals_no_alerts_note(sells) == (
+        "success", "✅ No active alerts — portfolio is within normal parameters.")
+
+
+def test_no_alerts_note_normalises_tickers():
+    assert asm.signals_no_alerts_note([" snow "])[0] == "info"
+    assert asm.signals_no_alerts_note([" ", None])[0] == "success"

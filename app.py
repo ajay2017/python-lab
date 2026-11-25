@@ -5810,10 +5810,11 @@ def _render_holdings_earnings(port_df, held_data):
                 "HOLD_OR_ADD": "💪",
                 "HOLD":       "✅",
             }.get(_action, "📌")
-            # Display-only label — standardize MONITOR to "Watch" (Consistency #2);
-            # leave the internal _action value (used for comparisons/lookups above
-            # and below) untouched.
-            _act_label = "Watch" if _action == "MONITOR" else _action
+            # Display-only label: one word per action from the shared map (MONITOR ->
+            # "Watch", Consistency #2; HOLD_OR_ADD -> "Hold or add", EWSiblings (23));
+            # the internal _action value (used for comparisons/lookups above and
+            # below) is untouched.
+            _act_label = act_sell_mention.catalyst_header_label(_action)
             _bclr = {
                 "HIGH":   "#ff4444",
                 "MEDIUM": "#ffbb33",
@@ -17154,7 +17155,9 @@ elif page == "📡 Signals & Advice":
         if _sa_offline:
             pass  # offline banner already rendered above
         elif not alert_list:
-            st.success("✅ No active alerts — portfolio is within normal parameters.")
+            # EWSiblings (25): never a green all-clear under a named Act Today sell.
+            _sa_na_kind, _sa_na_text = act_sell_mention.signals_no_alerts_note(_sa_sells)
+            (st.info if _sa_na_kind == "info" else st.success)(_sa_na_text)
         else:
             _CAT_LABELS = {
                 "stop":          "🛑 Stop Loss",
@@ -17511,14 +17514,16 @@ elif page == "📡 Signals & Advice":
                             try:
                                 days_to_earn = (datetime.strptime(str(earn)[:10], "%Y-%m-%d").date() - _today_et()).days
                                 if 0 <= days_to_earn <= 14:
-                                    _check("🔴", f"Earnings in {days_to_earn}d ({earn}) — bearish signal + near earnings = reduce now.", "#ff4444")
+                                    # EWSiblings (2): a fact, not "reduce now" (this checklist
+                                    # sits on add / Hold cards too; the card's own call sizes it).
+                                    _check("🔴", f"Earnings in {days_to_earn}d ({earn}) — a report this close can move the price sharply in one session. Weigh it before acting on this card.", "#ff4444")
                                     earn_flag = True
                                 elif days_to_earn < 0:
                                     # A past date is the LAST report, not an upcoming one —
                                     # never "earnings in -20d … reduce before report".
                                     _check("⚪", f"Last earnings {earn} (past) — next date not yet published.")
                                 elif days_to_earn <= 30:
-                                    _check("🟡", f"Earnings in {days_to_earn}d ({earn}) — consider reducing before report.", "#ffbb33")
+                                    _check("🟡", f"Earnings in {days_to_earn}d ({earn}) — the report lands within a month.", "#ffbb33")
                                     earn_flag = True
                                 else:
                                     _check("✅", f"Next earnings: {days_to_earn}d away — no immediate catalyst pressure.")

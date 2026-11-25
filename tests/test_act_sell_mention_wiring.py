@@ -242,7 +242,8 @@ def test_catalyst_computes_once_and_shows_the_caption_above_the_playbook():
 
 def test_catalyst_header_label_is_unchanged_and_only_gains_the_tag():
     seg = _catalyst_segment()
-    assert '_act_label = "Watch" if _action == "MONITOR" else _action' in seg
+    # EWSiblings (23): the header word comes from the shared map (never raw HOLD_OR_ADD).
+    assert "_act_label = act_sell_mention.catalyst_header_label(_action)" in seg
     assert "{act_sell_mention.card_tag(_pb['ticker'], _pb_sells)}" in seg
     action_box = seg.index("Pre-Earnings Action:")
     line_at = seg.index("act_sell_mention.catalyst_line(")
@@ -362,3 +363,24 @@ def test_the_helper_uses_the_stop_recovery_constant_not_a_literal():
     h = _func_src("_verified_act_today_sells")
     assert "STOP_RECOVERY_MARGIN_PCT" in h
     assert STOP_RECOVERY_MARGIN_PCT is not None
+
+
+def test_signals_no_alerts_branch_reads_the_shared_note():
+    # EWSiblings (25): the no-alerts branch takes its tone + text from
+    # act_sell_mention.signals_no_alerts_note(_sa_sells), never a bare st.success.
+    src = _src()
+    at = src.index("elif not alert_list:")
+    seg = src[at:at + 600]
+    assert "act_sell_mention.signals_no_alerts_note(_sa_sells)" in seg
+    assert '(st.info if _sa_na_kind == "info" else st.success)(_sa_na_text)' in seg
+    assert 'st.success("✅ No active alerts' not in seg
+
+
+def test_signals_checklist_never_says_reduce_now():
+    # EWSiblings (2): the Decision Checklist sits on add / Hold cards too.
+    src = _src()
+    assert "= reduce now" not in src
+    assert "consider reducing before report" not in src
+    assert ("a report this close can move the price sharply in one session. "
+            "Weigh it before acting on this card.") in src
+    assert "— the report lands within a month." in src
