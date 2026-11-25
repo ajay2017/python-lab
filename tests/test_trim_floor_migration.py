@@ -232,3 +232,24 @@ def _review(shares):
 @pytest.mark.parametrize("shares,half", [(1, 0), (0.5, 0), (2, 1), (5, 2), (10, 5), (float("nan"), 0)])
 def test_review_half_shares_is_floored(shares, half):
     assert _review(shares)["half_shares"] == half
+
+
+# -- WeakLargeRound (2026-11-25): the Why never reads "55 < 55" --------------
+
+@pytest.mark.parametrize("score,shown", [
+    (54.7, "54.7"),     # TGT 11-25: rounding would cross the 55 line -> one decimal
+    (54.6, "54.6"),
+    (54.5, "54"),       # Python rounds half to even: "54 < 55" is true, so no decimal
+    (45.0, "45"),       # far from the line -> whole number, as before
+])
+def test_weak_large_why_never_rounds_the_score_onto_the_line(score, shown):
+    port = make_port_df([{
+        "ticker": "AAA", "weight": LARGE_POSITION_WEIGHT_PCT + 2,
+        "score": score, "price": 100.0, "shares": 40,
+    }])
+    items = db_mod._review_list(port, [], [], {}, _TODAY, portfolio_value=_PV)
+    item = find_item(items, "AAA")
+    assert item is not None and item["action"]["type"] == "TRIM_TO_TARGET"
+    assert f"score {shown} < {WEAK_CONVICTION_SCORE}" in item["why"]
+    assert f"score {WEAK_CONVICTION_SCORE} < {WEAK_CONVICTION_SCORE}" not in item["why"]
+    assert f"score {shown}/100" in item["headline"]      # Why and headline agree

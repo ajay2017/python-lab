@@ -3707,7 +3707,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             },
             "why": (
                 f"Weight {weight:.1f}% ≥ {LARGE_POSITION_WEIGHT_PCT:.0f}% AND score "
-                f"{score:.0f} < {WEAK_CONVICTION_SCORE} — largest position with weakest "
+                f"{composite_score_text(score, WEAK_CONVICTION_SCORE)} < {WEAK_CONVICTION_SCORE} "
+                "— largest position with weakest "
                 "conviction. Free capital for higher-conviction names."
             ),
             "trigger": "Already flagged — act before close, don't wait.",
