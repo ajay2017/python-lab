@@ -215,7 +215,7 @@ def test_home_placeholders_are_assigned_only_inside_the_dock():
     dock_nodes = {id(n) for n in ast.walk(dock)}
     names = _assigned_names(tree)
     alert_names = [n for n in names if n.startswith("_alert_ph_")]
-    assert len(alert_names) == 17
+    assert len(alert_names) == 18
     wanted = alert_names + ["_notices_summary_ph", "_dock_pane_prices"]
     for name in wanted:
         assert name in names, f"{name} is never assigned in app.py"

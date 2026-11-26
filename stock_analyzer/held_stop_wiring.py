@@ -231,6 +231,10 @@ def _wrap(ticker: str, res: dict, note: str, avg_cost: float, *, fell_back: bool
         # no_history / unreadable); `_one` sets it on every result it returns. The
         # Home notice tier (`held_stop_carry.notice_tier`) reads it.
         "episode_status": None,
+        # additive (SlidingStop C4): the journal episode's own reason text (None when
+        # absent); `_one` sets it on every result it returns. `stop_basis_notice` words
+        # the Home / premarket notice from it.
+        "episode_reason": None,
     }
 
 
@@ -502,8 +506,21 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
         be read. `apply_carry` never raises and never lowers; a fault in the inputs
         computed here becomes the same FAILED shape (the stop stays, the EOD goes red)."""
         readable = isinstance(carry, dict)
+        row = carry.get(t) if readable else None
+        # additive (SlidingStop C4): what the saved row said, copied for the U3 note
+        # (a full stop below the carried one) in `stop_basis_notice.drop_rows`.
+        # Read-only: it never feeds a stop. Absent when no row exists for this name.
+        seen = None
+        if isinstance(row, dict):
+            seen = {"stop": _f(row.get("stop")), "source_basis": row.get("source_basis"),
+                    "as_of": row.get("as_of"), "stop_set_on": row.get("stop_set_on")}
+
+        def with_seen(r: dict) -> dict:
+            if seen is not None:
+                r["carry_row_seen"] = dict(seen)
+            return r
+
         try:
-            row = carry.get(t) if readable else None
             res = hsc.apply_carry(
                 out, row, as_of=as_of, bars=frame, avg_cost=avg_cost,
                 journal_sig=hsc.journal_buy_sig(trades_df, t),
@@ -516,7 +533,7 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
                 computed=_f(out.get("stop")),
                 note=("The carried stop couldn't be checked, so this stop may be lower than "
                       "on earlier days."))
-            return kept
+            return with_seen(kept)
         cs = res.get("carry")
         state = cs.get("state") if isinstance(cs, dict) else None
         if state == hsc.APPLIED:
@@ -525,12 +542,13 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
             res["label"] = LABEL_CARRIED
         if state in (hsc.APPLIED, hsc.NOT_BINDING) and NOTE_NO_TRAIL in str(res.get("note") or ""):
             res["note"] = str(res["note"]).replace(NOTE_NO_TRAIL, NOTE_NO_TRAIL_CARRIED)
-        return res
+        return with_seen(res)
 
     def tagged(out: dict) -> dict:
-        """`out` (a copy) with the journal episode's status, on every path."""
+        """`out` (a copy) with the journal episode's status and reason, on every path."""
         r = dict(out)
         r["episode_status"] = ep.get("status")
+        r["episode_reason"] = ep.get("reason")
         return r
 
     if ep.get("status") == "ok" and ep.get("start") is not None and ep["start"] >= as_of:

@@ -117,6 +117,7 @@ from stock_analyzer import trade_entry_checks
 from stock_analyzer import journal_broker_match
 from stock_analyzer import pending_import_verdict
 from stock_analyzer import journal_match_view
+from stock_analyzer import stop_basis_notice
 from stock_analyzer import report_display as _rdisp   # not `_rd`: app.py reuses `_rd` as a local (regime rows)
 from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 from stock_analyzer import broker_frame_view as _broker_frame_view
@@ -5439,10 +5440,10 @@ with st.container(key=home_dock.DOCK_KEY):
             # (2026-08-04 UX audit I1; widened 2026-09-25; moved from a collapsed
             # "⚠️ Alerts" expander on Home into this dock tab in C1; the tab the dock
             # opens on since C1c.)
-            # 17 reserved placeholders so every AMBIENT (background-computed, not
+            # 18 reserved placeholders so every AMBIENT (background-computed, not
             # click-triggered) notice on Home visually groups into one section
             # instead of appearing wherever its own compute happens to run.
-            # Declared here, ahead of Home's code, because 3 of the 17 (System
+            # Declared here, ahead of Home's code, because 3 of the 18 (System
             # Trust chip, held-ticker load failures, stale-cache) fire before the
             # original 6-placeholder block's old position — an st.empty() must be
             # assigned before anything can .container() into it.
@@ -5470,7 +5471,7 @@ with st.container(key=home_dock.DOCK_KEY):
                 with st.container(height=home_dock.DOCK_PANE_HEIGHT_PX, border=False):
                     # ── Notices summary (Home redesign P1, docs/plans/home-redesign.md's
                     # 2026-10-06 "P1 + P2 designed" section) — the Needs-a-look line,
-                    # built from what this tab's own 17 fill sites actually render this
+                    # built from what this tab's own 18 fill sites actually render this
                     # run. A LOCAL list in Home (not session_state — a single-render
                     # accumulator, never meant to persist or grow across reruns) feeds
                     # it. Declared before the tab's first placeholder so it renders
@@ -5490,6 +5491,10 @@ with st.container(key=home_dock.DOCK_KEY):
                     # TJDate U8c: the journal-vs-Robinhood line, right under the broker-drift
                     # notice it cross-references. Same declare-early/fill-late pattern.
                     _alert_ph_journalmatch = st.empty()
+                    # SlidingStop C4: the "Stop basis" notice (a journal fault left a name on
+                    # a prior-close stop), after the journal-vs-Robinhood line it relates to.
+                    # Filled where Home builds the held-stop notices (declare-early/fill-late).
+                    _alert_ph_stopbasis = st.empty()
                     # 2026-09-24: moved in from the end of Today's Brief (was rendering
                     # below the Buy Candidates overflow, well past this stack) so this
                     # awareness nudge groups with the other 5 instead of surfacing far
@@ -6070,7 +6075,7 @@ if page == "🏠 Home":
     # (`_notices_summary_ph`, at the top of the dock's Notices tab) is declared
     # in the module-level dock above. A LOCAL list (not session_state — this is
     # a single-render accumulator, never meant to persist or grow across reruns)
-    # feeds the one-line summary, built from what the Notices tab's own 17 fill
+    # feeds the one-line summary, built from what the Notices tab's own 18 fill
     # sites actually render this run.
     _home_notices: list[tuple[str, str]] = []
 
@@ -6630,6 +6635,25 @@ if page == "🏠 Home":
 
     # Held-stop basis (finding #26 C3): a stop built without the full price
     # history, or with no usable start date, is named here -- never silent.
+    # SlidingStop C4: a journal fault that leaves a name on a prior-close stop is also
+    # named in the dock's Notices tab (error = the carry isn't holding it, warning = it
+    # is; never Act Today). Every decision is `stop_basis_notice`'s; this only draws it.
+    try:
+        _sb_rows = stop_basis_notice.rows(_held_stops)
+        _sb_drops = stop_basis_notice.drop_rows(_held_stops)
+        _sb_tier = stop_basis_notice.overall_tier(_sb_rows, _sb_drops)
+        _sb_md = stop_basis_notice.home_markdown(_sb_rows, _sb_drops)
+        if _sb_md:
+            with _alert_ph_stopbasis.container():
+                if _sb_tier == "error":
+                    st.error(_sb_md)
+                elif _sb_tier == "warning":
+                    st.warning(_sb_md)
+                else:
+                    st.info(_sb_md)
+                _home_notice("stopbasis", _sb_tier)
+    except Exception:
+        pass    # a failure here renders nothing and never breaks Home
     _render_held_stop_notices(_held_stops, None if _manual_stops_unreadable else _manual_stops, port_df)
     # One-time "stops recalculated" notice for the first few sessions after go-live.
     _hs_notice = _held_stop_view.recalc_notice(_today_et())

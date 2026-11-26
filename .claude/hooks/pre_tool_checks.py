@@ -1332,6 +1332,12 @@ _GATE_FILES = {
     # forced run before the close passes none); a wrong call seeds a carried stop
     # from a half-finished bar.
     "stock_analyzer/eod_session_closes.py",
+    # Added 2026-11-26 (SlidingStop C4, docs/plans/sliding-stop-c4-spec.md): which
+    # holdings the Home / premarket "Stop basis" notice names (a journal fault leaves
+    # a prior-close stop) and whether it reads error, warning or info; a wrong call
+    # stays silent on a stop that slides down with the price, or says it is held when
+    # it is not.
+    "stock_analyzer/stop_basis_notice.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

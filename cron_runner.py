@@ -98,6 +98,7 @@ from stock_analyzer import held_stop_carry as _held_stop_carry
 from stock_analyzer import held_stop_floor as _held_stop_floor
 from stock_analyzer import held_stop_view as _held_stop_view
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
+from stock_analyzer import stop_basis_notice as _stop_basis_notice
 from stock_analyzer import llm
 from stock_analyzer import news_feed
 from stock_analyzer import risk_window
@@ -677,6 +678,22 @@ def _run_premarket(now_et, force: bool) -> int:
     elif _carry_readable is False:
         _log("held_stop_carry: saved carried stops could not be read; no holding is on a "
              "partial / prior-close stop basis, so nothing was lowered by it.")
+    # Stop basis (SlidingStop C4, U4 / U5): a journal fault that leaves a name on a
+    # prior-close stop. Red only when the carry is NOT holding it (a slow decline would
+    # never trigger that stop); a carried name rides in the footer only. Disclosure
+    # only: alerts that were computed are still sent. Never an Act Today item.
+    _sb_rows = _stop_basis_notice.rows(payload.get("held_stops"))
+    _sb_drops = _stop_basis_notice.drop_rows(payload.get("held_stops"))
+    _sb_fail = _stop_basis_notice.lane_failure(_sb_rows)
+    if _sb_fail:
+        failures.append("held_stop_basis: " + _sb_fail
+                        + " (protective alerts that were computed were still sent)")
+        _log("held_stop_basis: " + _sb_fail)
+    if _sb_rows or _sb_drops:
+        _log("held_stop_basis: " + (", ".join(f"{r['ticker']}={r['tier']}" for r in _sb_rows)
+                                    or "(no journal-fault stop)")
+             + (f"; stop dropped back onto the full history: "
+                f"{', '.join(d['ticker'] for d in _sb_drops)}" if _sb_drops else ""))
     # Per-name degradation is logged above ("engine note: held stop on a limited
     # basis ...") and rides in the email footer below.
     # held-stop notes escape "$" for Streamlit markdown; the email footer is plain text
@@ -685,6 +702,8 @@ def _run_premarket(now_et, force: bool) -> int:
     _recalc_line = _held_stop_view.email_notice_line(now_et.date())
     if _recalc_line:
         _footer_lines.insert(0, _recalc_line)
+    # the Stop-basis lines go after the per-name held-stop notes (they are not repeated)
+    _footer_lines.extend(_stop_basis_notice.email_lines(_sb_rows, _sb_drops))
     # RiskListwiseYoung C2: how much of the book the risk series covered. One log
     # line every run; the footer note only when the beta could not be measured.
     _risk_cov = payload.get("risk_coverage")
