@@ -56,8 +56,11 @@ def test_unknown_state_reads_none():
 
 def test_user_guide_sentence_quotes_the_live_constants():
     text = _APP.read_text(encoding="utf-8")
-    marker = "A holding with fewer than "
-    assert text.count(marker) == 1
-    sentence = text[text.index(marker): text.index("Awareness only", text.index(marker))]
+    # The RiskListwiseYoung sentence is the one naming "(a recent IPO, say)";
+    # CorrYoung added other "A holding with fewer than" sentences (2026-11-25).
+    anchor = "(a recent IPO, say)"
+    assert text.count(anchor) == 1
+    start = text.rindex("A holding with fewer than ", 0, text.index(anchor))
+    sentence = text[start: text.index("Awareness only", start)]
     assert f"fewer than {BETA_MIN_RETURNS} trading days" in sentence
     assert f"more than {PORTFOLIO_RISK_UNMEASURED_MAX_PCT:g}% of your book" in sentence

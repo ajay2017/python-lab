@@ -26,7 +26,7 @@ def test_also_in_review_line_uses_the_constant_not_a_literal():
 
 
 def test_adds_held_block_iterates_entry_held_adds_with_clears_when_and_pending_page():
-    i = _SRC.index("📰 Adds held — entry check (")
+    i = _SRC.index("📰 Adds held — entry check")
     block = _SRC[i - 1800:i + 2600]
     assert "for _eh in entry_held_adds" in block
     assert "Clears when:" in block and "clears_when" in block
@@ -50,7 +50,7 @@ def test_grow_shown_lists_both_new_keys():
 
 
 def test_schema_version_bumped_to_23():
-    assert re.search(r"_SYNTH_SCHEMA_VER = 28\b", _SRC)  # 27 -> 28 by RiskListwiseYoung C4
+    assert re.search(r"_SYNTH_SCHEMA_VER = 29\b", _SRC)  # 28 -> 29 by CorrYoung C4
 
 
 def test_no_direct_nav_page_assignment_added():
@@ -70,9 +70,9 @@ def test_no_direct_nav_page_assignment_added():
 
 
 def test_new_html_block_interpolates_only_a_count():
-    i = _SRC.index("📰 Adds held — entry check (")
+    i = _SRC.index('f"{_safe_html(_eh_head)} ({_safe_html(')
     seg = _SRC[i - 20:i + 80]          # the f-string literal itself
-    assert "{_safe_html(str(len(_eh_rows)))}" in seg and "_eh_line" not in seg and "_eh_tk" not in seg
+    assert "{_safe_html(str(len(_eh_group)))}" in seg and "_eh_line" not in seg and "_eh_tk" not in seg
 
 
 # -- decision_bucket label preference ---------------------------------------
@@ -125,7 +125,7 @@ def test_news_checked_caption_skipped_when_also_in_review_has_the_average():
 
 
 def test_held_analyze_buttons_laid_out_in_columns_rows():
-    i = _SRC.index("📰 Adds held — entry check (")
+    i = _SRC.index("📰 Adds held — entry check")
     block = _SRC[i:i + 4000]
     assert "st.columns(len(_eh_chunk))" in block
     assert "_db_grow_held_add_{_eh_tk}" in block

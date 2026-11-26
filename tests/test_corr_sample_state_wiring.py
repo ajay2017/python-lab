@@ -106,14 +106,56 @@ def test_the_guard_detector_pins_the_state_not_just_the_name():
     assert not _guarded_by(t, "other", "warn thin", "THIN"), "wrong local must not match"
 
 
-@pytest.mark.parametrize("needle,const", [
-    ("observations this app requires", "CORR_SAMPLE_THIN"),
-    ("is **unknown**", "CORR_SAMPLE_UNKNOWN"),
-])
-def test_app_risk_analysis_block_pinned_both_ends(needle, const):
+def _assigned_from_view_state(tree, local):
+    """`<local> = corr_window.view_state(<corr_df>, _corr_cov, _corr_unchecked)['state']`
+    -- CorrYoung C4: the Risk Analysis block takes its state from the ONE pure
+    decision (corr_window.view_state), fed the coverage local exactly."""
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == local for t in n.targets)
+                and isinstance(n.value, ast.Subscript)
+                and isinstance(n.value.value, ast.Name) and n.value.value.id == "_ra_view"):
+            return True
+    return False
+
+
+def _view_assign_args(tree, local):
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == local for t in n.targets)
+                and isinstance(n.value, ast.Call) and "view_state" in _names(n.value.func)):
+            return [a.id if isinstance(a, ast.Name) else None for a in n.value.args]
+    return None
+
+
+def _is_str_eq_test(test, local, value):
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name) and test.left.id == local
+        and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant) and test.comparators[0].value == value
+    )
+
+
+def _guarded_by_state(tree, local, needle, value):
+    for n in ast.walk(tree):
+        if isinstance(n, ast.If) and _is_str_eq_test(n.test, local, value):
+            for sub in n.body:
+                for c in ast.walk(sub):
+                    if isinstance(c, ast.Constant) and isinstance(c.value, str) and needle in c.value:
+                        return True
+    return False
+
+
+def test_app_risk_analysis_block_reads_the_view_state_decision():
+    """CorrYoung C4 (replaces the old `_corr_sample == CORR_SAMPLE_*` pins: the
+    thin state is now 'withheld' and shows only the view_state notes)."""
     t = _tree("app.py")
-    assert _assigned_from_state(t, "_corr_sample")
-    assert _guarded_by(t, "_corr_sample", needle, const)
+    assert _view_assign_args(t, "_ra_view") == ["corr_df", "_corr_cov", "_corr_unchecked"]
+    assert _assigned_from_view_state(t, "_ra_vs")
+    # unknown keeps its existing "unverified" caption
+    assert _guarded_by_state(t, "_ra_vs", "is **unknown**", "unknown")
 
 
 @pytest.mark.parametrize("needle,const", [

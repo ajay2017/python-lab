@@ -1057,6 +1057,11 @@ _APP_ONLY_BRIEF_KWARGS = {
     # known Low in docs/reviews/2026-10-11-review.md, not an email defect.)
     "cluster_add_blocks",
     "pair_add_blocks",
+    # CorrYoung C3b / C4 (2026-11-25): only feeds _add_block_gate's CORR_UNMEASURED
+    # hold on ADD-TO-WINNER suggestions (a thin-sample pause or a holding left out
+    # of the correlation matrix). The cron emails only new_picks, so it cannot
+    # change the email; None (the cron) leaves the Brief byte-identical.
+    "corr_coverage",
     # Disclosure-only: echoed into grow_today["corr_unchecked"] for a caption.
     "corr_unchecked",
     # F-226 personalized-discovery badge (personalized_match); display only.

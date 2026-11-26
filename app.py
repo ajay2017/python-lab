@@ -94,6 +94,7 @@ from stock_analyzer import macro_sector_gate as _macro_sector_gate
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import held_stop_view as _held_stop_view
 from stock_analyzer import risk_window
+from stock_analyzer import corr_window   # CorrYoung C4: view_state / notes / matrix for the correlation screens
 from stock_analyzer import young_holding_stop as _young_holding_stop
 from stock_analyzer import thesis_review_status
 from stock_analyzer import signals_headline
@@ -206,7 +207,6 @@ from stock_analyzer.constants import (
     ECONOMIC_CALENDAR_WINDOW_DAYS,
     CORR_HIGH_PAIRS_THRESHOLD,
     CORR_DANGER_PAIRS_THRESHOLD,
-    CORR_MIN_OBS_TRUSTED,  # imported from constants (not portfolio) so the POLICY_DECISION_IN_RENDER ratchet can see it
     RISK_OFF_VIX_LEVEL,
     RISK_ON_VIX_LEVEL,
     FACTOR_ETF_TICKERS,
@@ -7424,7 +7424,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 28  # bumped: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 29  # bumped: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -7600,6 +7600,10 @@ if page == "🏠 Home":
                         cluster_add_blocks = _cluster_add_blocks,
                         pair_add_blocks = _pair_add_blocks,
                         corr_unchecked  = _corr_unchecked,
+                        # CorrYoung C4 (Q2): the coverage of the SAME correlation read
+                        # (the memoised one on this hit path), so a left-out holding's
+                        # own add is held here exactly as on the MISS build.
+                        corr_coverage   = _corr_cov,
                         # The refreshed bundles this build actually used.
                         news_feed       = _news_feed.home_feed_state(
                             _grow_composites, held_data),
@@ -8052,6 +8056,8 @@ if page == "🏠 Home":
                     cluster_add_blocks = _cluster_add_blocks,
                     pair_add_blocks = _pair_add_blocks,
                     corr_unchecked  = _corr_unchecked,
+                    # CorrYoung C4 (Q2): this run's own correlation coverage.
+                    corr_coverage   = _corr_cov,
                     news_feed       = _news_feed.home_feed_state(
                         st.session_state.get("_grow_composites", {}), held_data),
                     # RiskOffUnchecked (C4): the coverage of the SAME risk build
@@ -8838,13 +8844,51 @@ if page == "🏠 Home":
 
     with _alert_ph_structural.container():
         if _struct_new_clusters:
-            _home_notice("structural", "warning")
             _cluster_scan_date = (_cluster_baseline_state or {}).get("scan_date")
             # G-25: name the tickers whose add-to-winner is actually paused —
             # read from _cluster_add_blocks (the same map Grow Today checks),
             # not re-derived from the cluster tickers, so the banner can
             # never name a ticker Grow Today didn't actually suppress.
-            _cb_blocked_tickers = sorted((_cluster_add_blocks or {}).keys())
+            # CorrYoung C4: an entry tagged "thin" (the sample behind the pair was
+            # too small to measure) is NOT a formed cluster or a standing pair: it
+            # reads as "couldn't be measured" below, never as a finding. The tag is
+            # the entry's own (cluster_add_gate / pair_add_gate), nothing is
+            # re-derived here.
+            _cb_thin_tickers = sorted({
+                _tk for _bm in (_cluster_add_blocks, _pair_add_blocks)
+                for _tk, _e in (_bm or {}).items()
+                if isinstance(_e, dict) and _e.get("sample") == "thin"
+            })
+            _cb_thin_n = next((
+                _e.get("n_obs") for _bm in (_cluster_add_blocks, _pair_add_blocks)
+                for _e in (_bm or {}).values()
+                if isinstance(_e, dict) and _e.get("sample") == "thin"
+                and isinstance(_e.get("n_obs"), int) and not isinstance(_e.get("n_obs"), bool)
+            ), None)
+            _cb_blocked_tickers = sorted(
+                _tk for _tk, _e in (_cluster_add_blocks or {}).items()
+                if not (isinstance(_e, dict) and _e.get("sample") == "thin")
+            )
+            # No trusted entry to name: either every fired entry is thin, or the
+            # sample is withheld (view_state) with no map to read (add_block_map
+            # came back empty / None on a thin sample). Then this is a "couldn't
+            # be measured" hold, never a formed cluster.
+            _cb_withheld = corr_window.view_state(
+                corr_df, _corr_cov, _corr_unchecked)["state"] == "withheld"
+            _cb_thin_only = (not _cb_blocked_tickers
+                             and (bool(_cb_thin_tickers) or _cb_withheld))
+            if _cb_thin_n is None and isinstance(_corr_cov, dict):
+                _cb_cov_n = _corr_cov.get("n_obs")
+                if isinstance(_cb_cov_n, int) and not isinstance(_cb_cov_n, bool):
+                    _cb_thin_n = _cb_cov_n
+            # A thin-only hold is a quiet note, not "Needs a look: Structural
+            # alert" (Notices line and every page's dock read this tier).
+            _home_notice("structural", "caption" if _cb_thin_only else "warning")
+            # Only a TRUSTED standing pair "stays paused" after a scan review.
+            _pair_blocks_trusted = None if _pair_add_blocks is None else {
+                _tk: _e for _tk, _e in _pair_add_blocks.items()
+                if not (isinstance(_e, dict) and _e.get("sample") == "thin")
+            }
             # G-26 — split this cluster's blocked tickers into those that
             # will actually lift once the owner acknowledges the scan vs.
             # those that stay paused regardless (they also sit on a
@@ -8853,14 +8897,30 @@ if page == "🏠 Home":
             # Only the also_pair half is rendered — the liftable half is
             # exactly what the existing banner copy already describes.
             _, _pb_also_pair = pair_add_gate.split_scan_liftable(
-                _cluster_add_blocks, _pair_add_blocks
+                {_tk: _e for _tk, _e in (_cluster_add_blocks or {}).items()
+                 if _tk in _cb_blocked_tickers},
+                _pair_blocks_trusted,
             )
             _cluster_header = (
                 f"🧬 **Structural alert — {len(_struct_new_clusters)} new correlation "
                 f"cluster{'s' if len(_struct_new_clusters) != 1 else ''} formed since your "
                 f"last Structural Scan ({_cluster_scan_date})**  \n"
             )
-            if _cb_blocked_tickers:
+            if _cb_thin_only:
+                # No "new cluster formed" header, no "new pairing" lines, no
+                # review-the-scan instruction or button.
+                _cb_need = corr_window.need_of(_corr_cov)
+                _cb_count = (f"only {_cb_thin_n} shared daily returns"
+                             if _cb_thin_n is not None else "too few shared daily returns")
+                _cb_who = (f"adds to {', '.join(_cb_thin_tickers)} are"
+                           if _cb_thin_tickers else
+                           "adds on any pair that crossed the line are")
+                st.warning(
+                    f"🔍 Correlation couldn't be measured this run ({_cb_count}, {_cb_need} "
+                    f"needed), so {_cb_who} paused until it "
+                    "can be. This is not a finding that they move together."
+                )
+            elif _cb_blocked_tickers:
                 st.warning(
                     _cluster_header +
                     f"Add-to-winner suggestions on {', '.join(_cb_blocked_tickers)} are paused "
@@ -8880,13 +8940,24 @@ if page == "🏠 Home":
                     "Couldn't verify which, if any, add-to-winner suggestions this pauses — "
                     "review the cluster directly in 🧩 Intelligence → 🧬 Structural Scan."
                 )
+            if _cb_thin_tickers and _cb_blocked_tickers:
+                # Mixed (the tag is book-wide today, so this cannot happen yet):
+                # each kind keeps its own text.
+                _cb_need = corr_window.need_of(_corr_cov)
+                _cb_count = (f"only {_cb_thin_n} shared daily returns"
+                             if _cb_thin_n is not None else "too few shared daily returns")
+                st.warning(
+                    f"🔍 Correlation couldn't be measured this run ({_cb_count}, {_cb_need} "
+                    f"needed), so adds to {', '.join(_cb_thin_tickers)} are paused until it "
+                    "can be. This is not a finding that they move together."
+                )
             if _pb_also_pair:
                 st.caption(
                     f"🔗 {', '.join(_pb_also_pair)} will stay paused even after you "
                     "review this cluster — they also sit on a standing danger-tier "
                     "correlated pair (G-26), which this scan doesn't acknowledge."
                 )
-            for _struct_alert_c in _struct_new_clusters:
+            for _struct_alert_c in ([] if _cb_thin_only else _struct_new_clusters):
                 _struct_alert_pairs_str = ", ".join(
                     f"{a}-{b}" for a, b in _struct_alert_c["new_pairs"]
                 )
@@ -8902,7 +8973,9 @@ if page == "🏠 Home":
             # this. _pending_page is the established indirection (see
             # "Navigation safety" in CLAUDE.md) -- never assign nav_page
             # directly, it raises StreamlitAPIException.
-            if st.button("→ 🧩 Intelligence · 🧬 Structural Scan", key="_struct_alert_nav_btn", type="tertiary"):
+            if not _cb_thin_only and st.button(
+                "→ 🧩 Intelligence · 🧬 Structural Scan", key="_struct_alert_nav_btn", type="tertiary"
+            ):
                 st.session_state["_pending_page"] = "🧩 Intelligence"
                 st.rerun()
         elif _struct_new_clusters is None:
@@ -11762,36 +11835,55 @@ if page == "🏠 Home":
 
         # Chunk 7: adds held by the shared entry check (stale data / negative
         # news / earnings). Always open -- a held add must say why.
+        # CorrYoung C4: a row with check == "corr_unmeasured" (the correlation
+        # couldn't be measured, never a finding) sits under its own heading, and
+        # its reason / clears_when are phrased as full sentences, so the renderer's
+        # own "." and "Clears when:" are not doubled.
         if isinstance(entry_held_adds, list) and entry_held_adds:
             _eh_rows = []
+            _eh_corr_rows = []
             for _eh in entry_held_adds:
                 _eh_tk = str(_eh.get("ticker", "")).strip()
                 if not _eh_tk:
                     continue
+                _eh_reason = str(_eh.get("reason") or "entry check")
+                if _eh_reason.endswith("."):
+                    _eh_reason = _eh_reason[:-1]
                 _eh_line = (
-                    f"{_eh_tk} — would qualify as an add; held: {_eh.get('reason') or 'entry check'}."
+                    f"{_eh_tk} — would qualify as an add; held: {_eh_reason}."
                 )
                 if _eh.get("clears_when"):
-                    _eh_line += f" Clears when: {str(_eh['clears_when']).rstrip('.')}."
+                    _eh_cw = str(_eh["clears_when"]).rstrip(".")
+                    if _eh_cw.startswith("when "):
+                        _eh_cw = _eh_cw[len("when "):]
+                    _eh_line += f" Clears when: {_eh_cw}."
                 _eh_others = [
                     str(_h.get("reason")) for _h in ([] if _eh.get("holds") is None else _eh["holds"])[1:]
                     if isinstance(_h, dict) and _h.get("reason")
                 ]
                 if _eh_others:
                     _eh_line += " Also: " + "; ".join(_eh_others) + "."
-                _eh_rows.append((_eh_tk, _eh_line))
-            if _eh_rows:
+                if _eh.get("check") == "corr_unmeasured":
+                    _eh_corr_rows.append((_eh_tk, _eh_line))
+                else:
+                    _eh_rows.append((_eh_tk, _eh_line))
+            for _eh_head, _eh_group in (
+                ("📰 Adds held — entry check", _eh_rows),
+                ("🔗 Adds held — correlation couldn't be measured", _eh_corr_rows),
+            ):
+                if not _eh_group:
+                    continue
                 st.markdown(
                     "<div style='background:#1c1917;border-left:3px solid #f59e0b;"
                     "border-radius:6px;padding:8px 14px;margin:8px 0'>"
                     "<div style='color:#fbbf24;font-weight:700;font-size:0.84em'>"
-                    f"📰 Adds held — entry check ({_safe_html(str(len(_eh_rows)))})</div></div>",
+                    f"{_safe_html(_eh_head)} ({_safe_html(str(len(_eh_group)))})</div></div>",
                     unsafe_allow_html=True,
                 )
-                for _eh_tk, _eh_line in _eh_rows:
+                for _eh_tk, _eh_line in _eh_group:
                     st.caption(_eh_line.replace("$", chr(92) + "$"))
-                for _eh_i in range(0, len(_eh_rows), 4):
-                    _eh_chunk = _eh_rows[_eh_i:_eh_i + 4]
+                for _eh_i in range(0, len(_eh_group), 4):
+                    _eh_chunk = _eh_group[_eh_i:_eh_i + 4]
                     _eh_cols = st.columns(len(_eh_chunk))
                     for _eh_col, (_eh_tk, _eh_line) in zip(_eh_cols, _eh_chunk):
                         if _eh_col.button(f"▶ Analyze {_eh_tk}", key=f"_db_grow_held_add_{_eh_tk}"):
@@ -12023,7 +12115,8 @@ if page == "🏠 Home":
         # describe a check nothing is relying on.
         _corr_unchecked_caption = (
             pair_add_gate.unchecked_disclosure(
-                _corr_unchecked_grow, pair_gate_checked, cluster_gate_checked
+                _corr_unchecked_grow, pair_gate_checked, cluster_gate_checked,
+                corr_coverage=_corr_cov,   # CorrYoung C4: the reason per name
             ) if tone == "bull" else None
         )
         if _corr_unchecked_caption:
@@ -19020,8 +19113,49 @@ elif page == "🔗 Risk Analysis":
         # `is None` FIRST: _corr_df_cache can be absent when _last_held_data was
         # published by _rebuild_portfolio_after_trade without a Home visit, and
         # None.empty would raise. Mirrors every other consumer of this key.
-        if corr_df is None or corr_df.empty:
-            st.info("Need at least 2 holdings with price history to compute correlations.")
+        # CorrYoung C4: ONE decision (corr_window.view_state) says what this
+        # section may show. withheld = the sample is too thin to measure (or
+        # fewer than 2 holdings are old enough to pair): only the notes, no
+        # tiles, pair cards, classification or heatmap. partial = a young
+        # holding is left out and named; the rest is measured as before.
+        _ra_view = corr_window.view_state(corr_df, _corr_cov, _corr_unchecked)
+        _ra_vs   = _ra_view["state"]
+        if _ra_vs == "withheld":
+            _ra_notes = _ra_view["notes"]
+            st.warning(_ra_notes[0])
+            for _ra_n in _ra_notes[1:]:
+                st.caption(_ra_n)
+            # The util unchecked note is not used here (its "other holdings
+            # only" tail is false when no pair is shown); only a failed price
+            # download, named in plain words.
+            _ra_rest = _ra_view["unchecked_rest"]
+            if _ra_rest:
+                st.caption(
+                    "Price history couldn't be loaded this run for "
+                    + ", ".join(_ra_rest) + "."
+                )
+        elif corr_df is None or corr_df.empty:
+            # Holdings with a usable price history in held_data (the producer's own
+            # input): a producer that published nothing for 2+ of them failed.
+            # (same frame the matrix reads: "df", else "history")
+            _ra_frames = [
+                (_hd.get("df") if _hd.get("df") is not None else _hd.get("history"))
+                for _hd in held_data.values() if isinstance(_hd, dict)
+            ]
+            _ra_priced = sum(
+                1 for _fr in _ra_frames
+                if isinstance(_fr, pd.DataFrame) and not _fr.empty and "Close" in _fr.columns
+            )
+            if _corr_cov is None and _corr_unchecked is None and _ra_priced >= 2:
+                # The producer published nothing for a book with 2+ priced
+                # holdings: it crashed (or Home hasn't built one), which is not
+                # "too few holdings".
+                st.info(
+                    "The correlation reading couldn't be built this run — open 🏠 Home "
+                    "and click 🔄 Refresh Signals."
+                )
+            else:
+                st.info("Need at least 2 holdings with price history to compute correlations.")
         else:
             dc1, dc2, dc3 = st.columns(3)
             # None on a non-empty matrix when no pair has a finite correlation
@@ -19037,14 +19171,11 @@ elif page == "🔗 Risk Analysis":
             st.caption(f"Classification: **{_div_label}** — weighted avg pairwise return correlation (actual sample window shown below)")
 
             # ── How much data is actually behind that number ──────────────────
-            # correlation_matrix() drops rows LISTWISE across every ticker, so
-            # the whole matrix runs on the intersection of all histories — one
-            # degraded fetch thins the sample for every pair at once, and a thin
-            # sample produces near-zero correlations that read as real
-            # diversification. Surfaced because "Well Diversified" is a claim
-            # the user acts on. Awareness only; gates nothing.
-            _corr_sample = correlation_sample_state(_corr_cov)
-            if _corr_sample == CORR_SAMPLE_UNKNOWN:
+            # Each pair is measured on ITS OWN shared days (a holding with too
+            # little history is left out and named, not allowed to thin every
+            # pair). Surfaced because "Well Diversified" is a claim the user
+            # acts on. Awareness only; gates nothing.
+            if _ra_vs == "unknown":
                 st.caption(
                     "Sample size behind these correlations is **unknown** this session — "
                     "reload from 🏠 Home to recompute it. Treat the figures above as "
@@ -19052,33 +19183,27 @@ elif page == "🔗 Risk Analysis":
                 )
             else:
                 _cov_txt = (
-                    f"Computed on **{_corr_cov['n_obs']} daily returns** shared by all "
-                    f"{_corr_cov['n_tickers']} of your {len(held_data)} holdings with "
-                    "usable price history"
+                    "Computed on each pair's own shared days: the thinnest pair has "
+                    f"{_corr_cov['n_obs']} daily returns"
                 )
-                if _corr_cov["shortest_len"] < _corr_cov["longest_len"]:
-                    _cov_txt += (
-                        f" — shortest is **{_corr_cov['shortest_ticker']}** "
-                        f"({_corr_cov['shortest_len']} bars vs {_corr_cov['longest_len']} "
-                        "for the longest), which is usually what caps the sample"
-                    )
-                if _corr_sample == CORR_SAMPLE_THIN:
-                    st.error(
-                        f"⛔ {_cov_txt}. That is below the {CORR_MIN_OBS_TRUSTED} "
-                        "observations this app requires anywhere else before it will "
-                        "report an empirical correlation, so the correlations above — "
-                        "and the diversification score and classification derived from "
-                        "them — are **not reliable**. A thin sample pushes correlations "
-                        "toward zero, which shows up as diversification you may not have."
-                    )
-                else:
-                    st.caption(f"{_cov_txt}.")
+                if _corr_cov.get("n_obs_max") is not None:
+                    _cov_txt += f", the longest {_corr_cov['n_obs_max']}"
+                st.caption(f"{_cov_txt}.")
+                for _ra_n in _ra_view["notes"]:
+                    st.caption(_ra_n)   # partial: the left-out holding(s), named once
 
-            # F-290 — a DIFFERENT gap than the coverage note above: that block
-            # describes the sample behind a matrix that includes every held
-            # ticker; this names a held ticker that never entered the matrix
-            # at all because its price history failed to load this run.
-            _corr_unchecked_note = correlation_unchecked_note(_corr_unchecked)
+            # F-290 — a DIFFERENT gap than the coverage note above: this names a
+            # held ticker that never entered the matrix at all because its
+            # price history failed to load this run. In the partial state only
+            # those names (never the left-out holdings, already named above).
+            if _ra_vs == "partial":
+                _ra_unch = _ra_view["unchecked_rest"]
+                # None (couldn't check) with the coverage would name the left-out
+                # holdings a second time, so the coverage is passed only with a list.
+                _corr_unchecked_note = correlation_unchecked_note(
+                    _ra_unch, None if _ra_unch is None else _corr_cov)
+            else:
+                _corr_unchecked_note = correlation_unchecked_note(_corr_unchecked, _corr_cov)
             if _corr_unchecked_note:
                 st.caption(_corr_unchecked_note)
             # 2026-10-13 — a holding whose price never moved IS a matrix column
@@ -19108,12 +19233,17 @@ elif page == "🔗 Risk Analysis":
                 if _ra_corr_ok:
                     st.success("✅ No highly correlated pairs — your portfolio is well diversified.")
                 else:
+                    # `_ra_corr_ok` above is decided on the raw list. The WORDING in the
+                    # partial state uses only the names the left-out note above
+                    # has not already given (a young holding is named once).
+                    _ra_wn_list = _ra_view["unchecked_rest"] if _ra_vs == "partial" else _corr_unchecked
                     st.info(
                         "No pair crossed the correlation threshold, but that isn't a verified "
                         "result. "
                         + (correlation_record_withheld_note(
-                            _corr_unchecked, _corr_cov,
-                            subject="This “no correlated pairs” reading isn't verified") or "")
+                            _ra_wn_list, _corr_cov,
+                            subject="This “no correlated pairs” reading isn't verified")
+                           or "A holding was left out of this reading (named above).")
                     )
 
             tickers_list = corr_df.index.tolist()
@@ -20947,8 +21077,8 @@ elif page == "🔗 Risk Analysis":
                 elif _fs_sample == CORR_SAMPLE_THIN:
                     _fs_msg += (
                         f" Their mean pairwise correlation reads **{_fs_corr:+.2f}**, but "
-                        f"it rests on only {_corr_cov['n_obs']} shared daily returns — too "
-                        "thin to trust, so draw no conclusion from it either way "
+                        f"its thinnest pair rests on only {_corr_cov['n_obs']} shared daily "
+                        "returns — too thin to trust, so draw no conclusion from it either way "
                         "(see 📊 Dashboard)."
                     )
                 elif _fs_sample == CORR_SAMPLE_UNKNOWN:
@@ -20979,6 +21109,21 @@ elif page == "🔗 Risk Analysis":
                         "not look like the driver here. The likelier explanation is that "
                         "the stops themselves sit inside the range of a shock this size, "
                         "so most of them break regardless."
+                    )
+                # CorrYoung C4: a stop name left out of the matrix (too little
+                # price history) is named, not dropped silently from the reading.
+                _fs_lo = [
+                    x for x in corr_window.left_out_items(_corr_cov)
+                    if str(x["ticker"]).strip().upper() in _fs_up
+                ]
+                if _fs_lo:
+                    _fs_lo_names = ", ".join(str(x["ticker"]).strip().upper() for x in _fs_lo)
+                    _fs_msg += (
+                        f" {_fs_lo_names} {'is' if len(_fs_lo) == 1 else 'are'}n't in the "
+                        "correlation reading: "
+                        + corr_window.unconfirmed_reasons(_fs_lo, need=corr_window.need_of(_corr_cov))
+                        + ", so the clustering read above leaves "
+                        + ("it" if len(_fs_lo) == 1 else "them") + " out."
                     )
                 st.warning(_fs_msg)
 
@@ -21354,8 +21499,21 @@ elif page == "🧩 Intelligence":
             st.session_state["_pending_page"] = "🔗 Risk Analysis"
             st.rerun()
         _pi_corr_df = st.session_state.get("_corr_df_cache")
+        # A-M3: "no clusters" is only a finding on a fully-measured matrix.
+        _pi_unchecked = st.session_state.get("_corr_unchecked_cache")
+        _pi_cov = st.session_state.get("_corr_coverage_cache")
+        # CorrYoung C4: the same view decision as 🔗 Risk Analysis. withheld = a
+        # sample too thin to measure (or fewer than 2 holdings old enough to
+        # pair): only the notes, no clusters. partial = a young holding is left
+        # out and named; the clusters are the counted holdings'.
+        _pi_view = corr_window.view_state(_pi_corr_df, _pi_cov, _pi_unchecked)
         if _pi_corr_df is None or (hasattr(_pi_corr_df, "empty") and _pi_corr_df.empty):
-            st.info("Correlation data isn't available this session — revisit 🏠 Home to compute it.")
+            if _pi_view["state"] == "withheld":
+                st.warning(_pi_view["notes"][0])
+                for _pi_n in _pi_view["notes"][1:]:
+                    st.caption(_pi_n)
+            else:
+                st.info("Correlation data isn't available this session — revisit 🏠 Home to compute it.")
             if st.button("→ Home", key="_pi_clusters_home_btn", type="tertiary"):
                 st.session_state["_pending_page"] = "🏠 Home"
                 st.rerun()
@@ -21363,20 +21521,29 @@ elif page == "🧩 Intelligence":
             _pi_weights_map = dict(zip(_pi_pdf["Ticker"], _pi_pdf["Weight (%)"]))
             _pi_clusters = portfolio_intelligence.correlation_clusters(_pi_corr_df, _pi_weights_map)
 
-            # A-M3: "no clusters" is only a finding on a fully-measured matrix.
-            _pi_unchecked = st.session_state.get("_corr_unchecked_cache")
-            _pi_cov = st.session_state.get("_corr_coverage_cache")
             _pi_corr_ok = correlation_claim_verified(_pi_unchecked, _pi_cov)
-            if not _pi_clusters:
+            if _pi_view["state"] == "withheld":
+                st.warning(_pi_view["notes"][0])
+                for _pi_n in _pi_view["notes"][1:]:
+                    st.caption(_pi_n)
+            elif not _pi_clusters:
                 if _pi_corr_ok:
                     st.success("No correlated clusters detected — your positions move fairly independently of each other.")
                 else:
+                    # `_pi_corr_ok` is decided on the raw list; the wording in the
+                    # partial state leaves out the names the left-out note (below)
+                    # already gives, so a young holding is named once.
+                    _pi_wn_list = (_pi_view["unchecked_rest"]
+                                   if _pi_view["state"] == "partial" else _pi_unchecked)
                     st.info(
                         "No cluster crossed the threshold, but that isn't a verified result. "
                         + (correlation_record_withheld_note(
-                            _pi_unchecked, _pi_cov,
-                            subject="This “no correlated clusters” reading isn't verified") or "")
+                            _pi_wn_list, _pi_cov,
+                            subject="This “no correlated clusters” reading isn't verified")
+                           or "A holding was left out of this reading (named below).")
                     )
+                    for _pi_n in _pi_view["notes"]:
+                        st.caption(_pi_n)
             else:
                 for _pi_c in _pi_clusters:
                     _pi_names   = ", ".join(_pi_c["tickers"])
@@ -21395,6 +21562,8 @@ elif page == "🧩 Intelligence":
                     "usually trimming within your biggest cluster — composite score decides "
                     "**which** name, not correlation alone."
                 )
+                for _pi_n in _pi_view["notes"]:
+                    st.caption(_pi_n)   # partial: the left-out holding(s), named once
 
             # ── Correlation Under Stress (docs/plans/correlation-under-stress.md) ──
             # Extends this tab below the calm clusters above with the SAME
@@ -25169,6 +25338,12 @@ elif page == "🏆 Health":
                 f'</div>',
                 unsafe_allow_html=True,
             )
+
+    # CorrYoung C4: the diversification score is the rest of the book's; name the
+    # young holding left out of it (a key only when something was left out).
+    _ph_lo_note = _ph_subs["diversification"]["detail"].get("left_out_note")
+    if _ph_lo_note:
+        st.caption(f"🔗 Diversification: {_ph_lo_note}")
 
     st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
 
@@ -30226,22 +30401,39 @@ elif page == "📈 Analysis":
     # Correlation matrix
     if len(results) >= 2:
         with st.expander("📐 Correlation Matrix"):
-            close_df = pd.DataFrame(
-                {t: r["df"]["Close"] for t, r in results.items()}
-            ).dropna()
-            corr = close_df.pct_change().dropna().corr()
-            hfig = go.Figure(go.Heatmap(
-                z=corr.values, x=corr.columns.tolist(), y=corr.index.tolist(),
-                colorscale="RdYlGn", zmin=-1, zmax=1,
-                text=[[f"{v:.2f}" for v in row] for row in corr.values],
-                texttemplate="%{text}",
-            ))
-            hfig.update_layout(
-                height=350, template="plotly_dark",
-                title="Return Correlation (>0.8 = concentrated risk)",
-                margin=dict(l=0, r=0, t=40, b=0),
+            # CorrYoung C4: each pair on ITS OWN shared session days, and a ticker
+            # with too little history is left out and named (the old listwise
+            # dropna measured every pair on the youngest ticker's few days).
+            corr = corr_window.corr_matrix(results)
+            # Not left_out_note: its "not part of the score" tail is about the
+            # portfolio score, which this matrix has none of.
+            _an_cov = corr_window.corr_coverage(results)
+            _an_lo_items = corr_window.left_out_items(_an_cov)
+            _an_lo_note = (
+                "Not in this matrix: " + risk_window.holdings_phrase(
+                    _an_lo_items, need=corr_window.need_of(_an_cov), with_size=False) + "."
+                if _an_lo_items else None
             )
-            st.plotly_chart(hfig, width="stretch")
+            if corr.empty:
+                st.caption(
+                    "Correlations can't be measured: fewer than 2 of these tickers have "
+                    "enough price history to pair."
+                )
+            else:
+                hfig = go.Figure(go.Heatmap(
+                    z=corr.values, x=corr.columns.tolist(), y=corr.index.tolist(),
+                    colorscale="RdYlGn", zmin=-1, zmax=1,
+                    text=[[f"{v:.2f}" for v in row] for row in corr.values],
+                    texttemplate="%{text}",
+                ))
+                hfig.update_layout(
+                    height=350, template="plotly_dark",
+                    title="Return Correlation (>0.8 = concentrated risk)",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(hfig, width="stretch")
+            if _an_lo_note:
+                st.caption(_an_lo_note)
 
     # Analysis summary
     with st.expander("📋 Analysis Summary"):
@@ -46774,14 +46966,14 @@ Once your trades are logged and reconciled (see *First run* above), your daily r
             st.markdown(
                 """
 **The status pill beside "Portfolio Command Center"** (near the top of Home) sums up the book's risk in one word:
-- **Action Required** (red) — a danger-level alert is active, or the diversification score is below the app's moderate bound.
+- **Action Required** (red) — a danger-level alert is active, or the diversification score is below the app's moderate bound (the diversification score only raises Home's banner when it rests on enough shared days).
 - **Monitor** (amber) — a warning-level alert is active, or diversification is below the well-diversified bound.
 - **All Clear** (green) — neither of the above, *and* the correlation check covered every holding on a usable sample.
 - **Check Incomplete** (grey) — no alert or diversification problem was found, but the app couldn't verify the whole book: the correlation reading was unavailable, a holding was missing from the correlation matrix, or the shared price history was too thin to measure. A one-holding portfolio always reads this — there are no pairs to check. It is not a warning, it means *not verified*, so the app won't claim All Clear. Red and amber still fire from a partial check.
 
 The Home brief is split into **offense** (left) and **defense** (right).
 
-**Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape. An add to a holding gets the same entry check as a new buy: it's held — and listed under **"📰 Adds held — entry check"** with the reason and what clears it — when the holding's news averages −0.15 or worse, earnings are within 7 days, or its data is stale. A holding that already has a card today (a trim, an exit, a Monitoring watch) isn't suggested as an add, and a line names it. An add is sized so the whole position stays at or under 15% of the book and under 25% of your net capital — what you already hold counts toward both; if there's no room left, the name is listed under **"🔒 Add Suppressed — Position Already at the Cap"**. A single mild negative headline doesn't pause an add on its own: the add card says "📰 Also in Review: …" so you see it.
+**Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape. An add to a holding gets the same entry check as a new buy: it's held — and listed under **"📰 Adds held — entry check"** with the reason and what clears it — when the holding's news averages −0.15 or worse, earnings are within 7 days, or its data is stale. An add whose correlation couldn't be measured (the holding is too new to pair, or the shared sample is too small) is held too, under **"🔗 Adds held — correlation couldn't be measured"**. A holding that already has a card today (a trim, an exit, a Monitoring watch) isn't suggested as an add, and a line names it. An add is sized so the whole position stays at or under 15% of the book and under 25% of your net capital — what you already hold counts toward both; if there's no room left, the name is listed under **"🔒 Add Suppressed — Position Already at the Cap"**. A single mild negative headline doesn't pause an add on its own: the add card says "📰 Also in Review: …" so you see it.
 
 **About the suggested share count.** It comes from the same sizing rule the whole app uses: risk 1.5% of the book on the trade, with the stop set 2× ATR below price, then **cap the position at the 15% single-name ceiling**. When your account is leveraged with a fresh cash balance, a second, separate ceiling also applies — 25% of your net capital (equity after margin debit), not just 15% of gross book — since leverage can make a "small" position a much bigger bet against the money you actually own. Net capital here is the **lower of your journal's figure and Robinhood's own positions** (see 💰 Account → Net capital check), so it can only make a size smaller. If the app does not know your portfolio value yet in this session — for example you opened 📈 Analysis or 📋 Watchlist directly without visiting 🏠 Home — it will **propose no share count at all** rather than guess against an assumed account size, and will say so. The card will disclose either ceiling if it binds, and both together if both do. Three things follow. First, when a cap binds, the card says so and tells you what the uncapped risk-budget size would have been — it never quietly shrinks a number on you. Second, **a suggested size is a per-idea maximum, not a portfolio plan**: at 15% apiece a book only funds about six full positions, so the sizes on screen are not meant to be taken all at once. Third, the app will suggest **no size at all** — and say which of the two reasons applies — when a single share would already exceed the ceiling (that's an account-size limit; changing the stop won't fix it) or when the price has fallen to or below the name's ATR stop (no room between entry and stop to size against). It never leaves the size line blank without a reason. On 📋 Watchlist only a **Ready to Enter** row gets a share count; a row that isn't ready says "No size yet", and one for a name you already hold points you to Grow Today's add call on 📈 Analysis.
 
@@ -47255,8 +47447,8 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, a **🧭 Sector Gaps** pointer (sectors you're underweight/unheld that could genuinely diversify this book, linking to the full Diversification Advisor), and Analytics (relative strength, sector rotation, rankings, and a **Portfolio vs. S&P 500** real-sector benchmark tilt — uses each holding's actual market sector, not this app's thematic groupings) for your current holdings.
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🎯 My Edge** — six retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side and Exit Signal Response patterns), **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost), and **🧭 Self vs Engine** (Buy-side and Sell-side alpha comparing your own calls to the engine's). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere. The Benchmark Mirror's figures are live (current prices); the close-based answer to "am I ahead of SPY" is on 🧾 Summary.
-- **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. A holding with fewer than 20 trading days since its first close (a recent IPO, say) is left out of the portfolio risk figures and its weight is spread over your other holdings; a note under the dashboard names it. If such holdings add up to more than 10% of your book, the figures read unavailable instead of being computed on too little of it. Awareness only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap. The **beta card**, when your portfolio beta breaches its target, states the exact dollar figure needed to trim your top contributor back to target (not a rough percentage), discloses whether that trim also improves or worsens your margin/leverage exposure (a margin-funded ADD can make the beta *number* look better while your actual exposure against your equity gets *worse* — the app now says so explicitly), and — inside a **"📊 Rank Defensive-Beta Candidates"** expander — ranks real defensive-sector candidates by how much beta relief they'd actually provide, disclosing (never hiding) when a candidate is below the app's normal Buy gate or structurally can't reach target at all. It never issues a buy call below that gate — ranking and disclosure only, the decision stays yours.
-- **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English, and (further down the same tab) a **Hidden Same-Bet Detector** — an on-demand check for positions that look diversified by sector and price correlation but secretly bet on the same underlying assumption, classifying each finding as unverified/possible/confirmed against the correlation data above. **🧭 Signal Coherence** (a 5th tab) mechanically joins three existing per-ticker surfaces — the composite score's own direction, the weekly Thesis Review status, and the most recent Bull/Bear debate verdict — and surfaces only names where they genuinely disagree; no synthesized explanation, just the raw signals side by side. Explicitly directional, not precise. Awareness only — never gates or reorders; composite score still decides which name to act on.
+- **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. A holding with fewer than 20 trading days since its first close (a recent IPO, say) is left out of the portfolio risk figures and its weight is spread over your other holdings; a note under the dashboard names it. If such holdings add up to more than 10% of your book, the figures read unavailable instead of being computed on too little of it. A holding with fewer than 20 trading days since its first close is left out of the correlation pairs, clusters and diversification score and named under them; each other pair is measured on all the days both stocks traded. When even that leaves too few shared days, no pairs, clusters or score are shown and adds that crossed the line stay paused until correlation can be measured (the pause lives in Grow Today). Awareness only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap. The **beta card**, when your portfolio beta breaches its target, states the exact dollar figure needed to trim your top contributor back to target (not a rough percentage), discloses whether that trim also improves or worsens your margin/leverage exposure (a margin-funded ADD can make the beta *number* look better while your actual exposure against your equity gets *worse* — the app now says so explicitly), and — inside a **"📊 Rank Defensive-Beta Candidates"** expander — ranks real defensive-sector candidates by how much beta relief they'd actually provide, disclosing (never hiding) when a candidate is below the app's normal Buy gate or structurally can't reach target at all. It never issues a buy call below that gate — ranking and disclosure only, the decision stays yours.
+- **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. A holding with fewer than 20 trading days of history is left out of the clusters and named under them, and when too few shared days remain no clusters are shown. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English, and (further down the same tab) a **Hidden Same-Bet Detector** — an on-demand check for positions that look diversified by sector and price correlation but secretly bet on the same underlying assumption, classifying each finding as unverified/possible/confirmed against the correlation data above. **🧭 Signal Coherence** (a 5th tab) mechanically joins three existing per-ticker surfaces — the composite score's own direction, the weekly Thesis Review status, and the most recent Bull/Bear debate verdict — and surfaces only names where they genuinely disagree; no synthesized explanation, just the raw signals side by side. Explicitly directional, not precise. Awareness only — never gates or reorders; composite score still decides which name to act on.
 - **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; signal-driven actions; the headline at the top states what to do: a red **⛔ Act first** when a stop is breached, naming Today's Brief only when the Brief lists that breach (otherwise "the stop rule says sell at the next open"); an ℹ️ note, a 🟢 alert line and no danger count when the live price has recovered above the stop; an amber **🔴 danger alerts below — review each** for other danger alerts; and the green all-clear only when there is nothing to act on and no warning) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations, plus a trim card for a danger-tier correlated pair you hold, when both names are scored). If the correlation sample behind a pair is too thin or couldn't be confirmed, no trim is recommended — the pair appears under **Correlated pairs — trim withheld** instead, and the Daily Brief keeps add-to-winner suggestions on both names paused. Likewise the green "well balanced" line only shows when the correlation check behind it is verified. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it, each dismissible for the session (a dismissed alert reappears if the target/floor changes or a new one fires, so nothing is silently suppressed permanently). Note: weight-*target* rebalancing (drift vs. a target allocation %) lives on 🥧 Portfolio Overview's ⚖️ Rebalancing tab — a different feature from this page's score-driven actions.
 - **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**; pick the trade date and, when asked, the fill time in Eastern Time from Robinhood. Before 9:30 AM ET on a trading day the date starts blank, so you choose between yesterday's after-hours fill and today's pre-market fill, and the fill time is required. During market hours a blank time records the moment you press Record. Type Robinhood's fill time if you have it; if you don't, leave it blank rather than estimate, because the app treats a blank as unknown and stays on the safe side. If you already logged that ticker today, the confirm card shows the order the trades will be stored in. On a past date the time is optional (blank places it at 4:00 PM ET) unless you already logged that ticker that day. The confirm card spells out the date and time it will record ("Logging as …"), asks for a tick on a weekend or holiday date or a time outside regular hours (extended-hours fills are fine), and refuses a time in the future or a SELL that would be replayed before the BUY covering it. It also checks the price against that day's trading range ("so far" for today until the close) and asks for the same tick when it sits outside; it says so when it couldn't check (no price data, an older trade, or a stock split since). It compares the entry with Robinhood fills still waiting in Pending Imports: an identical fill that day is linked to the entry and leaves Pending Imports once you confirm; the same size at a different price, or the same order dated a different day, asks for the tick. With nothing to flag it tells you whether Robinhood's fills for that date had synced yet; it never says the entry matches Robinhood. A wrong date can't auto-match your broker's own record and keeps showing up as an unmatched transaction in 💰 Account → Broker Sync. Backdating a Buy shows the same "🔮 Retrospective Pre-Mortem" framing broker-imported trades use — the pre-mortem is still required, just honestly reframed since the trade already happened), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
 - **🪞 Trade Review** — behavioural retrospective on every recorded trade, over a selectable look-back window (2wk/30d/60d/90d/all-time). Categorizes each trade *App-Followed* (aligned with the app's recommendation), *Deviated* (external info/discretionary), or *Discretionary* (neither recorded) — inferred from the Journal columns, no manual tagging — and flags panic-window trades (made on a day the S&P 500 closed ≤ -1.5%) plus a vs-SPY benchmark per trade. **💡 What the Data Says** turns the raw numbers into a verdict, concrete findings, and one next move. **📈 Performance Trends** charts cumulative P&L and rolling win rate over the window. **⚖ Risk Discipline** checks position-size discipline against your single-name ceiling and sector mix. **🎯 Course-Correction Recommendations** and a **📜 Per-Trade Scorecard** round it out for drilling into individual trades.

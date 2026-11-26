@@ -269,9 +269,39 @@ def left_out_note(coverage) -> str | None:
         return "Correlations were measured without some holdings."
 
 
+def _fewer_than_two_counted(coverage) -> bool:
+    """True when the coverage reads "nothing to pair": no shared returns (n_obs 0),
+    some holding left out, and fewer than 2 holdings counted (n_tickers, the
+    holdings with usable prices, minus the short-history ones). The same rule as
+    util.correlation_record_withheld_note. An unreadable n_tickers is NOT read as
+    "fewer than 2" (never claim it unverified). Never raises."""
+    try:
+        if not isinstance(coverage, dict):
+            return False
+        n = coverage.get("n_obs")
+        if isinstance(n, bool) or not isinstance(n, (int, float)) or int(n) != 0:
+            return False
+        items = left_out_items(coverage)
+        nt = coverage.get("n_tickers")
+        if not items or not isinstance(nt, int) or isinstance(nt, bool):
+            return False
+        return nt - sum(1 for x in items if x.get("reason") == "short_history") < 2
+    except Exception:
+        return False
+
+
 def thin_note(coverage) -> str:
     """Plain-text note for a sample too thin to measure. Never says the holdings
-    move together; names the shared-return count and the floor. Never raises."""
+    move together; names the shared-return count and the floor, or, when fewer than
+    2 holdings are old enough to pair at all, says that instead of "only 0 shared
+    daily returns". Never raises."""
+    if _fewer_than_two_counted(coverage):
+        return (
+            "⛔ Correlations can't be measured: fewer than 2 holdings have enough "
+            "price history to pair, so no pairs, clusters or diversification score "
+            "are shown. Adds on the holdings left out stay paused until they can be "
+            "measured."
+        )
     n = coverage.get("n_obs") if isinstance(coverage, dict) else None
     try:
         count = f"only {int(n)} shared daily returns"
