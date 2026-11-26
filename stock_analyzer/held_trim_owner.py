@@ -17,13 +17,21 @@ render-only:
       being sold, so keying on it would hide a real ceiling card
       (memory card_ticker_semantics). Also never `critical_news`,
       `premortem_triggered`, a macro act item, or a WATCH / HOLD review item.
-  brief_sell_tickers(act_today, review) -> set[str]   (upper-cased)
-  tuneup_single_name_disposition(...)  -> {"state": brief_owns|earnings_note|show, "text"}
-  rebalancer_trim_disposition(...)     -> same shape
+  brief_sell_tickers(act_today, review) -> set[str]   (upper-cased; the key set of
+      `act_sell_cover.sell_cover_summary`)
+  tuneup_single_name_disposition(..., need) -> {"state": brief_owns|partial|unknown|
+                                                earnings_note|show, "text"}
+  rebalancer_trim_disposition(..., need)    -> same shape
   book_inputs(port_df, ticker)         -> {"weight_pct", "n_positions", "shares"}  (EW C3)
   view_sell_tickers(view)              -> set[str] | None  (None = Act Today view offline)
-  reconcile_tuneup(cards, deferred, view_sells) -> {"cards", "deferred_texts"}
-  risk_analysis_single_name_line(...)  -> {"state", "tier", "text"}  (🔗 Risk Analysis)
+  reconcile_tuneup(cards, deferred, view_cover) -> {"cards", "deferred_texts"}
+  risk_analysis_single_name_line(..., need) -> {"state", "tier", "text"}  (🔗 Risk Analysis)
+
+DeferSizeBlind (docs/plans/defer-size-blind.md): a surface defers to an Act sell only
+when that sell COVERS its own trim (`act_sell_cover.cover_state`); a sell that is
+smaller, or whose size is unknown, leaves the card in place with a "do that sale first"
+line (state `partial` / `unknown`). The `sell_cover` / `view_cover` arguments are cover
+maps ({TICKER: {"exit", "shares"}}); None (or anything else) defers nothing.
 
 `show` is the fail-toward-the-sell state: with no Brief sell on the name (or the
 Brief did not run, or `reduce_calls_ok` is False) the standing card stays.
@@ -32,7 +40,7 @@ from __future__ import annotations
 
 import math
 
-from stock_analyzer import trim_sizing
+from stock_analyzer import act_sell_cover, trim_sizing
 from stock_analyzer.constants import SINGLE_NAME_CEILING
 from stock_analyzer.decision_bucket import EXIT_KINDS, _ACT_REVIEW_TYPES
 
@@ -63,35 +71,35 @@ def brief_sell_names_ticker(item, ticker) -> bool:
 
 
 def brief_sell_tickers(act_today, review) -> set[str]:
-    """Upper-cased tickers named by a Brief sell, over both lists (None = empty)."""
-    out: set[str] = set()
-    for it in list(act_today or []) + list(review or []):
-        if not isinstance(it, dict):
-            continue
-        kind = it.get("kind")
-        if kind:
-            if kind in EXIT_KINDS or kind in _EXTRA_SELL_KINDS:
-                t = _norm(it.get("ticker"))
-                if t and brief_sell_names_ticker(it, t):
-                    out.add(t)
-            continue
-        action = it.get("action")
-        if isinstance(action, dict) and action.get("type") in _ACT_REVIEW_TYPES:
-            for t in (_norm(it.get("ticker")), _norm(action.get("trim_ticker"))):
-                if t and brief_sell_names_ticker(it, t):
-                    out.add(t)
-    return out
+    """Upper-cased tickers named by a Brief sell, over both lists (None = empty).
+    The key set of `act_sell_cover.sell_cover_summary` (same membership as
+    `brief_sell_names_ticker`)."""
+    return set(act_sell_cover.sell_cover_summary(act_today, review))
 
 
 def _when(days) -> str:
     return "today" if days == 0 else f"in {days}d"
 
 
-def tuneup_single_name_disposition(ticker, sell_tickers, earnings_days,
-                                   weight_pct, n_positions, shares) -> dict:
+def _brief_owns_text(t) -> str:
+    return (f"{t} already has a sell in today's Act Today call; its single-name "
+            f"ceiling card returns if {t} is still over {SINGLE_NAME_CEILING:.0f}% "
+            f"after that.")
+
+
+def tuneup_single_name_disposition(ticker, sell_cover, earnings_days,
+                                   weight_pct, n_positions, shares, need) -> dict:
     """What the 🔧 Tune-up / 🔗 Risk Analysis single-name card does for `ticker`.
 
-    brief_owns    -> a Brief sell names it: drop the card, show `text`.
+    `sell_cover` = a cover map (`act_sell_cover.sell_cover_summary`), or None = no
+    deferral; `need` = the card's own trim in whole shares (0 = sizes no trade, None =
+    unknown). State from `act_sell_cover.cover_state`:
+
+    brief_owns    -> an Act sell COVERS the card: drop it, show `text`.
+    partial       -> an Act sell is smaller than the card: keep the card at its full
+                     size, `text` = the "do that sale first" line.
+    unknown       -> an Act sell's size (or the card's) is unknown: keep the card,
+                     `text` = the same kind of line.
     earnings_note -> in earnings week with NO earnings-week decision (below the
                      line): keep the card, add `text` (standing work).
     show          -> keep the card, no extra line. In the window with a decision
@@ -99,11 +107,11 @@ def tuneup_single_name_disposition(ticker, sell_tickers, earnings_days,
                      the card shows: fail toward the sell.
     """
     t = _norm(ticker)
-    if t in {_norm(x) for x in (sell_tickers or ())}:
-        return {"state": "brief_owns",
-                "text": (f"{t} already has a sell in today's Act Today call; its single-name "
-                         f"ceiling card returns if {t} is still over {SINGLE_NAME_CEILING:.0f}% "
-                         f"after that.")}
+    state = act_sell_cover.cover_state(act_sell_cover.cover_for(sell_cover, t), need)
+    if state == act_sell_cover.STATE_COVERED:
+        return {"state": "brief_owns", "text": _brief_owns_text(t)}
+    if state in (act_sell_cover.STATE_PARTIAL, act_sell_cover.STATE_UNKNOWN):
+        return {"state": state, "text": act_sell_cover.cover_note(state, t, "ceiling trim")}
     return _earnings_note_or_show(t, earnings_days, weight_pct, n_positions, shares)
 
 
@@ -162,90 +170,143 @@ def view_sell_tickers(view) -> set[str] | None:
     (`act_today_view.act_today_view(...)`), or None when that view could not be
     built (not a dict, or `state == "offline"`: the cross-check can't run).
 
-    Reads `view["active"]`, the post-demotion Act bucket, so a stop breach whose
-    live price recovered (moved to `resolved`) never counts as a sell. `active`
-    mixes both Brief lanes as shallow copies that keep their original shape
-    (`kind` on an act item, `action` on a review item), which is exactly what
-    `brief_sell_names_ticker` / `brief_sell_tickers` read; an Act `risk`
-    attribution item never counts. (EW C3 round 2, R3-B1.)"""
-    if not isinstance(view, dict) or view.get("state") == "offline":
-        return None
-    active = view.get("active")
-    return brief_sell_tickers(active if isinstance(active, list) else [], [])
+    The key set of `act_sell_cover.view_sell_cover`: reads `view["active"]`, the
+    post-demotion Act bucket, so a stop breach whose live price recovered (moved to
+    `resolved`) never counts as a sell. `active` mixes both Brief lanes as shallow
+    copies that keep their original shape (`kind` on an act item, `action` on a review
+    item); an Act `risk` attribution item never counts. (EW C3 round 2, R3-B1.)"""
+    cov = act_sell_cover.view_sell_cover(view)
+    return None if cov is None else set(cov)
 
 
-def reconcile_tuneup(cards, deferred, view_sells) -> dict:
+def _cover_map(view_cover) -> dict | None:
+    """`view_cover` if it is a cover map, else None (nothing is deferred)."""
+    return view_cover if isinstance(view_cover, dict) else None
+
+
+def reconcile_tuneup(cards, deferred, view_cover) -> dict:
     """Settle the build-time Tune-up deferrals against the Act Today view.
 
     `cards` = the Brief's `portfolio_tuneup`; `deferred` = its
-    `portfolio_tuneup_deferred` ({T: {"text", "card"}}); `view_sells` =
-    `view_sell_tickers(view)`. Returns {"cards": [...], "deferred_texts": {T: text}}.
+    `portfolio_tuneup_deferred` ({T: {"text", "card"}}); `view_cover` =
+    `act_sell_cover.view_sell_cover(view)`. Returns {"cards": [...],
+    "deferred_texts": {T: text}}.
 
-    view_sells None -> every deferred card is restored (fail toward showing the
-    sell) and no caption. Otherwise a deferral stands only for a T in view_sells;
-    any other card is appended back after the existing ones, in ticker order.
-    The old `{T: str}` shape (a memoized / locked Brief from before round 2) has
-    no card to restore: its text is kept only when T is in view_sells, else
-    dropped, so there is never a false caption."""
-    base = list(cards) if isinstance(cards, (list, tuple)) else []
-    if not isinstance(deferred, dict):
-        return {"cards": base, "deferred_texts": {}}
-    live = ({_norm(x) for x in view_sells} if isinstance(view_sells, (set, frozenset, list, tuple))
-            else None)
+    DeferSizeBlind: EVERY single-name card (kept or deferred) is re-decided against the
+    view: covered -> the deferred text (a kept card that is now covered is dropped and
+    gets the plain "already has a sell" text); partial / unknown -> the card (restored
+    if it was deferred) as a COPY with `act_cover_note`; show -> the card as is.
+    View cover None -> every deferred card is restored (fail toward showing the sell),
+    no note, no caption. A restored card is appended after the existing ones, in ticker
+    order. A card or payload with no `trim_shares` reads need None (unknown under a
+    non-exit cover). The old `{T: str}` shape (a memoized / locked Brief from before
+    round 2) has no card to restore: its text is kept only under an EXIT cover, else
+    dropped, so there is never a false caption. Inputs are never mutated."""
+    cover = _cover_map(view_cover)
     texts: dict[str, str] = {}
+    kept: list = []
+    for card in (list(cards) if isinstance(cards, (list, tuple)) else []):
+        subject = card.get("subject") if isinstance(card, dict) else None
+        if (cover is None or not isinstance(card, dict)
+                or card.get("type") != "single_name_concentration"
+                or not isinstance(subject, str) or not _norm(subject)):
+            kept.append(card)
+            continue
+        state = act_sell_cover.cover_state(
+            act_sell_cover.cover_for(cover, subject), card.get("trim_shares"))
+        if state == act_sell_cover.STATE_COVERED:
+            texts[_norm(subject)] = _brief_owns_text(_norm(subject))
+        elif state in (act_sell_cover.STATE_PARTIAL, act_sell_cover.STATE_UNKNOWN):
+            kept.append({**card, "act_cover_note":
+                         act_sell_cover.cover_note(state, subject, "ceiling trim")})
+        else:
+            kept.append(card)
+    if not isinstance(deferred, dict):
+        return {"cards": kept, "deferred_texts": texts}
     restored: list = []
     for t in sorted(deferred, key=_norm):
         payload = deferred[t]
-        if live is not None and _norm(t) in live:
+        card = payload.get("card") if isinstance(payload, dict) else None
+        if not isinstance(card, dict):
+            # Legacy {T: str} (or a card-less dict): text only, and only under an exit.
+            entry = act_sell_cover.cover_for(cover, t)
             text = payload.get("text") if isinstance(payload, dict) else payload
+            if (entry is not None and entry.get("exit") is True
+                    and isinstance(text, str) and text):
+                texts[t] = text
+            continue
+        if cover is None:
+            restored.append(card)
+            continue
+        state = act_sell_cover.cover_state(
+            act_sell_cover.cover_for(cover, t), card.get("trim_shares"))
+        if state == act_sell_cover.STATE_COVERED:
+            text = payload.get("text")
             if isinstance(text, str) and text:
                 texts[t] = text
-        elif isinstance(payload, dict) and isinstance(payload.get("card"), dict):
-            restored.append(payload["card"])
-    return {"cards": base + restored, "deferred_texts": texts}
+        elif state in (act_sell_cover.STATE_PARTIAL, act_sell_cover.STATE_UNKNOWN):
+            restored.append({**card, "act_cover_note":
+                             act_sell_cover.cover_note(state, t, "ceiling trim")})
+        else:
+            restored.append(card)
+    return {"cards": kept + restored, "deferred_texts": texts}
 
 
-def risk_analysis_single_name_line(ticker, sell_tickers, earnings_days, weight_pct,
-                                   n_positions, shares) -> dict:
+def risk_analysis_single_name_line(ticker, sell_cover, earnings_days, weight_pct,
+                                   n_positions, shares, need) -> dict:
     """The line 🔗 Risk Analysis -> 📋 Action Plan shows on a single-name card.
 
     -> {"state", "tier", "text"}; tier "info" / "caption" / None (nothing).
-    sell_tickers None  -> "unverified" (the Act Today cross-check couldn't run).
-    ticker in sells    -> "brief_owns" (follow the Act Today call, no extra sell).
+    sell_cover None    -> "unverified" (the Act Today cross-check couldn't run).
+    covered            -> "brief_owns" (follow the Act Today call, no extra sell).
+    partial / unknown  -> that state, tier "info": an Act sell smaller than (or of a
+                          size we can't compare with) this card; the card stays.
     in window, no decision, known weight -> "earnings_note".
-    else "show". No `$` or `**` in any text (st.info / st.caption render markdown)."""
+    else "show". `need` = the card's own trim in whole shares (`rec["trim_shares"]`).
+    No `$` or `**` in any text (st.info / st.caption render markdown)."""
     t = _norm(ticker)
-    if sell_tickers is None:
+    if sell_cover is None:
         return {"state": "unverified", "tier": "caption",
                 "text": (f"⚠️ Today's Act Today calls couldn't be checked against this card "
                          f"(🏠 Home's Act Today isn't available for the current book: not built "
                          f"yet, failed, or out of date), so it may repeat a sell Act Today "
                          f"already sizes for {t}.")}
-    if t in {_norm(x) for x in sell_tickers}:
+    state = act_sell_cover.cover_state(act_sell_cover.cover_for(sell_cover, t), need)
+    if state == act_sell_cover.STATE_COVERED:
         return {"state": "brief_owns", "tier": "info",
                 "text": (f"{t} already has a sell in today's Act Today call (🏠 Home). "
                          f"Follow that call first; this ceiling trim is not an extra sell on top "
                          f"of it today, and applies again only if {t} is still over "
                          f"{SINGLE_NAME_CEILING:.0f}% afterwards.")}
+    if state in (act_sell_cover.STATE_PARTIAL, act_sell_cover.STATE_UNKNOWN):
+        return {"state": state, "tier": "info",
+                "text": act_sell_cover.cover_note(state, t, "ceiling trim")}
     d = _earnings_note_or_show(t, earnings_days, weight_pct, n_positions, shares)
     if d["state"] == "earnings_note":
         return {"state": "earnings_note", "tier": "caption", "text": d["text"]}
     return {"state": "show", "tier": None, "text": None}
 
 
-def rebalancer_trim_disposition(ticker, sell_tickers, reduce_calls_ok, earnings_days,
-                                directive) -> dict:
+def rebalancer_trim_disposition(ticker, sell_cover, reduce_calls_ok, earnings_days,
+                                directive, need) -> dict:
     """What a ⚖️ Rebalancer trim row does for `ticker`.
 
-    brief_owns only when `reduce_calls_ok` is True (verified, online, fresh) AND a
-    Brief sell names the ticker; an unverified / offline / stale `_reduce_calls`
-    never defers (plan §6: fail toward showing the sell).
+    brief_owns only when `reduce_calls_ok` is True (verified, online, fresh) AND an Act
+    sell COVERS the row (`need` = the row's own whole-share trim, 0 = sizes no trade,
+    None = unknown); an unverified / offline / stale `_reduce_calls` never defers (plan
+    §6: fail toward showing the sell). A smaller or unknown-size sell leaves the row in
+    place: state partial / unknown with the "do that sale first" line, which takes
+    precedence over the earnings line.
     """
     t = _norm(ticker)
-    if reduce_calls_ok is True and t in {_norm(x) for x in (sell_tickers or ())}:
-        if isinstance(directive, str) and directive.strip():
-            return {"state": "brief_owns", "text": f"Today's Act Today call: {directive}"}
-        return {"state": "brief_owns", "text": "Today's Act Today call already sells this name (🏠 Home)."}
+    if reduce_calls_ok is True:
+        state = act_sell_cover.cover_state(act_sell_cover.cover_for(sell_cover, t), need)
+        if state == act_sell_cover.STATE_COVERED:
+            if isinstance(directive, str) and directive.strip():
+                return {"state": "brief_owns", "text": f"Today's Act Today call: {directive}"}
+            return {"state": "brief_owns", "text": "Today's Act Today call already sells this name (🏠 Home)."}
+        if state in (act_sell_cover.STATE_PARTIAL, act_sell_cover.STATE_UNKNOWN):
+            return {"state": state, "text": act_sell_cover.cover_note(state, t, "row")}
     d = (earnings_days or {}).get(t)
     if trim_sizing.in_earnings_window(d):
         return {"state": "earnings_note",

@@ -146,6 +146,7 @@ def test_build_rebalance_plan_empty_drift_df():
         "reduce_blocked_adds": [], "reduce_blocked_adds_count": 0,
         "grow_paused_adds": [], "grow_paused_adds_count": 0,
         "deferred_trims": [], "deferred_trims_count": 0,
+        "act_partial_count": 0,
         "trim_pct": 0.0, "trim_action_needed": False,
     }
 

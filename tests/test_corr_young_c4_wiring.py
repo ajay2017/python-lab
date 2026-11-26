@@ -95,8 +95,10 @@ def test_corr_cov_is_assigned_on_both_the_memo_hit_and_miss_paths():
     assert '_crb["risk_pairs"], _crb["div_label"], _crb["corr_coverage"], _crb["div_recs"]' in _APP
 
 
-def test_synth_schema_version_is_29_with_the_corryoung_prefix():
-    m = re.search(r"_SYNTH_SCHEMA_VER = 29  # bumped: (.*?); was 28:", _APP)
+def test_synth_schema_version_keeps_the_corryoung_note_in_its_history():
+    # CorrYoung C4 bumped 28 -> 29; DeferSizeBlind bumped it again (30), so the CorrYoung
+    # note now sits in the "was 29:" clause.
+    m = re.search(r"_SYNTH_SCHEMA_VER = 30  # bumped: .*?; was 29: (.*?); was 28:", _APP)
     assert m and "CorrYoung" in m.group(1) and "left_out" in m.group(1)
 
 

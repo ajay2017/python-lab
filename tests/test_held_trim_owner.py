@@ -6,6 +6,7 @@ being sold."""
 import pandas as pd
 import pytest
 
+from stock_analyzer import act_sell_cover
 from stock_analyzer import held_trim_owner as hto
 from stock_analyzer import trim_sizing as ts
 from stock_analyzer.constants import (
@@ -93,18 +94,55 @@ def test_brief_sell_tickers_none_and_garbage_inputs():
 
 # -- tuneup_single_name_disposition -------------------------------------------
 
+EXIT = {"exit": True, "shares": None}
+
+
+def cov(shares):
+    """A non-exit cover entry: `shares` = the Act sale's whole-share count (None = unknown)."""
+    return {"exit": False, "shares": shares}
+
+
 def test_tuneup_brief_owns_when_a_sell_names_it():
-    d = hto.tuneup_single_name_disposition("aaa", {"AAA"}, {}, 19.0, 8, 100)
+    d = hto.tuneup_single_name_disposition("aaa", {"AAA": EXIT}, {}, 19.0, 8, 100, 5)
     assert d == {"state": "brief_owns",
                  "text": ("AAA already has a sell in today's Act Today call; its single-name "
                           f"ceiling card returns if AAA is still over {SINGLE_NAME_CEILING:.0f}% "
                           "after that.")}
 
 
+def test_tuneup_a_sized_sell_at_least_the_card_covers_it():
+    for sold in (5, 6):
+        d = hto.tuneup_single_name_disposition("AAA", {"AAA": cov(sold)}, {}, 19.0, 8, 100, 5)
+        assert d["state"] == "brief_owns"
+
+
+def test_tuneup_a_smaller_or_unknown_sell_keeps_the_card_with_a_line():
+    d = hto.tuneup_single_name_disposition("AAA", {"AAA": cov(1)}, {}, 19.0, 8, 100, 5)
+    assert d["state"] == "partial" and d["text"] == act_sell_cover.cover_note(
+        "partial", "AAA", "ceiling trim")
+    d = hto.tuneup_single_name_disposition("AAA", {"AAA": cov(None)}, {}, 19.0, 8, 100, 5)
+    assert d["state"] == "unknown" and d["text"] == act_sell_cover.cover_note(
+        "unknown", "AAA", "ceiling trim")
+    # the card's own size unknown (legacy rec / no price) never fully defers to a non-exit
+    d = hto.tuneup_single_name_disposition("AAA", {"AAA": cov(50)}, {}, 19.0, 8, 100, None)
+    assert d["state"] == "unknown"
+
+
+def test_tuneup_a_card_that_sizes_no_trade_is_covered_by_any_sell():
+    d = hto.tuneup_single_name_disposition("AAA", {"AAA": cov(None)}, {}, 19.0, 8, 100, 0)
+    assert d["state"] == "brief_owns"
+
+
+def test_tuneup_a_none_cover_map_never_defers():
+    for cover in (None, {}, {"BBB": EXIT}, set(), {"AAA"}):
+        d = hto.tuneup_single_name_disposition("AAA", cover, {}, 19.0, 8, 100, 0)
+        assert d["state"] == "show", cover
+
+
 def test_tuneup_earnings_note_below_the_line_in_the_window():
     # N=10: floor == SINGLE_NAME_CEILING; a 14% name is under it, earnings in 3 days.
     floor = ts.earnings_overweight_floor(10)
-    d = hto.tuneup_single_name_disposition("AAA", set(), {"AAA": 3}, floor - 1, 10, 100)
+    d = hto.tuneup_single_name_disposition("AAA", {}, {"AAA": 3}, floor - 1, 10, 100, 5)
     assert d["state"] == "earnings_note"
     assert d["text"] == (f"Earnings in 3d: at or under the {floor:.1f}% earnings-week line, so the "
                          f"earnings-week rule sizes nothing before the report; "
@@ -112,84 +150,99 @@ def test_tuneup_earnings_note_below_the_line_in_the_window():
 
 
 def test_tuneup_earnings_note_says_today_on_day_zero():
-    d = hto.tuneup_single_name_disposition("AAA", set(), {"AAA": 0}, 14.0, 10, 100)
+    d = hto.tuneup_single_name_disposition("AAA", {}, {"AAA": 0}, 14.0, 10, 100, 5)
     assert d["state"] == "earnings_note" and d["text"].startswith("Earnings today: at or under the ")
 
 
 def test_tuneup_shows_when_there_is_an_in_window_decision_but_no_brief_sell():
     # decision exists (above the line) but the Brief did not sell it: fail toward the sell
-    d = hto.tuneup_single_name_disposition("AAA", set(), {"AAA": 3}, 19.0, 15, 100)
+    d = hto.tuneup_single_name_disposition("AAA", {}, {"AAA": 3}, 19.0, 15, 100, 5)
     assert d == {"state": "show", "text": None}
     # zero-share decision still counts as a decision
-    d0 = hto.tuneup_single_name_disposition("AAA", set(), {"AAA": 3}, 19.0, 15, 0)
+    d0 = hto.tuneup_single_name_disposition("AAA", {}, {"AAA": 3}, 19.0, 15, 0, 5)
     assert d0 == {"state": "show", "text": None}
 
 
 @pytest.mark.parametrize("days", [None, -1, EARNINGS_IMMINENT_DAYS + 1])
 def test_tuneup_shows_outside_the_window(days):
     ed = {} if days is None else {"AAA": days}
-    assert hto.tuneup_single_name_disposition("AAA", set(), ed, 14.0, 10, 100) == {
+    assert hto.tuneup_single_name_disposition("AAA", {}, ed, 14.0, 10, 100, 5) == {
         "state": "show", "text": None}
 
 
 def test_tuneup_none_position_count_does_not_raise():
     # R2-N3: n_positions=None reads as the no-N floor, like the other surfaces.
     floor = ts.earnings_overweight_floor(0)
-    d = hto.tuneup_single_name_disposition("AAA", set(), {"AAA": 3}, floor - 1, None, 100)
+    d = hto.tuneup_single_name_disposition("AAA", {}, {"AAA": 3}, floor - 1, None, 100, 5)
     assert d["state"] == "earnings_note" and f"{floor:.1f}%" in d["text"]
 
 
 @pytest.mark.parametrize("w", [None, float("nan"), float("inf"), "x"])
 def test_tuneup_unknown_weight_shows_never_claims_under_the_line(w):
     # EW C3: an unread weight can't be called "under the line"
-    d = hto.tuneup_single_name_disposition("AAA", set(), {"AAA": 3}, w, 10, 100)
+    d = hto.tuneup_single_name_disposition("AAA", {}, {"AAA": 3}, w, 10, 100, 5)
     assert d == {"state": "show", "text": None}
 
 
 def test_tuneup_unknown_weight_still_defers_to_a_brief_sell():
-    d = hto.tuneup_single_name_disposition("AAA", {"AAA"}, {"AAA": 3}, None, 10, 100)
+    d = hto.tuneup_single_name_disposition("AAA", {"AAA": EXIT}, {"AAA": 3}, None, 10, 100, 5)
     assert d["state"] == "brief_owns"
 
 
 def test_tuneup_none_inputs_are_safe():
-    assert hto.tuneup_single_name_disposition("AAA", None, None, 16.0, 10, 100)["state"] == "show"
+    assert hto.tuneup_single_name_disposition("AAA", None, None, 16.0, 10, 100, 5)["state"] == "show"
 
 
 # -- rebalancer_trim_disposition ----------------------------------------------
 
 def test_rebalancer_defers_only_when_reduce_calls_are_ok():
-    d = hto.rebalancer_trim_disposition("AAA", {"AAA"}, True, {}, "Trim 19.0% → 10.0%.")
+    d = hto.rebalancer_trim_disposition("AAA", {"AAA": EXIT}, True, {}, "Trim 19.0% → 10.0%.", 5)
     assert d == {"state": "brief_owns", "text": "Today's Act Today call: Trim 19.0% → 10.0%."}
     for flag in (False, None):
-        d = hto.rebalancer_trim_disposition("AAA", {"AAA"}, flag, {}, "Trim")
+        d = hto.rebalancer_trim_disposition("AAA", {"AAA": EXIT}, flag, {}, "Trim", 5)
         assert d == {"state": "show", "text": None}
 
 
 @pytest.mark.parametrize("blank", [None, "", "   ", 5])
 def test_rebalancer_blank_directive_uses_the_plain_line(blank):
-    d = hto.rebalancer_trim_disposition("aaa", {"AAA"}, True, {}, blank)
+    d = hto.rebalancer_trim_disposition("aaa", {"AAA": EXIT}, True, {}, blank, 5)
     assert d == {"state": "brief_owns", "text": "Today's Act Today call already sells this name (🏠 Home)."}
 
 
 def test_rebalancer_unverified_but_in_window_gets_the_earnings_line_not_a_deferral():
-    d = hto.rebalancer_trim_disposition("AAA", {"AAA"}, False, {"AAA": 3}, "x")
+    d = hto.rebalancer_trim_disposition("AAA", {"AAA": EXIT}, False, {"AAA": 3}, "x", 5)
     assert d == {"state": "earnings_note",
                  "text": "Earnings in 3d: check 🏠 Home's Act Today before trading this name."}
 
 
 def test_rebalancer_earnings_line_day_zero_and_edges():
-    assert hto.rebalancer_trim_disposition("AAA", set(), True, {"AAA": 0}, None)["text"] == (
+    assert hto.rebalancer_trim_disposition("AAA", {}, True, {"AAA": 0}, None, 5)["text"] == (
         "Earnings today: check 🏠 Home's Act Today before trading this name.")
     assert hto.rebalancer_trim_disposition(
-        "AAA", set(), True, {"AAA": EARNINGS_IMMINENT_DAYS}, None)["state"] == "earnings_note"
+        "AAA", {}, True, {"AAA": EARNINGS_IMMINENT_DAYS}, None, 5)["state"] == "earnings_note"
     for days in (-1, EARNINGS_IMMINENT_DAYS + 1):
         assert hto.rebalancer_trim_disposition(
-            "AAA", set(), True, {"AAA": days}, None) == {"state": "show", "text": None}
+            "AAA", {}, True, {"AAA": days}, None, 5) == {"state": "show", "text": None}
 
 
 def test_rebalancer_a_brief_sell_beats_the_earnings_line():
-    d = hto.rebalancer_trim_disposition("AAA", {"AAA"}, True, {"AAA": 3}, "Trim now")
+    d = hto.rebalancer_trim_disposition("AAA", {"AAA": EXIT}, True, {"AAA": 3}, "Trim now", 5)
     assert d["state"] == "brief_owns"
+
+
+def test_rebalancer_partial_and_unknown_keep_the_row_and_beat_the_earnings_line():
+    for entry, state in ((cov(1), "partial"), (cov(None), "unknown")):
+        d = hto.rebalancer_trim_disposition("AAA", {"AAA": entry}, True, {"AAA": 3}, None, 5)
+        assert d == {"state": state, "text": act_sell_cover.cover_note(state, "AAA", "row")}
+    # an unknown row size (no usable price) never fully defers to a non-exit sell
+    assert hto.rebalancer_trim_disposition(
+        "AAA", {"AAA": cov(9)}, True, {}, None, None)["state"] == "unknown"
+    # a row that sizes no trade is covered by any Act sell, sized or not
+    assert hto.rebalancer_trim_disposition(
+        "AAA", {"AAA": cov(None)}, True, {}, None, 0)["state"] == "brief_owns"
+    # an unverified read still never defers or annotates
+    assert hto.rebalancer_trim_disposition(
+        "AAA", {"AAA": cov(1)}, False, {}, None, 5) == {"state": "show", "text": None}
 
 
 def test_constants_used_here_exist_for_the_texts():
@@ -295,10 +348,11 @@ def test_view_sell_tickers_through_the_real_act_today_view_demotes_a_recovered_b
     assert hto.view_sell_tickers(v3) is None
 
 
-# -- reconcile_tuneup (EW C3 round 2, R3-B1) ----------------------------------
+# -- reconcile_tuneup (EW C3 round 2, R3-B1; DeferSizeBlind) -------------------
 
 def _card(t, **extra):
-    return {"type": "single_name_concentration", "tickers": [t], **extra}
+    return {"type": "single_name_concentration", "tickers": [t], "subject": t,
+            "trim_shares": 5, **extra}
 
 
 def _payload(t, card=None):
@@ -308,7 +362,7 @@ def _payload(t, card=None):
 def test_reconcile_stands_only_for_names_the_view_still_sells():
     base = [{"type": "beta", "tickers": ["X"]}]
     deferred = {"BBB": _payload("BBB"), "AAA": _payload("AAA")}
-    out = hto.reconcile_tuneup(base, deferred, {"AAA"})
+    out = hto.reconcile_tuneup(base, deferred, {"AAA": EXIT})
     assert out["deferred_texts"] == {"AAA": "AAA deferred text"}
     assert out["cards"] == base + [_card("BBB")]
 
@@ -322,21 +376,23 @@ def test_reconcile_view_unknown_restores_everything_and_shows_no_caption():
 
 def test_reconcile_restores_the_card_exactly_with_its_earnings_note():
     card = _card("AAA", earnings_note="Earnings in 3d: ...")
-    out = hto.reconcile_tuneup([], {"AAA": _payload("AAA", card)}, set())
+    out = hto.reconcile_tuneup([], {"AAA": _payload("AAA", card)}, {})
     assert out == {"cards": [card], "deferred_texts": {}}
 
 
-def test_reconcile_old_shape_text_only_kept_while_the_sell_is_live():
+def test_reconcile_old_shape_text_only_kept_while_an_exit_is_live():
     old = {"AAA": "old text"}
-    assert hto.reconcile_tuneup([], old, {"AAA"}) == {
+    assert hto.reconcile_tuneup([], old, {"AAA": EXIT}) == {
         "cards": [], "deferred_texts": {"AAA": "old text"}}
-    assert hto.reconcile_tuneup([], old, set()) == {"cards": [], "deferred_texts": {}}
+    # a non-exit cover can't prove the legacy text true; no card to restore; no caption
+    assert hto.reconcile_tuneup([], old, {"AAA": cov(50)}) == {"cards": [], "deferred_texts": {}}
+    assert hto.reconcile_tuneup([], old, {}) == {"cards": [], "deferred_texts": {}}
     assert hto.reconcile_tuneup([], old, None) == {"cards": [], "deferred_texts": {}}
 
 
 def test_reconcile_mixed_shapes_and_case():
     deferred = {"AAA": "old text", "bbb": _payload("bbb")}
-    out = hto.reconcile_tuneup([], deferred, {"aaa"})
+    out = hto.reconcile_tuneup([], deferred, {"aaa": EXIT})
     assert out["deferred_texts"] == {"AAA": "old text"}
     assert out["cards"] == [_card("bbb")]
 
@@ -345,22 +401,79 @@ def test_reconcile_mixed_shapes_and_case():
     (None, None), ([], None), (None, {}), ([_card("X")], "junk"), ([_card("X")], []),
 ])
 def test_reconcile_non_dict_or_none_inputs(cards, deferred):
-    out = hto.reconcile_tuneup(cards, deferred, {"AAA"})
+    out = hto.reconcile_tuneup(cards, deferred, {"AAA": EXIT})
     assert out == {"cards": list(cards or []), "deferred_texts": {}}
 
 
 def test_reconcile_does_not_mutate_its_inputs():
-    base = [_card("X")]
-    deferred = {"BBB": _payload("BBB")}
-    hto.reconcile_tuneup(base, deferred, set())
-    assert base == [_card("X")] and list(deferred) == ["BBB"]
+    import copy
+    base = [_card("X"), _card("Y")]
+    deferred = {"BBB": _payload("BBB"), "CCC": _payload("CCC")}
+    before = copy.deepcopy((base, deferred))
+    hto.reconcile_tuneup(base, deferred, {})
+    hto.reconcile_tuneup(base, deferred, {"X": cov(1), "BBB": cov(1), "Y": EXIT, "CCC": EXIT})
+    assert (base, deferred) == before
 
 
-# -- risk_analysis_single_name_line (EW C3) -----------------------------------
+def test_reconcile_a_smaller_sell_restores_the_deferred_card_with_a_note_copy():
+    payload = _payload("AAA")
+    out = hto.reconcile_tuneup([], {"AAA": payload}, {"AAA": cov(1)})
+    assert out["deferred_texts"] == {}
+    assert out["cards"] == [{**_card("AAA"), "act_cover_note": act_sell_cover.cover_note(
+        "partial", "AAA", "ceiling trim")}]
+    assert "act_cover_note" not in payload["card"]                        # a copy, not the memo
 
-def _line(sells, days=None, w=14.0, n=10, shares=100, ticker="AAA"):
+
+def test_reconcile_an_unknown_size_sell_restores_with_the_unknown_line():
+    out = hto.reconcile_tuneup([], {"AAA": _payload("AAA")}, {"AAA": cov(None)})
+    assert out["cards"][0]["act_cover_note"] == act_sell_cover.cover_note(
+        "unknown", "AAA", "ceiling trim")
+
+
+def test_reconcile_a_covering_sell_keeps_the_deferral():
+    out = hto.reconcile_tuneup([], {"AAA": _payload("AAA")}, {"AAA": cov(5)})   # shares == need
+    assert out == {"cards": [], "deferred_texts": {"AAA": "AAA deferred text"}}
+
+
+def test_reconcile_redecides_a_kept_card_too():
+    kept = _card("AAA")
+    # smaller sell now live: the kept card gains the note
+    out = hto.reconcile_tuneup([kept], {}, {"AAA": cov(2)})
+    assert out["cards"] == [{**kept, "act_cover_note": act_sell_cover.cover_note(
+        "partial", "AAA", "ceiling trim")}] and out["deferred_texts"] == {}
+    # a covering sell now live: the kept card is deferred with today's brief_owns text
+    out = hto.reconcile_tuneup([kept], {}, {"AAA": EXIT})
+    assert out["cards"] == []
+    assert out["deferred_texts"]["AAA"].startswith("AAA already has a sell in today's Act Today call")
+    # no sell: untouched; view offline: untouched, no note
+    assert hto.reconcile_tuneup([kept], {}, {})["cards"] == [kept]
+    assert hto.reconcile_tuneup([kept], {}, None)["cards"] == [kept]
+
+
+def test_reconcile_legacy_card_without_trim_shares_reads_unknown_under_a_non_exit_cover():
+    legacy = {"type": "single_name_concentration", "tickers": ["AAA"]}     # no subject / size
+    legacy_deferred = {"type": "single_name_concentration", "tickers": ["BBB"], "subject": "BBB"}
+    out = hto.reconcile_tuneup([legacy], {"BBB": {"text": "t", "card": legacy_deferred}},
+                               {"AAA": cov(99), "BBB": cov(99)})
+    assert out["cards"][0] == legacy                       # no subject: never re-decided
+    assert out["cards"][1]["act_cover_note"] == act_sell_cover.cover_note(
+        "unknown", "BBB", "ceiling trim")
+    # under an exit it is covered
+    assert hto.reconcile_tuneup([], {"BBB": {"text": "t", "card": legacy_deferred}},
+                                {"BBB": EXIT}) == {"cards": [], "deferred_texts": {"BBB": "t"}}
+
+
+def test_reconcile_non_cover_view_arguments_defer_nothing():
+    # a stale caller still passing a set of tickers: every deferred card comes back
+    out = hto.reconcile_tuneup([], {"AAA": _payload("AAA")}, {"AAA"})
+    assert out == {"cards": [_card("AAA")], "deferred_texts": {}}
+
+
+# -- risk_analysis_single_name_line (EW C3; DeferSizeBlind) -------------------
+
+def _line(sells, days=None, w=14.0, n=10, shares=100, ticker="AAA", need=5):
     return hto.risk_analysis_single_name_line(
-        ticker, sells, {} if days is None else {"AAA": days}, w, n, shares)
+        ticker, sells, {} if days is None else {"AAA": days}, w, n, shares, need)
 
 
 def test_risk_line_unverified_when_the_cross_check_could_not_run():
@@ -377,18 +490,29 @@ def test_risk_line_unverified_beats_everything_even_in_window():
 
 
 def test_risk_line_brief_owns():
-    d = _line({"AAA"}, days=3)
+    d = _line({"AAA": EXIT}, days=3)
     assert d["state"] == "brief_owns" and d["tier"] == "info"
     assert d["text"] == ("AAA already has a sell in today's Act Today call (🏠 Home). "
                          "Follow that call first; this ceiling trim is not an extra sell on top "
                          f"of it today, and applies again only if AAA is still over "
                          f"{SINGLE_NAME_CEILING:.0f}% afterwards.")
-    assert _line({"aaa"}, ticker="aaa")["state"] == "brief_owns"
+    assert _line({"AAA": EXIT}, ticker="aaa")["state"] == "brief_owns"
+    assert _line({"AAA": cov(5)})["state"] == "brief_owns"          # shares >= the card
+
+
+def test_risk_line_partial_and_unknown_are_info_and_keep_the_card():
+    d = _line({"AAA": cov(1)}, days=3)
+    assert (d["state"], d["tier"]) == ("partial", "info")
+    assert d["text"] == act_sell_cover.cover_note("partial", "AAA", "ceiling trim")
+    d = _line({"AAA": cov(None)})
+    assert (d["state"], d["tier"]) == ("unknown", "info")
+    assert _line({"AAA": cov(50)}, need=None)["state"] == "unknown"   # card size unknown
+    assert _line({"AAA": cov(None)}, need=0)["state"] == "brief_owns"  # card sizes no trade
 
 
 def test_risk_line_earnings_note_when_in_window_with_no_decision():
     floor = ts.earnings_overweight_floor(10)
-    d = _line(set(), days=3, w=floor - 1)
+    d = _line({}, days=3, w=floor - 1)
     assert d["state"] == "earnings_note" and d["tier"] == "caption"
     assert d["text"] == (f"Earnings in 3d: at or under the {floor:.1f}% earnings-week line, so the "
                          f"earnings-week rule sizes nothing before the report; "
@@ -403,11 +527,13 @@ def test_risk_line_earnings_note_when_in_window_with_no_decision():
     {"days": 3, "w": None},                  # unknown weight
 ])
 def test_risk_line_show_otherwise(kw):
-    assert _line(set(), **kw) == {"state": "show", "tier": None, "text": None}
+    assert _line({}, **kw) == {"state": "show", "tier": None, "text": None}
 
 
-def test_risk_line_texts_carry_no_dollar_or_bold_markers():
+def test_risk_line_texts_carry_no_dollar_bold_or_share_count():
     floor = ts.earnings_overweight_floor(10)
-    for d in (_line(None), _line({"AAA"}), _line(set(), days=0, w=floor - 1),
-              _line(set(), days=3, w=floor - 1)):
+    for d in (_line(None), _line({"AAA": EXIT}), _line({}, days=0, w=floor - 1),
+              _line({}, days=3, w=floor - 1), _line({"AAA": cov(1)}), _line({"AAA": cov(None)})):
         assert d["text"] and "$" not in d["text"] and "**" not in d["text"]
+    for d in (_line({"AAA": cov(7)}, need=12), _line({"AAA": cov(None)}, need=12)):
+        assert "12" not in d["text"] and "7" not in d["text"]

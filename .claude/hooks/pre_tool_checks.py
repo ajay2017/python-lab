@@ -1343,6 +1343,12 @@ _GATE_FILES = {
     # self-build, or flat) and the banner / beta note that disclose it; a wrong call
     # reads a frame Home didn't build as fit-checked, or stays silent on a held name.
     "stock_analyzer/watchlist_fit_source.py",
+    # Added 2026-11-26 (DeferSizeBlind C1, docs/plans/defer-size-blind.md): how many
+    # shares today's Act Today call commits to selling per name (exit / fewest shares /
+    # unknown) and whether that sell covers a Tune-up / Risk Analysis / Rebalancer trim
+    # (covered / partial / unknown); a wrong call hides a ceiling trim behind a smaller
+    # Act sell, or shows a second sale beside a covering one.
+    "stock_analyzer/act_sell_cover.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

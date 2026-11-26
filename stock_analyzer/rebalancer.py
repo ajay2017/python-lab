@@ -116,7 +116,7 @@ def build_rebalance_plan(
     risk_trim_set: set | None = None,
     reduce_call_set: set | None = None,
     add_verdicts: dict | None = None,
-    sell_tickers: set | None = None,
+    act_sell_cover: dict | None = None,
     earnings_days: dict | None = None,
 ) -> dict:
     """
@@ -151,15 +151,20 @@ def build_rebalance_plan(
        drift plus Grow Today's verdict (grow_call / grow_call_text). None means
        the cross-check couldn't run: every surviving add row reads "unknown".
 
-    sell_tickers (optional, EW C4): upper-cased tickers today's live Act Today
-       view sells (`held_trim_owner.view_sell_tickers(act_today_view(...))`).
-       A row for such a name is a DEFERRED row: an overweight row is kept out
-       of `trims` (no share count of its own, out of every trim total) and listed
-       in `deferred_trims`; an OK row (a custom target can read OK while Act
-       Today sells the name) stays in `ok` and is also listed there. An
-       underweight row is untouched (the ADD gates above handle it). None means
-       the cross-check couldn't run: nothing is deferred (fail toward showing
-       the trim).
+    act_sell_cover (optional, EW C4 + DeferSizeBlind): the cover map of today's
+       live Act Today view ({UPPER ticker: {"exit": bool, "shares": int | None}},
+       `act_sell_cover.view_sell_cover(act_today_view(...))`: the sell's SIZE, not
+       just its name). A row for a name an Act sell COVERS (the sell is an exit, or at
+       least as many shares as the row, or the row sizes no trade) is a DEFERRED
+       row: an overweight row is kept out of `trims` (no share count of its own, out
+       of every trim total) and listed in `deferred_trims`; an OK row (a custom
+       target can read OK while Act Today sells the name) stays in `ok` and is also
+       listed there. A row an Act sell only PARTLY covers (fewer shares than the row)
+       or of unknown size stays in `trims` at its full size and counts in every
+       total, with `act_cover_note` (a "do that sale first" line) and
+       `act_partial` True; `act_partial_count` counts them. An underweight row is
+       untouched (the ADD gates above handle it). None means the cross-check
+       couldn't run: nothing is deferred (fail toward showing the trim).
 
     earnings_days (optional, EW C4): {UPPER ticker: days to earnings}. An
        overweight row that stays a trim and is in the earnings window gains an
@@ -169,7 +174,7 @@ def build_rebalance_plan(
       trims, adds, ok, total_trim_value, total_add_value, rebalance_pct,
       news_blocked_adds, risk_blocked_adds_count, reduce_blocked_adds,
       reduce_blocked_adds_count, grow_paused_adds, grow_paused_adds_count,
-      deferred_trims, deferred_trims_count,
+      deferred_trims, deferred_trims_count, act_partial_count,
       trim_pct (trims only; rebalance_pct still sums trim + add drift)
 
     Every trim dict carries "priority" ("HIGH" | "MEDIUM") and "expanded"
@@ -185,6 +190,7 @@ def build_rebalance_plan(
                 "reduce_blocked_adds": [], "reduce_blocked_adds_count": 0,
                 "grow_paused_adds": [], "grow_paused_adds_count": 0,
                 "deferred_trims": [], "deferred_trims_count": 0,
+                "act_partial_count": 0,
                 "trim_pct": 0.0, "trim_action_needed": False}
 
     news_flags      = news_flags or {}
@@ -217,13 +223,20 @@ def build_rebalance_plan(
         # score-mentioning rationale below may treat it as one.
         _score_ok = bool(row.get("Score Available", True))
 
+        # Floor, never round up: a sub-one-share drift must not become a
+        # 1-share sell that overshoots below target. 0 = no share count.
+        shares_delta = int(abs(drift_val) / price) if price > 0 else 0
+
         # EW C4: what this row does against today's Act Today sells. Directive
         # None: a deferred row never quotes the Brief's share count, so it can't
-        # mix the Brief's numbers with a newer book. sell_tickers None = the
+        # mix the Brief's numbers with a newer book. act_sell_cover None = the
         # cross-check couldn't run -> no deferral (fail toward showing the trim).
+        # DeferSizeBlind: the row's own size (`need`) is compared with the sell's:
+        # an OK row sizes no trade (0); no usable price = unknown size (None).
+        _need = 0 if status == "OK" else (shares_delta if price > 0 else None)
         _disp = held_trim_owner.rebalancer_trim_disposition(
-            ticker, sell_tickers or set(), sell_tickers is not None,
-            earnings_days or {}, None)
+            ticker, act_sell_cover, act_sell_cover is not None,
+            earnings_days or {}, None, _need)
         _deferred_row = {
             "ticker": ticker, "status": status, "current_pct": current,
             "target_pct": target, "drift_pp": drift_pp, "text": _disp["text"],
@@ -234,10 +247,6 @@ def build_rebalance_plan(
             if _disp["state"] == "brief_owns":
                 deferred_list.append(_deferred_row)
             continue
-
-        # Floor, never round up: a sub-one-share drift must not become a
-        # 1-share sell that overshoots below target. 0 = no share count.
-        shares_delta = int(abs(drift_val) / price) if price > 0 else 0
 
         # Trim urgency scoring — score thresholds aligned with scoring.py
         # signal boundaries so the rebalancer speaks the same vocabulary as
@@ -361,6 +370,12 @@ def build_rebalance_plan(
             }
             if _disp["state"] == "earnings_note":
                 trim_row["earnings_note"] = _disp["text"]
+            elif _disp["state"] in ("partial", "unknown"):
+                # An Act sell smaller than this row (or of unknown size): the row stays
+                # at its full size, counted in the totals, beside the "do that sale
+                # first" line and the header tag (DeferSizeBlind, owner Q4 / Q5).
+                trim_row["act_cover_note"] = _disp["text"]
+                trim_row["act_partial"] = True
             trims.append(trim_row)
 
         else:  # underweight → ADD
@@ -574,6 +589,7 @@ def build_rebalance_plan(
         "grow_paused_adds_count":    len(grow_paused_adds_list),
         "deferred_trims":            sorted(deferred_list, key=lambda r: str(r["ticker"])),
         "deferred_trims_count":      len(deferred_list),
+        "act_partial_count":         sum(1 for t in trims if t.get("act_partial")),
         # Only trims that size at least one share (the same shares_delta >= 1 test
         # as trim_action_needed): a drift under one share sells nothing, so it
         # must not count toward what the trims "would move".

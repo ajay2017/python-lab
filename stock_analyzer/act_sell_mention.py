@@ -7,6 +7,7 @@ size (🏠 Home owns the number). Display only: no page's own sizing changes. Pu
 streamlit, no I/O; inputs are never mutated) so app.py stays render-only.
 
   verified_sells(...)        -> set[str] | None
+  verified_sell_cover(...)   -> {TICKER: {"exit", "shares"}} | None   (DeferSizeBlind)
   unverified_caption(surface[, ticker]) -> str
   card_tag(ticker, sells)    -> str                (an expander-header suffix)
   signals_card_line(...)     -> str | None
@@ -24,9 +25,9 @@ THE None-vs-empty-set CONTRACT (the offline-sentinel rule):
   {"SNOW"}   = checked and firing.
 Every helper treats a None `sells` as "no mention" and never as an empty set.
 
-The sell set is `held_trim_owner.view_sell_tickers` (never re-derived here): the one
-notion of "Act Today sells T" the Tune-up, Risk Analysis and Rebalancer already defer
-to. "Today" is the ET build date: `built_date` (the synth memo's `date`, stamped with
+The sell set is the key set of `act_sell_cover.view_sell_cover` (the same set as
+`held_trim_owner.view_sell_tickers`; never re-derived here): the one notion of "Act
+Today sells T" the Tune-up, Risk Analysis and Rebalancer already defer to. "Today" is the ET build date: `built_date` (the synth memo's `date`, stamped with
 `_today_et()`) must equal `today` (also ET); the containers run UTC, so no clock is read
 in this module.
 
@@ -37,7 +38,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from stock_analyzer import coord_freshness, held_trim_owner
+from stock_analyzer import act_sell_cover, coord_freshness
 
 # 🔔 Catalyst Watch playbook action -> the word the card line uses. MONITOR is shown as
 # "Watch" (Consistency #2). The playbook's internal action value is never changed.
@@ -90,15 +91,18 @@ def _as_set(sells) -> set[str] | None:
         return None
 
 
-def verified_sells(*, reduce_state, session_brief_offline, freshness, built_date, today,
-                   view) -> set[str] | None:
-    """The set of upper-cased tickers Act Today sells today, or None = couldn't check.
+def verified_sell_cover(*, reduce_state, session_brief_offline, freshness, built_date,
+                        today, view) -> dict | None:
+    """The cover map ({TICKER: {"exit", "shares"}}, `act_sell_cover`) of today's Act Today
+    sells, or None = couldn't check. DeferSizeBlind: the same five gate legs as
+    `verified_sells` (which is this map's key set), so a surface that needs the SIZE of
+    a sell reads it behind the same verification.
 
     None unless ALL hold: `reduce_state == "ready"` (`_coord_cache_state("_reduce_calls")`);
     `session_brief_offline` is falsy (`_daily_brief_offline`); `freshness` is
     `coord_freshness.FRESH` (the book hasn't changed since the Brief); `built_date` (the
     ET date Home's build was stored for) equals `today` (ET); and the Act Today `view`
-    is online (`held_trim_owner.view_sell_tickers` is not None). An empty set means
+    is online (`act_sell_cover.view_sell_cover` is not None). An empty map means
     "checked, Act Today sells nothing"."""
     if reduce_state != "ready" or session_brief_offline:
         return None
@@ -110,7 +114,21 @@ def verified_sells(*, reduce_state, session_brief_offline, freshness, built_date
         return None
     if str(built_date).strip() != today.isoformat():
         return None
-    return held_trim_owner.view_sell_tickers(view)
+    return act_sell_cover.view_sell_cover(view)
+
+
+def verified_sells(*, reduce_state, session_brief_offline, freshness, built_date, today,
+                   view) -> set[str] | None:
+    """The set of upper-cased tickers Act Today sells today, or None = couldn't check.
+
+    The key set of `verified_sell_cover` (same five legs; see there). An empty set means
+    "checked, Act Today sells nothing". Membership is unchanged by DeferSizeBlind: a
+    name appears here whatever the size of its sell, so 📡 Signals / 🔔 Catalyst Watch
+    keep naming it and never quote a size."""
+    cov = verified_sell_cover(
+        reduce_state=reduce_state, session_brief_offline=session_brief_offline,
+        freshness=freshness, built_date=built_date, today=today, view=view)
+    return None if cov is None else set(cov)
 
 
 def unverified_caption(surface, ticker=None) -> str:

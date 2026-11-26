@@ -60,8 +60,10 @@ def _helper(session: dict, *, today=_TODAY, now=_NOW, view_fn=None):
         "_today_et": lambda: today,
         "_now_et": lambda: now,
     }
-    for fn in ("_coord_cache_state", "_coord_epoch", "_verified_act_today_sells"):
+    for fn in ("_coord_cache_state", "_coord_epoch", "_verified_act_today_sell_cover",
+               "_verified_act_today_sells"):
         exec(compile(_func_src(fn), "<app.py>", "exec"), ns)
+    ns["_cover_helper"] = ns["_verified_act_today_sell_cover"]
     return ns["_verified_act_today_sells"]
 
 
@@ -92,6 +94,35 @@ _SELL = [{"kind": "deterioration_trim", "ticker": "SNOW"}]
 
 def test_helper_returns_the_act_sell_set_when_every_leg_holds():
     assert _helper(_session(act=_SELL))() == {"SNOW"}
+
+
+def test_the_cover_helper_executes_and_its_key_set_is_the_sells_helper():
+    s = _session(act=[{"kind": "deterioration_trim", "ticker": "SNOW", "trim_shares": 3},
+                      {"kind": "stop_breach", "ticker": "TGT"}])
+    keys_fn = _helper(s)
+    cover_fn = keys_fn.__globals__["_cover_helper"]
+    assert cover_fn() == {"SNOW": {"exit": False, "shares": 3},
+                          "TGT": {"exit": True, "shares": None}}
+    assert keys_fn() == set(cover_fn()) == {"SNOW", "TGT"}
+
+
+@pytest.mark.parametrize("name,kw", [
+    ("memo from yesterday", dict(built=_TODAY - timedelta(days=1))),
+    ("the session's Brief failed", dict(brief_offline=True)),
+    ("a trade logged after the build", dict(epoch=4, stamp=3)),
+    ("the memo's bundle is the offline stub", dict(bundle_offline=True)),
+])
+def test_the_cover_helper_is_none_when_it_could_not_check_never_an_empty_map(name, kw):
+    s = _session(act=_SELL, **kw)
+    keys_fn = _helper(s)
+    assert keys_fn.__globals__["_cover_helper"]() is None, name
+    assert keys_fn() is None, name
+
+
+def test_the_cover_helper_checked_and_clean_is_the_empty_map_not_none():
+    keys_fn = _helper(_session())
+    got = keys_fn.__globals__["_cover_helper"]()
+    assert got == {} and got is not None
 
 
 def test_helper_checked_and_clean_is_the_empty_set_not_none():
@@ -150,29 +181,37 @@ def test_helper_ignores_a_risk_attribution_card_and_a_covered_loser():
 # -- helper wiring pins (grep / AST) --------------------------------------------------------
 
 def test_helper_reads_the_documented_inputs_and_is_defined_before_its_first_caller():
-    h = _func_src("_verified_act_today_sells")
+    # DeferSizeBlind: the gate + view live in the cover helper; `_verified_act_today_sells`
+    # is its key set (one gate, one view).
+    h = _func_src("_verified_act_today_sell_cover")
     assert '_coord_cache_state("_reduce_calls")' in h
     assert '"_daily_brief_offline"' in h
     assert "coord_freshness.classify(" in h and '"_reduce_calls"' in h
     assert '_get_or_offline(_vs_memo, "date")' in h
-    assert "_today_et()" in h and "act_sell_mention.verified_sells(" in h
+    assert "_today_et()" in h and "act_sell_mention.verified_sell_cover(" in h
     assert "act_today_view(" in h
     assert "except Exception as _vs_err:" in h and "getLogger(__name__).warning(" in h
     assert h.rstrip().endswith("return None")
     src = _src()
+    keys = _func_src("_verified_act_today_sells")
+    assert "_verified_act_today_sell_cover()" in keys and "set(_vs_cover)" in keys
+    assert "None if _vs_cover is None else" in keys
+    cdef_at = src.index("def _verified_act_today_sell_cover():")
+    ccalls = [i for i in range(len(src)) if src.startswith("_verified_act_today_sell_cover()", i)]
+    assert len(ccalls) == 4        # def + the key-set helper + Risk Analysis + Rebalancer
+    assert ccalls[0] == cdef_at + len("def ")
+    assert all(c > cdef_at for c in ccalls)
     def_at = src.index("def _verified_act_today_sells():")
-    calls = [i for i in range(len(src)) if src.startswith("_verified_act_today_sells()", i)]
-    assert len(calls) == 5          # def + Signals + Catalyst + Risk Analysis + Rebalancer
-    assert calls[0] == def_at + len("def ")
-    assert all(c > def_at for c in calls)
+    assert src.count("= _verified_act_today_sells()") == 2      # Signals + Catalyst (they only NAME a sell)
+    assert all(src.index(f"{v} = _verified_act_today_sells()") > def_at for v in ("_sa_sells", "_pb_sells"))
 
 
 def test_the_four_surfaces_call_the_shared_helper():
     src = _src()
     assert "_sa_sells = _verified_act_today_sells()" in src
     assert "_pb_sells = _verified_act_today_sells()" in src
-    assert "_sn_sell = _verified_act_today_sells()" in src
-    assert "_rb_sells = _verified_act_today_sells()" in src
+    assert "_sn_sell = _verified_act_today_sell_cover()" in src
+    assert "_rb_sells = _verified_act_today_sell_cover()" in src
 
 
 def _signals_tab_segment() -> str:
@@ -259,7 +298,9 @@ def test_every_expander_label_that_takes_a_tag_is_a_card_header():
     tagged = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
               and isinstance(n.func, ast.Attribute) and n.func.attr == "expander"
               and n.args and "act_sell_mention.card_tag(" in ast.unparse(n.args[0])]
-    assert len(tagged) == 2        # Signals action cards + Catalyst playbook cards
+    # Signals action cards + Catalyst playbook cards + (DeferSizeBlind) the Rebalancer's
+    # partly-covered trim rows
+    assert len(tagged) == 3
 
 
 def test_no_act_sell_mention_text_is_rendered_through_unsafe_allow_html():
@@ -290,8 +331,9 @@ def test_the_new_text_is_rendered_only_by_st_info_or_st_caption():
 
 
 def test_navigation_is_untouched_by_the_new_code():
-    h = _func_src("_verified_act_today_sells")
-    assert "nav_page" not in h and "_pending_page" not in h
+    for fn in ("_verified_act_today_sells", "_verified_act_today_sell_cover"):
+        h = _func_src(fn)
+        assert "nav_page" not in h and "_pending_page" not in h
 
 
 # -- C3: Risk Analysis and the Rebalancer move onto the shared gate ----------------------------
@@ -308,15 +350,17 @@ def test_risk_analysis_and_rebalancer_no_longer_build_their_own_view():
 
 
 def _risk_state(sells):
-    d = hto.risk_analysis_single_name_line("SNOW", sells, {}, 17.4, 8, 100)
+    d = hto.risk_analysis_single_name_line("SNOW", sells, {}, 17.4, 8, 100, 5)
     return d["state"]
 
 
 def test_a_day_old_memo_gives_risk_analysis_no_brief_owns_and_the_shared_caption():
     old = _session(act=_SELL, built=_TODAY - timedelta(days=1))
     fresh = _session(act=_SELL)
-    assert _risk_state(_helper(fresh)()) == "brief_owns"
-    sells = _helper(old)()
+    # (a deterioration_trim here carries no count: unknown size, the card stays with a line;
+    # an exit would defer it)
+    assert _risk_state(_helper(fresh).__globals__["_cover_helper"]()) == "unknown"
+    sells = _helper(old).__globals__["_cover_helper"]()
     assert sells is None
     # the page then shows the unverified state, and app.py swaps in the shared caption
     assert _risk_state(sells) == "unverified"
@@ -332,23 +376,23 @@ def _two_trims():
 
 
 def test_a_day_old_memo_defers_no_rebalancer_trim_and_the_shared_caption_shows():
-    act = [{"kind": "deterioration_trim", "ticker": "AAA"}]
-    # a book whose view really sells AAA
+    # a sized sale (500 shares) that covers AAA's 80-share row, on a book whose view really sells AAA
+    act = [{"kind": "deterioration_trim", "ticker": "AAA", "trim_shares": 500}]
     s_ok = _session(act=act)
     s_ok["_port_df_enriched"] = pd.DataFrame(
         [{"Ticker": "AAA", "Gap to Stop (%)": 10.0, "Stop": 45.0}])
     s_old = _session(act=act, built=_TODAY - timedelta(days=1))
     s_old["_port_df_enriched"] = s_ok["_port_df_enriched"]
-    fresh_sells = _helper(s_ok)()
-    assert fresh_sells == {"AAA"}
+    fresh_sells = _helper(s_ok).__globals__["_cover_helper"]()
+    assert set(fresh_sells) == {"AAA"}
     plan_fresh = reb.build_rebalance_plan(pd.DataFrame(_two_trims()), 100_000.0,
-                                          sell_tickers=fresh_sells)
+                                          act_sell_cover=fresh_sells)
     assert [d["ticker"] for d in plan_fresh["deferred_trims"]] == ["AAA"]
 
-    old_sells = _helper(s_old)()
+    old_sells = _helper(s_old).__globals__["_cover_helper"]()
     assert old_sells is None
     plan_old = reb.build_rebalance_plan(pd.DataFrame(_two_trims()), 100_000.0,
-                                        sell_tickers=old_sells)
+                                        act_sell_cover=old_sells)
     assert plan_old["deferred_trims"] == [] and plan_old["deferred_trims_count"] == 0
     assert [t["ticker"] for t in plan_old["trims"]] == ["AAA", "BBB"]
     assert "built on an earlier day" in asm.unverified_caption("rebalancer")
@@ -360,7 +404,7 @@ def test_a_stale_book_still_withholds_both_surfaces():
 
 
 def test_the_helper_uses_the_stop_recovery_constant_not_a_literal():
-    h = _func_src("_verified_act_today_sells")
+    h = _func_src("_verified_act_today_sell_cover")
     assert "STOP_RECOVERY_MARGIN_PCT" in h
     assert STOP_RECOVERY_MARGIN_PCT is not None
 

@@ -105,6 +105,7 @@ from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map
 from stock_analyzer import macro_sector_gate as _macro_sector_gate
 from stock_analyzer.analyst_intel import trustworthy_composite
 from stock_analyzer import held_news_check
+from stock_analyzer import act_sell_cover
 from stock_analyzer import held_trim_owner
 from stock_analyzer import brief_trim_merge
 from stock_analyzer.score_text import composite_score_text
@@ -422,7 +423,7 @@ _TUNEUP_PRIMARY_ANCHORED_TYPES = frozenset({"beta"})
 
 
 def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None,
-                      sell_tickers: set | None = None, earnings_days: dict | None = None,
+                      sell_cover: dict | None = None, earnings_days: dict | None = None,
                       port_df=None, deferred_out: dict | None = None) -> list[dict]:
     """Slow-moving risk-metric recommendations surfaced as standing 'Portfolio
     Tune-up' items (awareness), not Act Today decisions. HIGH or MEDIUM only —
@@ -439,14 +440,17 @@ def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None,
     keeping the card's still-valid primary-anchored prose.
 
     EW C3 (docs/plans/earnings-week-trim-c3-spec.md): a single_name_concentration
-    card whose ticker a Brief sell names (`sell_tickers` = held_trim_owner.
-    brief_sell_tickers over the FINAL act / review lists) is dropped; the visible
-    reason AND the dropped card are written to `deferred_out[TICKER] = {"text",
-    "card"}` (the caller's dict, an out-parameter so the return stays a plain list;
-    `held_trim_owner.reconcile_tuneup` restores the card on Home when the view no
-    longer shows that sell). A name in earnings week with no
-    earnings-week decision keeps its card plus an `earnings_note` key. Every
-    other case keeps the card exactly as before."""
+    card whose ticker a Brief sell names AND COVERS is dropped (`sell_cover` =
+    act_sell_cover.sell_cover_summary over the FINAL act / review lists; DeferSizeBlind:
+    a sell smaller than the card's own `trim_shares`, or of unknown size, does not
+    cover it); the visible reason AND the dropped card are written to
+    `deferred_out[TICKER] = {"text", "card"}` (the caller's dict, an out-parameter so
+    the return stays a plain list; `held_trim_owner.reconcile_tuneup` restores the card
+    on Home when the view no longer shows a covering sell). A partial / unknown card is
+    KEPT with no note here: Home's reconcile adds `act_cover_note` from the live view.
+    The card carries `subject` and `trim_shares` so that reconcile can re-decide it. A
+    name in earnings week with no earnings-week decision keeps its card plus an
+    `earnings_note` key. Every other case keeps the card exactly as before."""
     acted = {str(t).upper() for t in (acted_tickers or set())}
     out: list[dict] = []
     for rec in (risk_recs or []):
@@ -476,15 +480,20 @@ def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None,
         if rtype == "single_name_concentration" and rt and rt[0].get("ticker"):
             _sn = str(rt[0]["ticker"]).upper()
             _inp = held_trim_owner.book_inputs(port_df, _sn)
+            # The card's own whole-share size (risk_advisor `trim_shares`; None for a
+            # legacy rec / no price) so Home can compare it with an Act Today sell.
+            card["subject"] = _sn
+            card["trim_shares"] = rec.get("trim_shares")
             _d = held_trim_owner.tuneup_single_name_disposition(
-                _sn, sell_tickers or set(), earnings_days or {},
-                _inp["weight_pct"], _inp["n_positions"], _inp["shares"])
+                _sn, sell_cover, earnings_days or {},
+                _inp["weight_pct"], _inp["n_positions"], _inp["shares"],
+                card["trim_shares"])
             # The card as it would show with NO live sell (what Home restores if
             # the view demotes the sell): its earnings note, if any, is part of it.
-            _d0 = (held_trim_owner.tuneup_single_name_disposition(
-                       _sn, set(), earnings_days or {},
-                       _inp["weight_pct"], _inp["n_positions"], _inp["shares"])
-                   if _d["state"] == "brief_owns" else _d)
+            _d0 = held_trim_owner.tuneup_single_name_disposition(
+                _sn, {}, earnings_days or {},
+                _inp["weight_pct"], _inp["n_positions"], _inp["shares"],
+                card["trim_shares"])
             if _d0["state"] == "earnings_note":
                 card["earnings_note"] = _d0["text"]
             if _d["state"] == "brief_owns":
@@ -3065,6 +3074,13 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             # not a partial-trim one — so the UI must keep gating any sell-log
             # button on kind == "deterioration_exit", not just this field's presence.
             "shares": d.get("shares") if _is_exit else None,
+            # DeferSizeBlind: the TRIM tier's whole-share suggestion as a structured
+            # count (the directive text above prints the same number), so a standing
+            # surface can compare its own trim with this sale. 0 = no whole-share trim
+            # is sized (unknown / sub-share position) or an EXIT (`shares` carries it).
+            # Not persisted: the exit_signals capture reads named keys only.
+            "trim_shares": (_det_n if (not _is_exit and d["shares"] > 0 and _det_n >= 1)
+                            else 0),
         })
 
     # 2.6 — Pre-Commitment Enforcement (docs/plans/premortem-enforcement.md):
@@ -4486,10 +4502,11 @@ def build_daily_briefing(
     _acted_final = decision_bucket.all_flagged_tickers(act, review, ignore_news=True)
     # EW C3: a single-name card on a name the Brief SELLS defers to that sell (with a
     # visible caption via `portfolio_tuneup_deferred`); never raw reduce_call keys.
+    # DeferSizeBlind: only to a sell that COVERS the card's own trim (sell_cover).
     _tuneup_deferred: dict = {}
     tuneup = _portfolio_tuneup(
         risk_recs, acted_tickers=_acted_final,
-        sell_tickers=held_trim_owner.brief_sell_tickers(act, review),
+        sell_cover=act_sell_cover.sell_cover_summary(act, review),
         earnings_days=_trim_sizing.earnings_days_by_ticker(held_data, today),
         port_df=port_df, deferred_out=_tuneup_deferred)
     # News flags for OTHER surfaces (Rebalancer ADD cross-check), from the SAME

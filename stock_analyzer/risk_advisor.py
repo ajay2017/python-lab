@@ -914,6 +914,10 @@ def build_risk_advisor_recommendations(
             # the current behaviour).
             _px = tr["price"]
             _trim_sized = not (_px and _px > 0 and int(excess_dollar / _px) == 0)
+            # DeferSizeBlind: the card's own whole-share size, so a surface can compare it
+            # with an Act Today sell. 0 exactly when `_trim_sized` is False; None = unknown
+            # (no usable price): an unknown size never fully defers to an Act sell.
+            _trim_shares = (int(excess_dollar / _px) if (_px and _px > 0) else None)
             _conviction_clause = (
                 "Conviction is unmeasured (fundamentals unavailable — a data "
                 "outage or an ETF with no cost data); this is still a SIZE limit."
@@ -950,6 +954,7 @@ def build_risk_advisor_recommendations(
                     "label":        f"{w:.1f}% weight  ·  {_conviction_label}",
                 }],
                 "trim_sized": _trim_sized,
+                "trim_shares": _trim_shares,
                 "recommendation": (
                     (
                         f"Trim **{t}** by ≈**{excess_pp:.0f}pp (≈${excess_dollar:,.0f})** back toward the "

@@ -351,7 +351,7 @@ def test_unverified_captions():
 
 def test_the_risk_caption_matches_the_c3_text_apart_from_the_date_clause():
     """held_trim_owner's unverified text is the C3 wording; ours adds only the date clause."""
-    c3 = hto.risk_analysis_single_name_line("SNOW", None, {}, None, 0, None)["text"]
+    c3 = hto.risk_analysis_single_name_line("SNOW", None, {}, None, 0, None, None)["text"]
     ours = asm.unverified_caption("risk", "SNOW")
     assert ours.replace("out of date, or built on an earlier day", "or out of date") == c3
 

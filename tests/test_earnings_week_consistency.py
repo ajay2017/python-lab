@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from stock_analyzer import act_sell_cover
 from stock_analyzer import earnings_advisor as ea
 from stock_analyzer import rec_events_capture as rec
 from stock_analyzer import trim_sizing as ts
@@ -391,6 +392,10 @@ def _sn_rec(w):
         "type": "single_name_concentration", "priority": "HIGH", "title": f"AAA is {w:.1f}%",
         "problem": "p", "recommendation": "Trim AAA toward the 15% ceiling",
         "root_tickers": [{"ticker": "AAA"}],
+        # DeferSizeBlind: the card's own whole-share size (risk_advisor `trim_shares`), here
+        # the shares that take the book's AAA to the ceiling. The earnings-week decision
+        # trims to a lower weight, so it covers it (EW worked example A).
+        "trim_shares": ts.shares_to_trim(_SHARES, w, SINGLE_NAME_CEILING),
     }
 
 
@@ -469,8 +474,8 @@ def test_home_tuneup_settles_the_deferral_against_the_act_view_and_escapes_the_n
     # so the Tune-up count and the render agree
     recon = src.index("held_trim_owner.reconcile_tuneup(")
     assert src.index("_act_view = act_today_view(") < recon
-    seg0 = src[recon:recon + 400]
-    assert "held_trim_owner.view_sell_tickers(_act_view)" in seg0
+    seg0 = src[recon:recon + 600]
+    assert "act_sell_cover.view_sell_cover(_act_view)" in seg0
     assert '_db_tuneup = _db_tuneup_rec["cards"]' in src[recon:recon + 600]
     assert recon < src.index("_tuneup_n   = len(_db_tuneup)")
     start = src.index("if _db_tuneup:")
@@ -478,6 +483,9 @@ def test_home_tuneup_settles_the_deferral_against_the_act_view_and_escapes_the_n
     # the earnings note goes through safe_html, as a string only
     assert "_safe_html(_tu['earnings_note'])" in seg
     assert 'isinstance(_tu.get("earnings_note"), str)' in seg
+    # DeferSizeBlind: the "do that sale first" line too, escaped, as a string only
+    assert "_safe_html(_tu['act_cover_note'])" in seg
+    assert 'isinstance(_tu.get("act_cover_note"), str)' in seg
     # one caption per surviving deferral, sorted, outside the `if _db_tuneup:` card block
     assert "for _tud_t in sorted(_db_tuneup_deferred_texts)" in seg
     assert seg.index("for _tud_t in sorted(_db_tuneup_deferred_texts)") > seg.index("act on them when you're")
@@ -492,7 +500,9 @@ def test_risk_analysis_single_name_branch_reads_the_act_today_view_with_the_veri
     # U6b C3: the sells come from the shared helper (the view Home renders + the liveness
     # and build-date gate live there, pinned in test_act_sell_mention_wiring.py), never the
     # raw `_reduce_calls` keys
-    assert "_sn_sell = _verified_act_today_sells()" in seg
+    # DeferSizeBlind: the cover map (the sell's size), and the card's own size is passed
+    assert "_sn_sell = _verified_act_today_sell_cover()" in seg
+    assert '_rec.get("trim_shares"))' in seg
     assert "act_today_view(" not in seg and "held_trim_owner.view_sell_tickers" not in seg
     assert 'session_state.get("_reduce_calls")' not in seg
     assert "sell_tickers_from_reduce_calls" not in src
@@ -537,13 +547,13 @@ def test_r3_b1_active_breach_keeps_the_deferral_and_risk_analysis_says_follow_th
     brief = _breach_brief()
     assert [c for c in brief["portfolio_tuneup"] if c["type"] == "single_name_concentration"] == []
     assert list(brief["portfolio_tuneup_deferred"]) == ["AAA"]
-    sells = hto.view_sell_tickers(_live_view(brief, -11.0))
-    assert sells == {"AAA"}
+    sells = act_sell_cover.view_sell_cover(_live_view(brief, -11.0))
+    assert set(sells) == {"AAA"} and sells["AAA"]["exit"] is True
     rec = hto.reconcile_tuneup(brief["portfolio_tuneup"], brief["portfolio_tuneup_deferred"], sells)
     assert rec["cards"] == [] and list(rec["deferred_texts"]) == ["AAA"]
     inp = hto.book_inputs(_breach_book(), "AAA")
     line = hto.risk_analysis_single_name_line(
-        "AAA", sells, {}, inp["weight_pct"], inp["n_positions"], inp["shares"])
+        "AAA", sells, {}, inp["weight_pct"], inp["n_positions"], inp["shares"], 5)
     assert line["state"] == "brief_owns"
 
 
@@ -553,14 +563,15 @@ def test_r3_b1_recovered_breach_restores_the_card_with_no_caption_and_no_follow_
     brief = _breach_brief()
     view = _live_view(brief, STOP_RECOVERY_MARGIN_PCT + 5.0)
     assert [i["ticker"] for i in view["resolved"]] == ["AAA"] and view["active"] == []
-    sells = hto.view_sell_tickers(view)
-    assert sells == set()
+    sells = act_sell_cover.view_sell_cover(view)
+    assert sells == {}
     rec = hto.reconcile_tuneup(brief["portfolio_tuneup"], brief["portfolio_tuneup_deferred"], sells)
     assert [c["type"] for c in rec["cards"]] == ["single_name_concentration"]
     assert rec["deferred_texts"] == {}
+    assert "act_cover_note" not in rec["cards"][0]          # a recovered breach restores, no note
     inp = hto.book_inputs(_breach_book(), "AAA")
     line = hto.risk_analysis_single_name_line(
-        "AAA", sells, {}, inp["weight_pct"], inp["n_positions"], inp["shares"])
+        "AAA", sells, {}, inp["weight_pct"], inp["n_positions"], inp["shares"], 5)
     assert line["state"] != "brief_owns"
 
 
@@ -570,11 +581,12 @@ def test_r3_b1_offline_view_restores_the_card_and_risk_analysis_says_unverified(
     from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT
     brief = _breach_brief()
     view = act_today_view(brief, True, _breach_book(), {}, STOP_RECOVERY_MARGIN_PCT)
-    sells = hto.view_sell_tickers(view)
+    sells = act_sell_cover.view_sell_cover(view)
     assert sells is None
     rec = hto.reconcile_tuneup(brief["portfolio_tuneup"], brief["portfolio_tuneup_deferred"], sells)
     assert len(rec["cards"]) == 1 and rec["deferred_texts"] == {}
-    assert hto.risk_analysis_single_name_line("AAA", sells, {}, 19.0, 8, 100)["state"] == "unverified"
+    assert hto.risk_analysis_single_name_line(
+        "AAA", sells, {}, 19.0, 8, 100, 5)["state"] == "unverified"
 
 
 def test_r3_b1_a_risk_attribution_plus_a_review_trim_on_one_name_reads_brief_owns():
@@ -584,8 +596,13 @@ def test_r3_b1_a_risk_attribution_plus_a_review_trim_on_one_name_reads_brief_own
         {"kind": "risk", "ticker": "AAA"},
         {"ticker": "AAA", "action": {"type": "TRIM_TO_TARGET"}},
     ]}
-    sells = hto.view_sell_tickers(view)
-    assert hto.risk_analysis_single_name_line("AAA", sells, {}, 19.0, 8, 100)["state"] == "brief_owns"
+    sells = act_sell_cover.view_sell_cover(view)
+    # the review trim carries no count here: unknown size, so a card that sizes a trade is
+    # kept with the line; a card that sizes no trade is covered by any sell (owner Q8)
+    assert hto.risk_analysis_single_name_line(
+        "AAA", sells, {}, 19.0, 8, 100, 0)["state"] == "brief_owns"
+    assert hto.risk_analysis_single_name_line(
+        "AAA", sells, {}, 19.0, 8, 100, 5)["state"] == "unknown"
 
 
 # -- R2-N4: the other two date parses read the same first-10-chars string -----------------

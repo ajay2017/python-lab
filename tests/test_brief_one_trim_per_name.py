@@ -16,6 +16,7 @@ import stock_analyzer.daily_briefing as db
 from stock_analyzer import act_today_view as atv
 from stock_analyzer import brief_trim_merge as btm
 from stock_analyzer import decision_bucket as dbk
+from stock_analyzer import act_sell_cover as asc
 from stock_analyzer import held_trim_owner as hto
 from stock_analyzer import trim_sizing as ts
 from stock_analyzer.constants import (
@@ -90,6 +91,9 @@ def _check_invariants(pre, post, where=""):
     else:
         assert post_acts == [], where
     assert hto.brief_sell_tickers([], pre) == hto.brief_sell_tickers([], post), where
+    # DeferSizeBlind: the U6 merge never lowers what the Brief commits to selling on a name
+    # (the winner is the largest sale), so the cover map is the same before and after
+    assert asc.sell_cover_summary([], pre) == asc.sell_cover_summary([], post), where
     assert dbk.reduce_call_tickers([], pre) == dbk.reduce_call_tickers([], post), where
     assert (dbk.all_flagged_tickers([], pre, ignore_news=True)
             == dbk.all_flagged_tickers([], post, ignore_news=True)), where
@@ -419,6 +423,8 @@ def test_build_end_to_end_coordination(monkeypatch):
     # sets unchanged
     assert hto.brief_sell_tickers(pre["act_today"], pre["review_list"]) == \
         hto.brief_sell_tickers(post["act_today"], post["review_list"])
+    assert asc.sell_cover_summary(pre["act_today"], pre["review_list"]) == \
+        asc.sell_cover_summary(post["act_today"], post["review_list"])
     assert dbk.reduce_call_tickers(pre["act_today"], pre["review_list"]) == \
         dbk.reduce_call_tickers(post["act_today"], post["review_list"])
     assert set(pre["portfolio_tuneup_deferred"]) == set(post["portfolio_tuneup_deferred"])

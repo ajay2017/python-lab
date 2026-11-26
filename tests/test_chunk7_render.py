@@ -50,7 +50,7 @@ def test_grow_shown_lists_both_new_keys():
 
 
 def test_schema_version_bumped_to_23():
-    assert re.search(r"_SYNTH_SCHEMA_VER = 29\b", _SRC)  # 28 -> 29 by CorrYoung C4
+    assert re.search(r"_SYNTH_SCHEMA_VER = 30\b", _SRC)  # 29 -> 30 by DeferSizeBlind
 
 
 def test_no_direct_nav_page_assignment_added():

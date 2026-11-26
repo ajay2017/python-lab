@@ -381,6 +381,7 @@ from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import coord_freshness
 from stock_analyzer import held_trim_owner
 from stock_analyzer import act_sell_mention
+from stock_analyzer import act_sell_cover
 from stock_analyzer import brief_trim_merge
 from stock_analyzer import home_risk_synthesis
 from stock_analyzer import portfolio_intelligence
@@ -5558,17 +5559,21 @@ with st.container(key=home_dock.DOCK_KEY):
                     print(f"[market_trend] dock chips failed: {type(_dk_ce).__name__}: {_dk_ce}")
                     st.caption("Trend chips couldn't be drawn this run.")
 
-def _verified_act_today_sells():
-    """The upper-cased tickers today's Act Today call sells, or None = couldn't check.
+def _verified_act_today_sell_cover():
+    """{TICKER: {"exit", "shares"}} for the names today's Act Today call sells, or None =
+    couldn't check.
 
     U6b: ONE gate for every page that says "this name has an Act Today sell" (📡
-    Signals, 🔔 Catalyst Watch, 🔗 Risk Analysis, ⚖️ Rebalancer). Render-only wiring:
-    the decision lives in `act_sell_mention.verified_sells` (reduce cache ready, the
+    Signals, 🔔 Catalyst Watch, 🔗 Risk Analysis, ⚖️ Rebalancer). DeferSizeBlind: the
+    pages that defer a trim of their own (🔗 Risk Analysis, ⚖️ Rebalancer) also need the
+    sell's SIZE, so the map carries it (`act_sell_cover`); the pages that only name the
+    sell use `_verified_act_today_sells()` (this map's key set). Render-only wiring: the
+    decision lives in `act_sell_mention.verified_sell_cover` (reduce cache ready, the
     session's Brief online, `_reduce_calls` fresh for the current book, Home's build
     date = today ET, and an online Act Today view). The view is built the way
     🔗 Risk Analysis built it (EW C3): from Home's memoized Brief, never the raw
     `_reduce_calls` keys (an Act `risk` card's ticker is an attribution). None never
-    becomes an empty set. A failure logs a warning and returns None."""
+    becomes an empty map. A failure logs a warning and returns None."""
     try:
         from stock_analyzer.constants import STOP_RECOVERY_MARGIN_PCT as _VS_STOP_REC_MARGIN
         _vs_memo = _get_or_offline(st.session_state, "_home_synth_cache")
@@ -5583,7 +5588,7 @@ def _verified_act_today_sells():
             margin_pct       = _VS_STOP_REC_MARGIN,
             now              = _now_et(),
         )
-        return act_sell_mention.verified_sells(
+        return act_sell_mention.verified_sell_cover(
             reduce_state         = _coord_cache_state("_reduce_calls"),
             session_brief_offline = st.session_state.get("_daily_brief_offline", False),
             freshness            = coord_freshness.classify(
@@ -5597,6 +5602,16 @@ def _verified_act_today_sells():
         _vs_logging.getLogger(__name__).warning(
             "Act Today sell cross-check failed: %s", _vs_err, exc_info=True)
         return None
+
+
+def _verified_act_today_sells():
+    """The upper-cased tickers today's Act Today call sells, or None = couldn't check.
+
+    The key set of `_verified_act_today_sell_cover` (same gate, same view): the pages
+    that only NAME a sell (📡 Signals, 🔔 Catalyst Watch) read this. None never becomes
+    an empty set."""
+    _vs_cover = _verified_act_today_sell_cover()
+    return None if _vs_cover is None else set(_vs_cover)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -7474,7 +7489,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 29  # bumped: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 30  # bumped: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -10060,8 +10075,11 @@ if page == "🏠 Home":
     # Today this page renders), so a stop breach that has since recovered no longer
     # hides the card: the pure `reconcile_tuneup` restores it (R3-B1).
     _db_tuneup_deferred = _daily_brief.get("portfolio_tuneup_deferred", {})
+    # DeferSizeBlind: the settle reads the sells' SIZES (the view's cover map): a
+    # card an Act sell fully covers is deferred, a smaller / unknown-size sell leaves
+    # the card with an `act_cover_note`.
     _db_tuneup_rec = held_trim_owner.reconcile_tuneup(
-        _db_tuneup, _db_tuneup_deferred, held_trim_owner.view_sell_tickers(_act_view))
+        _db_tuneup, _db_tuneup_deferred, act_sell_cover.view_sell_cover(_act_view))
     _db_tuneup = _db_tuneup_rec["cards"]
     _db_tuneup_deferred_texts = _db_tuneup_rec["deferred_texts"]
     _db_tone   = _market_context.get("tone", "flat")
@@ -13831,6 +13849,9 @@ if page == "🏠 Home":
                     + (f"<div style='color:#64748b;font-size:0.76em;margin-top:4px'>"
                        f"{_safe_html(_tu['earnings_note'])}</div>"
                        if isinstance(_tu.get("earnings_note"), str) and _tu.get("earnings_note") else "")
+                    + (f"<div style='color:#64748b;font-size:0.76em;margin-top:4px'>"
+                       f"{_safe_html(_tu['act_cover_note'])}</div>"
+                       if isinstance(_tu.get("act_cover_note"), str) and _tu.get("act_cover_note") else "")
                     + "</div>",
                     unsafe_allow_html=True,
                 )
@@ -19504,7 +19525,7 @@ elif page == "🔗 Risk Analysis":
                             _sn_t = _sn_rt[0]["ticker"] if _sn_rt else None
                             if _sn_t:
                                 # U6b-5: the shared gate (adds the build-date leg).
-                                _sn_sell = _verified_act_today_sells()
+                                _sn_sell = _verified_act_today_sell_cover()
                                 _sn_pdf = _get_or_offline(st.session_state, "_last_port_df")
                                 _sn_held = _get_or_offline(st.session_state, "_last_held_data")
                                 _sn_ed = (_trim_sizing.earnings_days_by_ticker(_sn_held, _today_et())
@@ -19512,7 +19533,8 @@ elif page == "🔗 Risk Analysis":
                                 _sn_inp = held_trim_owner.book_inputs(_sn_pdf, _sn_t)
                                 _sn_line = held_trim_owner.risk_analysis_single_name_line(
                                     _sn_t, _sn_sell, _sn_ed, _sn_inp["weight_pct"],
-                                    _sn_inp["n_positions"], _sn_inp["shares"])
+                                    _sn_inp["n_positions"], _sn_inp["shares"],
+                                    _rec.get("trim_shares"))
                                 if _sn_line["state"] == "unverified":
                                     # The caption names "built on an earlier day" too.
                                     st.caption(act_sell_mention.unverified_caption("risk", _sn_t))
@@ -23418,7 +23440,7 @@ elif page == "🥧 Portfolio Overview":
         # says so.
         # U6b-5: the shared gate (`_verified_act_today_sells`) adds the build-date
         # leg: a Brief built on an earlier ET day no longer defers today's trims.
-        _rb_sells = _verified_act_today_sells()
+        _rb_sells = _verified_act_today_sell_cover()
         _rb_earn_days = _trim_sizing.earnings_days_by_ticker(held_data, _today_et())
         if _rb_sells is None:
             st.caption(act_sell_mention.unverified_caption("rebalancer"))
@@ -23429,7 +23451,7 @@ elif page == "🥧 Portfolio Overview":
             risk_trim_set=_rb_risk_trim_set,
             reduce_call_set=_rb_reduce_set,
             add_verdicts=_rb_add_verdicts,
-            sell_tickers=_rb_sells,
+            act_sell_cover=_rb_sells,
             earnings_days=_rb_earn_days,
         )
 
@@ -23465,8 +23487,11 @@ elif page == "🥧 Portfolio Overview":
                       delta=("Action required" if _rb_plan["trim_action_needed"]
                              else ("Watch" if _n_trim else None)),
                       delta_color="inverse" if _rb_plan["trim_action_needed"] else "off",
-                      help=("Rows Act Today already sells today aren't counted."
-                            if _rb_plan["deferred_trims_count"] > 0 else None))
+                      help=("Rows today's Act Today sell fully covers aren't counted; "
+                            "a row it only partly covers, or whose size couldn't be "
+                            "compared, is counted at its own size."
+                            if (_rb_plan["deferred_trims_count"] > 0
+                                or _rb_plan["act_partial_count"] > 0) else None))
         _rb_k2.metric("Underweight",    _n_add,
                       help="Holdings below target weight by more than the tolerance. "
                            "Drift only: Grow Today decides adds.")
@@ -23551,9 +23576,15 @@ elif page == "🥧 Portfolio Overview":
                        f"≈ {_m_dol(_tr['drift_val'])}"
                        if _tr["shares_delta"] >= 1 else
                        f"| ≈{_m_dol(_tr['drift_val'])} drift "
-                       + ("(under one share)" if _tr["price"] > 0 else "(price unavailable)")),
+                       + ("(under one share)" if _tr["price"] > 0 else "(price unavailable)"))
+                    # DeferSizeBlind: a row an Act Today sell only partly covers (or of
+                    # unknown size) carries the same header tag as the other pages.
+                    + (act_sell_mention.card_tag(_tr["ticker"], {_tr["ticker"]})
+                       if _tr.get("act_partial") else ""),
                     expanded=_tr_exp,
                 ):
+                    if isinstance(_tr.get("act_cover_note"), str) and _tr.get("act_cover_note"):
+                        st.info(_tr["act_cover_note"])
                     _tr_m = st.columns(4)
                     _tr_m[0].metric("Current Weight",  f"{_tr['current_pct']:.1f}%")
                     _tr_m[1].metric("Target Weight",   f"{_tr['target_pct']:.1f}%")
