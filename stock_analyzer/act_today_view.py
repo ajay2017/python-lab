@@ -33,6 +33,7 @@ instead, so the two pages can no longer drift apart.
 
 import pandas as pd
 
+from stock_analyzer import breach_recovery
 from stock_analyzer import decision_bucket
 from stock_analyzer.macro_release import refresh_macro_card
 from stock_analyzer.util import stop_recovery_state
@@ -152,6 +153,12 @@ def act_today_view(
       aware     : the Monitoring / Awareness bucket (unaffected by demotion)
       n_active  : int, or None when state == "offline" (NOT checked this run
                   — never 0, which would mean "checked, nothing active")
+      recovery_unchecked : sorted tickers whose breach was demoted but whose other
+                  per-name calls (the Brief's breach alternates) couldn't be read
+                  (BriefBreachRestore); [] when offline or nothing is unchecked
+      restored  : sorted tickers whose breach was demoted AND whose suppressed per-name
+                  cards were restored into `active` / `aware` (each carries
+                  `_restored_after_recovery`); [] when offline or nothing restored
     """
     # is_offline_brief: the B-H2 backstop. A marked stub is offline even when
     # the flag reads False -- the flag is exactly what a laundering path flips.
@@ -162,6 +169,8 @@ def act_today_view(
             "resolved": [],
             "aware": [],
             "n_active": None,
+            "recovery_unchecked": [],
+            "restored": [],
         }
 
     split = decision_bucket.split_defensive(
@@ -171,39 +180,59 @@ def act_today_view(
     lp = live_prices if isinstance(live_prices, dict) else {}
     pe = port_df_enriched
 
-    active: list[dict] = []
-    resolved: list[dict] = []
-    for item in split["act"]:
-        if item.get("kind") == "stop_breach":
-            ticker = str(item.get("ticker", "")).upper()
-            gap: float | None = None
-            stop_px: float | None = None
-            if pe is not None and not pe.empty:
-                if "Gap to Stop (%)" in pe.columns:
-                    row = pe[pe["Ticker"].astype(str).str.upper() == ticker]
-                    if not row.empty:
-                        g = row["Gap to Stop (%)"].iloc[0]
-                        gap = float(g) if pd.notna(g) else None
-                        if "Stop" in row.columns:
-                            s = row["Stop"].iloc[0]
-                            stop_px = float(s) if pd.notna(s) else None
-            state = stop_recovery_state(gap, margin_pct)
-            lp_entry = lp.get(ticker)
-            item_copy = dict(item)
-            item_copy["_breach_state"] = state
-            item_copy["_live_gap"] = gap
-            item_copy["_live_px"] = lp_entry.get("price") if isinstance(lp_entry, dict) else None
-            item_copy["_live_stop"] = stop_px
-            if state == "recovered":
-                resolved.append(item_copy)
+    def _demote(items):
+        """Split an Act bucket into (still active, demoted-to-resolved) by live gap."""
+        active: list[dict] = []
+        resolved: list[dict] = []
+        for item in items:
+            if item.get("kind") == "stop_breach":
+                ticker = str(item.get("ticker", "")).upper()
+                gap: float | None = None
+                stop_px: float | None = None
+                if pe is not None and not pe.empty:
+                    if "Gap to Stop (%)" in pe.columns:
+                        row = pe[pe["Ticker"].astype(str).str.upper() == ticker]
+                        if not row.empty:
+                            g = row["Gap to Stop (%)"].iloc[0]
+                            gap = float(g) if pd.notna(g) else None
+                            if "Stop" in row.columns:
+                                s = row["Stop"].iloc[0]
+                                stop_px = float(s) if pd.notna(s) else None
+                state = stop_recovery_state(gap, margin_pct)
+                lp_entry = lp.get(ticker)
+                item_copy = dict(item)
+                item_copy["_breach_state"] = state
+                item_copy["_live_gap"] = gap
+                item_copy["_live_px"] = lp_entry.get("price") if isinstance(lp_entry, dict) else None
+                item_copy["_live_stop"] = stop_px
+                if state == "recovered":
+                    resolved.append(item_copy)
+                else:
+                    active.append(item_copy)
             else:
-                active.append(item_copy)
-        else:
-            active.append(item)
+                active.append(item)
+        return active, resolved
+
+    active, resolved = _demote(split["act"])
+
+    # BriefBreachRestore: a recovered breach hid that name's other per-name calls at
+    # build time; restore them from the Brief's counterfactual alternates (read ONLY
+    # here, for a ticker whose breach was demoted just now). Re-split with the resolved
+    # breach items removed so the reconciler never folds a restored note onto a demoted
+    # copy. `resolved` stays from the first pass; the still-breached names are
+    # re-demoted identically. None = a legacy Brief or nothing resolved: unchanged.
+    aug = breach_recovery.augment(
+        daily_brief,
+        {str(i.get("ticker", "")).strip().upper() for i in resolved} - {""},
+    )
+    aware = split["aware"]
+    if aug is not None and aug["act"] is not None:
+        split2 = decision_bucket.split_defensive(aug["act"], aug["review"])
+        active, _ = _demote(split2["act"])
+        aware = split2["aware"]
 
     # Same-day macro release passed -> swap the pre-release wording here, once,
     # for every consumer of the view (the Brief is memoized, so the build can't).
-    aware = split["aware"]
     if now is not None:
         active = [refresh_macro_card(i, now) for i in active]
         aware = [refresh_macro_card(i, now) for i in aware]
@@ -215,4 +244,6 @@ def act_today_view(
         "resolved": resolved,
         "aware": aware,
         "n_active": n_active,
+        "recovery_unchecked": aug["unchecked"] if aug else [],
+        "restored": aug["restored"] if aug else [],
     }

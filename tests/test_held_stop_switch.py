@@ -128,7 +128,7 @@ def test_no_old_stop_engine_left_in_app():
 def test_synth_sig_has_held_sig_and_hit_test_uses_brief_breached_set():
     m = re.search(r"_synth_sig = \((.*?)\n    \)\n", _APP, re.S)
     assert m and "held_sig(" in m.group(1)
-    assert "_SYNTH_SCHEMA_VER = 30" in _APP
+    assert "_SYNTH_SCHEMA_VER = 31" in _APP
     hit = re.search(r"_breached_now = .*?_synth_hit = \(.*?\)\n", _APP, re.S)
     assert hit and "brief_breached_set(" in hit.group(0)
     assert "_breached_now - _breached_at_build" in hit.group(0)

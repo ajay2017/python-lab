@@ -158,3 +158,30 @@ def test_reentry_false_drops_only_the_beat_clause_when_trimmed(state, gap, est):
 def test_reentry_false_changes_nothing_when_not_trimmed(state, gap, est):
     assert (brief_earnings_trigger(state, gap, est, trimmed=False, reentry=False)
             == brief_earnings_trigger(state, gap, est, trimmed=False))
+
+
+# BriefBreachRestore: a card restored after a recovered stop breach was built with
+# the price at or below the stop. Its Trigger names that build-time fact, never a
+# negative "% below" (which would read backwards beside the Resolved card).
+@pytest.mark.parametrize("gap", [0.0, -1.0, -7.5])
+@pytest.mark.parametrize("trimmed", [True, False])
+def test_at_or_below_stop_names_the_build_time_fact(gap, trimmed):
+    assert stop_cover_state(gap, 6.0) == "at_risk"
+    text = brief_earnings_trigger("at_risk", gap, 6.0, trimmed=trimmed)
+    assert "at or below the stop when today's Brief was built" in text
+    assert "% below" not in text and f"{gap:.1f}" not in text
+    assert "±6.0% expected move" in text
+    assert "$" not in text and "**" not in text
+    if trimmed:
+        assert text.startswith(_BEAT)
+        assert text.endswith("be ready to act at the open on the rest.")
+        nre = brief_earnings_trigger("at_risk", gap, 6.0, trimmed=True, reentry=False)
+        assert nre.startswith("Miss → the price was at or below the stop")
+    else:
+        assert "no pre-event trim" in text
+
+
+def test_just_above_stop_keeps_the_number():
+    # The smallest positive gap still prints its figure (byte-identical to before).
+    text = brief_earnings_trigger("at_risk", 0.1, 6.0, trimmed=False)
+    assert text.startswith("The stop is only 0.1% below against a ±6.0% expected move")

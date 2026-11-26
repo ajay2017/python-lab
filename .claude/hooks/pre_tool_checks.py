@@ -1349,6 +1349,12 @@ _GATE_FILES = {
     # (covered / partial / unknown); a wrong call hides a ceiling trim behind a smaller
     # Act sell, or shows a second sale beside a covering one.
     "stock_analyzer/act_sell_cover.py",
+    # Added 2026-11-26 (BriefBreachRestore A-C1, docs/plans/brief-breach-restore-batch1-spec.md):
+    # what a recovered stop breach restores: the per-name Act / Review cards the breach
+    # suppressed at build, read only by act_today_view for a ticker whose breach it
+    # demoted; a wrong call shows no sell on a recovered deterioration-exit name, or two
+    # sells on one name.
+    "stock_analyzer/breach_recovery.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

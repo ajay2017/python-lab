@@ -108,6 +108,7 @@ from stock_analyzer import held_news_check
 from stock_analyzer import act_sell_cover
 from stock_analyzer import held_trim_owner
 from stock_analyzer import brief_trim_merge
+from stock_analyzer import breach_recovery
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.text_fmt import share_word
 from stock_analyzer import g32_shadow
@@ -2919,7 +2920,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                deterioration: list | None = None,
                premortem_triggers: list | None = None,
                news_window_start_ts: float | None = None,
-               news_window_label: str | None = None) -> list[dict]:
+               news_window_label: str | None = None,
+               skip_breach=None) -> list[dict]:
     """
     Build the Act Today list. Each item carries a structured directive so the
     UI renders a concrete ACT/Why/Trigger block (matching Review Before Close)
@@ -2941,6 +2943,12 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
     (stop breach / Sell signal) WINS — it suppresses any risk-advisor trim on
     the same ticker, because if you're exiting, a "trim 50% for beta" rec is
     moot. Multiple risk flags on one non-exiting ticker merge into one card.
+
+    skip_breach (BriefBreachRestore): an optional set of upper-cased tickers whose
+    section-1 stop-breach row is NOT built, so sections 2 / 2.5 / 3 and the
+    consolidation produce that name's other calls as a no-breach build would. Only
+    `_breach_alternate_pass` passes it; None (the default) leaves the output
+    byte-identical.
     """
     items: list[dict] = []
 
@@ -2948,6 +2956,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
     for _, row in port_df.iterrows():
         gap = _f(row.get("Gap to Stop (%)"), None)
         if gap is None:
+            continue
+        if skip_breach and str(row["Ticker"]).upper() in skip_breach:
             continue
         if gap <= 0:
             _shares = _trim_sizing.exact_shares(row)
@@ -3400,7 +3410,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                  act_today: list | None = None,
                  deterioration: list | None = None,
                  news_window_start_ts: float | None = None,
-                 news_window_label: str | None = None) -> list[dict]:
+                 news_window_label: str | None = None,
+                 macro_exclude=None) -> list[dict]:
     """
     Build the Review Before Close list.
 
@@ -3421,6 +3432,11 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     sizing is attached to that act dict (`min_trim`, plus text appended to its
     `directive` / `why`) instead of emitting a second card. The act dict is the
     same object build_daily_briefing returns as `act_today`.
+
+    macro_exclude (BriefBreachRestore): an optional set of upper-cased tickers the macro
+    pre-event trim must not pick, added to the Act Today names it already skips. Only
+    `_breach_alternate_pass` passes it; None (the default) leaves the output
+    byte-identical.
     """
     items: list[dict] = []
     held_tickers = _held_tickers(port_df)
@@ -3940,7 +3956,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         # affected name NOT already spoken for; if every affected holding is, the
         # event downgrades to WATCH (awareness), not a conflicting trim.
         _macro_eligible = sector_rows[
-            ~sector_rows["Ticker"].astype(str).str.upper().isin(_act_tickers)
+            ~sector_rows["Ticker"].astype(str).str.upper().isin(
+                _act_tickers | {str(t).upper() for t in (macro_exclude or ())})
         ] if not sector_rows.empty else sector_rows
 
         # Broad macro print (NFP / CPI / Fed) — the affected sectors cover most
@@ -4261,6 +4278,50 @@ def _rewrite_macro_affected(act: list[dict], reduced: set[str],
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
+def _breach_alternate_pass(port_df, alert_list, risk_recs, news_items, macro_events,
+                           held_data, today, portfolio_value, act, deterioration,
+                           premortem_triggers, news_ts, news_label):
+    """BriefBreachRestore: T's other per-name calls with the breach rows skipped.
+
+    A stop breach on T makes the main pass skip T's sell signal, deterioration EXIT / TRIM,
+    critical news, risk card and every Review card. When the live price recovers,
+    `act_today_view` demotes the breach and would show nothing on T. This second,
+    counterfactual pass builds what a no-breach build would have said about each breached
+    name, stored under `breach_alternates` ({T: {"act", "review"}}) for
+    `breach_recovery.augment` alone to read: the raw act / review lists and every raw
+    reader of them are never touched. Cross-name picks (the macro pre-event trim via
+    `macro_exclude`, risk-off, the macro affected list, Grow Today, the Tune-up) stay as
+    built (owner Q2).
+
+    No second call when nothing is breached ({}); None when the pass raised (the main lists
+    are unchanged, the view reports the names unchecked). Shared inputs (`port_df`,
+    `held_data`, `deterioration`, `news_items`, `premortem_triggers`, `risk_recs`) are
+    only read by `_act_today` / `_review_list`. `_review_list` DOES mutate its `act_today`
+    argument's sell_signal dict (the weak-large `min_trim`), but `act_alt` is a fresh list
+    of fresh dicts, so the main Brief's items are not touched.
+    """
+    breach = breach_recovery.breach_tickers(act)
+    if not breach:
+        return {}
+    try:
+        act_alt = _act_today(
+            port_df, alert_list, risk_recs, news_items, macro_events, today,
+            deterioration=deterioration, premortem_triggers=premortem_triggers,
+            news_window_start_ts=news_ts, news_window_label=news_label,
+            skip_breach=breach)
+        review_alt = _review_list(
+            port_df, news_items, macro_events, held_data, today,
+            portfolio_value=portfolio_value, act_today=act_alt,
+            deterioration=deterioration, news_window_start_ts=news_ts,
+            news_window_label=news_label, macro_exclude=breach)
+        return breach_recovery.alternates_for(breach, act_alt, review_alt)
+    except Exception as exc:
+        _log.warning(
+            "brief breach-alternate pass failed, nothing restorable on a recovery: %s: %s",
+            type(exc).__name__, exc)
+        return None
+
+
 def build_daily_briefing(
     port_df,
     alert_list:      list,
@@ -4517,7 +4578,11 @@ def build_daily_briefing(
     _nf_crit = held_news_check.critical_news_by_ticker(news_items or [], _nf_held, _news_ts)
     _nf_warn = held_news_check.warning_news_by_ticker(
         news_items or [], _nf_held, _news_ts, exclude=set(_nf_crit))
+    _breach_alts = _breach_alternate_pass(
+        port_df, alert_list, risk_recs, news_items, macro_events, held_data, today,
+        portfolio_value, act, deterioration, premortem_triggers, _news_ts, _news_label)
     _result = {"act_today": act, "review_list": review,
+               "breach_alternates": _breach_alts,
                "grow_today": grow, "portfolio_tuneup": tuneup,
                "portfolio_tuneup_deferred": _tuneup_deferred,
                "risk_off_unchecked": _ro_unchecked,

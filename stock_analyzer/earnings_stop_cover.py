@@ -107,6 +107,23 @@ def brief_earnings_trigger(state, gap_to_stop, est_move, *, trimmed: bool,
             f"clears the app's at-risk line ({EARNINGS_STOP_COVER_FRAC:.0%} of the "
             "move), so no pre-event action is called."
         )
+    if state == "at_risk" and gap_to_stop <= 0:
+        # BriefBreachRestore: a card restored after a recovered stop breach was built
+        # while the price was at or below the stop. A negative "% below" would read
+        # backwards beside the Resolved card, and the live gap is a different
+        # freshness, so name the build-time fact instead of a number.
+        if trimmed:
+            return (
+                f"{_beat}the price was at or below the stop when today's Brief was "
+                f"built, against a ±{est_move:.1f}% expected move, so a gap-down "
+                "would go straight through it: be ready to act at the open on the rest."
+            )
+        return (
+            "The price was at or below the stop when today's Brief was built, against "
+            f"a ±{est_move:.1f}% expected move, so a gap-down on a miss would go "
+            "straight through it: no pre-event trim, but be ready to act at the open "
+            "if the report is negative (see 🔔 Catalyst Watch)."
+        )
     if state == "at_risk":
         if trimmed:
             return (
