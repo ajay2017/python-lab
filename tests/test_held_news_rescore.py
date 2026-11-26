@@ -275,7 +275,7 @@ def test_home_wiring():
 def test_status_carried_in_synth_bundle():
     assert re.search(r'"_brief_news_rescore_status":\s*st\.session_state\.get\("_brief_news_rescore_status"\)', _APP)
     assert '_b.get("_brief_news_rescore_status")' in _APP
-    assert re.search(r"_SYNTH_SCHEMA_VER = 31\b", _APP)  # 30 -> 31 by BriefBreachRestore
+    assert re.search(r"_SYNTH_SCHEMA_VER = 32\b", _APP)  # 31 -> 32 by BriefSkipSizeBlind
 
 
 # ── review fix-first round ─────────────────────────────────────────────────

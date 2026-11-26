@@ -108,6 +108,7 @@ from stock_analyzer import held_news_check
 from stock_analyzer import act_sell_cover
 from stock_analyzer import held_trim_owner
 from stock_analyzer import brief_trim_merge
+from stock_analyzer import act_trim_fold
 from stock_analyzer import breach_recovery
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.text_fmt import share_word
@@ -3428,10 +3429,13 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     portfolio_value is required to compute dollar amounts for trim
     directives; passed in by build_daily_briefing.
 
-    Side effect: for a ticker under a `sell_signal` Act Today card, the weak-large
-    sizing is attached to that act dict (`min_trim`, plus text appended to its
-    `directive` / `why`) instead of emitting a second card. The act dict is the
-    same object build_daily_briefing returns as `act_today`.
+    Side effect (BriefSkipSizeBlind): for a ticker under a PARTIAL reduce Act Today card
+    (`deterioration_trim` or `sell_signal`), the largest same-name Review trim (profit-lock,
+    earnings-week, weak-large, or the deterioration floor under a Sell) is folded onto that
+    act dict (`min_trim` with its `reason_key`, plus text appended to its `directive` /
+    `why` / `reason`) when it sells more than the card does, instead of emitting a second
+    card (`act_trim_fold`). The act dict is the same object build_daily_briefing returns
+    as `act_today`; it is only written when the fold ran and chose a payload.
 
     macro_exclude (BriefBreachRestore): an optional set of upper-cased tickers the macro
     pre-event trim must not pick, added to the Act Today names it already skips. Only
@@ -3447,22 +3451,31 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     # act_today dedup that _grow_today already does.
     _act_tickers = {str(a.get("ticker", "")).upper() for a in (act_today or [])}
     # Tickers under a reduce call ON THAT NAME in Act Today: the reduce card
-    # owns the sell decision, so the stop and weak-large sections below defer
-    # to it instead of issuing a second, contradicting card. Only kinds whose
-    # `ticker` IS the name being reduced count: a `risk` card's ticker is an
-    # attribution (sector_concentration's largest holding, which the
-    # conviction-ranked trim plan may not trim at all), so it must not silence
-    # that name's own trim or stop card. risk_off_derisk isn't in act_today
-    # yet at this point. `_exit_tickers` (exit kinds only) drives the ⛔ Exit
-    # lifecycle badge, so a deterioration TRIM name isn't badged Exit.
+    # owns the sell decision, so the stop, earnings and weak-large sections below
+    # defer to it (a full exit) or are folded into it (a partial reduce) instead of
+    # issuing a second, contradicting card. Only kinds whose `ticker` IS the name
+    # being reduced count: a `risk` card's ticker is an attribution
+    # (sector_concentration's largest holding, which the conviction-ranked trim
+    # plan may not trim at all), so it must not silence that name's own trim or
+    # stop card. risk_off_derisk isn't in act_today yet at this point.
+    # `_exit_tickers` (exit kinds only) drives the ⛔ Exit lifecycle badge, so a
+    # deterioration TRIM name isn't badged Exit.
     _exit_tickers = {
         str(a.get("ticker", "")).upper() for a in (act_today or [])
         if a.get("kind") in decision_bucket.EXIT_KINDS
     }
-    _reduce_tickers = _exit_tickers | {
+    # BriefSkipSizeBlind: a FULL exit (the whole position goes) still replaces every
+    # Review trim on the name; a PARTIAL reduce (a 25% floor, an unsized Sell) no longer
+    # does: the sections below build the name's trims, tag them, and
+    # `act_trim_fold.fold` settles them into the Act card's `min_trim` (largest wins).
+    _full_exit_tickers = {
         str(a.get("ticker", "")).upper() for a in (act_today or [])
-        if a.get("kind") == "deterioration_trim"
+        if a.get("kind") in ("stop_breach", "deterioration_exit")
     }
+    _fold_tickers = {
+        str(a.get("ticker", "")).upper() for a in (act_today or [])
+        if a.get("kind") in act_trim_fold.PARTIAL_REDUCE_KINDS
+    } - _full_exit_tickers
     from stock_analyzer.macro_calendar import HIGH as MC_HIGH, affected_sectors as _aff_sectors
 
     # 0 — Deterioration WATCH (awareness only). The early tripwire: a held name
@@ -3547,7 +3560,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         # feet. Exits and critical-gap (≤3%) items are unaffected (precedence in
         # classify_position_state + the `not is_critical` guard). age None (no
         # journal) never yields "settling" → management is never silenced blind.
-        _under_reduce = ticker.upper() in _reduce_tickers
+        _under_reduce = ticker.upper() in _full_exit_tickers
         _lifecycle = classify_position_state(
             (held_data or {}).get(ticker, {}).get("position_age_days"),
             pnl_pct, gap, has_exit_signal=ticker.upper() in _exit_tickers,
@@ -3616,6 +3629,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "weight":   weight,
             "lifecycle": _lifecycle,
             "_u6_tighten": {"new_stop": new_stop, "why": _u6_ur_why},
+            **({act_trim_fold.FOLD_KEY: ticker.upper(), "_fold_gap": gap,
+                "_fold_pnl": pnl_pct} if ticker.upper() in _fold_tickers else {}),
         })
 
     # 2 — Earnings within 7 days
@@ -3626,8 +3641,9 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     #     trim to SINGLE_NAME_CEILING: earnings week never sizes looser than the
     #     week before.
     #   - Otherwise WATCH; nothing is due before the report.
-    # Skips only names an Act card actually reduces (`_reduce_tickers`), never an
-    # attribution-only `risk` card or a critical-news hold (U5).
+    # Skips only names an Act card FULLY exits (`_full_exit_tickers`), never an
+    # attribution-only `risk` card or a critical-news hold (U5); a name under a partial
+    # reduce is built and tagged for `act_trim_fold`.
     seen_earn: set = set()
     _n_pos = len(port_df) if port_df is not None else 0
     _overweight_floor = _dynamic_overweight_floor(_n_pos)
@@ -3639,7 +3655,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         if days is None or not (0 <= days <= EARNINGS_IMMINENT_DAYS):
             continue
         seen_earn.add(ticker)
-        if str(ticker).upper() in _reduce_tickers:
+        if str(ticker).upper() in _full_exit_tickers:
             continue
         pm = _port_rows(port_df, ticker)
         if pm.empty:
@@ -3739,6 +3755,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "_u6_kind": "earnings",
             "_u6_trigger_trimmed": _u6_trig,
             "_u6_trigger_trimmed_no_reentry": _u6_trig_nre,
+            **({act_trim_fold.FOLD_KEY: str(ticker).upper(), "_fold_label": label}
+               if str(ticker).upper() in _fold_tickers else {}),
         })
 
     # 3 — Weak large positions (weight ≥ LARGE_POSITION_WEIGHT_PCT, Score < WEAK_CONVICTION_SCORE)
@@ -3771,40 +3789,13 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             trim_dollars = round(trim_shares * price, 0)
         else:
             trim_dollars, trim_shares = 0, 0
-        if ticker.upper() in _reduce_tickers:
-            # A reduce card for this name is already in Act Today. For a
-            # sell_signal, carry this card's sizing onto it as the minimum
-            # trim (mutates the act_today dict passed in; it is the same
-            # object build_daily_briefing returns as `act_today`). Other
-            # reduce kinds size themselves, so the weak-large item is dropped.
-            _first_act = next(
-                (a for a in (act_today or [])
-                 if str(a.get("ticker", "")).upper() == ticker.upper()), None)
-            if (_first_act is not None and _first_act.get("kind") == "sell_signal"
-                    and trim_shares >= 1):
-                _first_act["min_trim"] = {
-                    "trim_shares":   trim_shares,
-                    "trim_dollars":  trim_dollars,
-                    "from_weight":   weight,
-                    "target_weight": WEAK_LARGE_TRIM_TO_PCT,
-                }
-                _first_act["directive"] = (_first_act.get("directive") or "") + (
-                    f" At minimum, trim {weight:.1f}% → {WEAK_LARGE_TRIM_TO_PCT:.1f}% "
-                    f"({trim_shares} share{'' if trim_shares == 1 else 's'} "
-                    f"≈ ${trim_dollars:,.0f})."
-                )
-                _first_act["why"] = (_first_act.get("why") or "") + (
-                    f" Also your largest weak holding: weight {weight:.1f}% ≥ "
-                    f"{LARGE_POSITION_WEIGHT_PCT:.0f}% with score {composite_score_text(score, WEAK_CONVICTION_SCORE)} < "
-                    f"{WEAK_CONVICTION_SCORE}."
-                )
-                # `reason` was synthesized in _consolidate_act_today before
-                # this append; refresh it so its readers (quick_research,
-                # premarket tooltip) see the minimum trim too.
-                _first_act["reason"] = (
-                    f"{_first_act['directive']} {_first_act['why']}".strip()
-                )
+        if ticker.upper() in _full_exit_tickers:
+            # A full exit for this name is already in Act Today: it sells the whole
+            # position, so this weak-large card is dropped. A partial reduce (a floor or
+            # an unsized Sell) is folded instead: the card is built and tagged below.
             continue
+        _fold_tag = ({act_trim_fold.FOLD_KEY: ticker.upper()}
+                     if ticker.upper() in _fold_tickers else {})
         if trim_shares < 1:
             # No whole-share trim can be sized (price / portfolio value
             # unavailable, or the excess is under one share at today's price):
@@ -3835,6 +3826,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 "weight":  weight,
                 "_u6_kind": "weak_large",
                 "_u6_score": score,
+                **_fold_tag,
             })
             continue
         items.append({
@@ -3860,6 +3852,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "weight":  weight,
             "_u6_kind": "weak_large",
             "_u6_score": score,
+            **_fold_tag,
         })
 
     # 4 — Warning news on held positions: any in-window headline ≤ NEWS_SENTIMENT_WARN on a
@@ -4134,6 +4127,49 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "_u6_event_date": str(ev_date),
         })
 
+    # BriefSkipSizeBlind: settle the tagged Review trims on names under a PARTIAL Act
+    # reduce into that Act card's `min_trim` (the largest sale wins), before U6 so the
+    # merge sees one sell per name. Q7: the deterioration TRIM floor that `_act_today`
+    # drops under a Sell rides along as a candidate. On any failure every Review trim
+    # is kept (carriers stripped), so every sell stays visible.
+    _fold_extra: dict = {}
+    try:
+        for _ft in sorted(_fold_tickers):
+            _fa = act_trim_fold.act_item_for(act_today, _ft)
+            if _fa is None or _fa.get("kind") != "sell_signal":
+                continue
+            _fd = next((d for d in (deterioration or [])
+                        if d.get("tier") == "TRIM"
+                        and str(d.get("ticker", "")).upper() == _ft), None)
+            if _fd is None:
+                continue
+            _fd_sh = _f(_fd.get("shares"))
+            _fd_n = _trim_sizing.fraction_trim_shares(_fd_sh, DETERIORATION_TRIM_SUGGESTED_PCT)
+            if not (_fd_sh > 0 and _fd_n >= 1):
+                continue
+            _fd_px = _fd.get("price")
+            if not (isinstance(_fd_px, (int, float)) and math.isfinite(_fd_px) and _fd_px > 0):
+                _fpr = _port_rows(port_df, _ft)
+                _fd_px = _f(_fpr["Price"].iloc[0], None) if not _fpr.empty else None
+            _fold_extra[_ft] = [{
+                "reason_key": "deterioration_floor",
+                "trim_shares": _fd_n,
+                "trim_dollars": (round(_fd_n * _fd_px, 0)
+                                 if _fd_px is not None and math.isfinite(_fd_px) else None),
+                "from_weight": _fd.get("weight_pct"),
+                "target_weight": None,
+                "_fold_dd": _fd.get("dd_from_peak_pct"),
+            }]
+        items, _fold_payloads = act_trim_fold.fold(
+            items, act_today, extra_candidates=_fold_extra)
+    except Exception as _e:  # noqa: BLE001 — fail toward showing every sell
+        _log.warning("brief act-trim fold failed, keeping every Review trim: %s: %s",
+                     type(_e).__name__, _e)
+        items = act_trim_fold.strip_carriers(items)
+        _fold_payloads = {}
+    for _ft, _fp in _fold_payloads.items():
+        act_trim_fold.apply_payload(act_trim_fold.act_item_for(act_today, _ft), _fp)
+
     # U6: one Act trim per name. The sections above size independently, so one
     # name can carry several Act trims (or an Act trim beside a Watch that says
     # "sizes nothing"); the largest sale by shares wins and the rest become
@@ -4297,7 +4333,7 @@ def _breach_alternate_pass(port_df, alert_list, risk_recs, news_items, macro_eve
     are unchanged, the view reports the names unchecked). Shared inputs (`port_df`,
     `held_data`, `deterioration`, `news_items`, `premortem_triggers`, `risk_recs`) are
     only read by `_act_today` / `_review_list`. `_review_list` DOES mutate its `act_today`
-    argument's sell_signal dict (the weak-large `min_trim`), but `act_alt` is a fresh list
+    argument's partial-reduce dict (the folded `min_trim`, `act_trim_fold`), but `act_alt` is a fresh list
     of fresh dicts, so the main Brief's items are not touched.
     """
     breach = breach_recovery.breach_tickers(act)

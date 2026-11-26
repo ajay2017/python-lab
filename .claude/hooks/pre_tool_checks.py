@@ -1355,6 +1355,11 @@ _GATE_FILES = {
     # demoted; a wrong call shows no sell on a recovered deterioration-exit name, or two
     # sells on one name.
     "stock_analyzer/breach_recovery.py",
+    # Added 2026-11-26 (BriefSkipSizeBlind B-C1, docs/plans/brief-skip-size-blind-b1b2-spec.md):
+    # folds a larger same-name Review trim (profit-lock, earnings-week, weak-large, the
+    # deterioration floor under a Sell) into the Act Today card's min_trim; a wrong call
+    # sells less than a rule asked, or shows two sells on one name.
+    "stock_analyzer/act_trim_fold.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

@@ -3347,6 +3347,7 @@ def test_sell_signal_absorbs_weak_large_as_min_trim():
     expected = round(100_000.0 * (LARGE_POSITION_WEIGHT_PCT + 2 - _WL_TARGET) / 100)
     assert mt["trim_shares"] == int(round(expected / 100.0))
     assert mt["target_weight"] == _WL_TARGET
+    assert mt["reason_key"] == "weak_large"          # BriefSkipSizeBlind: the folded reason
     assert "At minimum, trim" in act[0]["directive"]
     assert "largest weak holding" in act[0]["why"]
 
@@ -3357,7 +3358,9 @@ def test_min_trim_singular_share_wording():
     act = [_act("sell_signal")]
     _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0, act_today=act)
     assert act[0]["min_trim"]["trim_shares"] == 1
-    assert "(1 share ≈" in act[0]["directive"]
+    # BriefSkipSizeBlind Q5: the folded tail keeps the count, not the dollar figure.
+    assert "(1 share)" in act[0]["directive"]
+    assert "≈" not in act[0]["directive"] and "$" not in act[0]["directive"]
 
 
 def test_weak_large_unchanged_without_act_item():
@@ -3514,8 +3517,10 @@ def test_deterioration_trim_defers_without_exit_badge():
     act = [_act("deterioration_trim")]
     items = _review_list(make_port_df([_wl_row()]), [], [], {}, _TODAY,
                          portfolio_value=100_000.0, act_today=act)
+    # BriefSkipSizeBlind: no separate weak-large card, and (this fixture's deterioration
+    # trim carries no count) the weak-large size now rides on the Act card as its minimum.
     assert _weak_large_items(items) == []
-    assert "min_trim" not in act[0]
+    assert act[0]["min_trim"]["reason_key"] == "weak_large"
 
 
 def test_weak_large_kept_beside_premortem_act_item():

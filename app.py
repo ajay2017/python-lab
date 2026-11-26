@@ -126,6 +126,7 @@ from stock_analyzer import home_dock_digest
 from stock_analyzer import market_trend
 from stock_analyzer import playbook_trend_view
 from stock_analyzer import brief_chips
+from stock_analyzer import act_trim_fold   # BriefSkipSizeBlind: the journal-context gate for a folded min_trim
 from stock_analyzer import buy_check_state   # entry-fail-closed C2b: Watchlist fit_state / beta_or_none
 from stock_analyzer import watchlist_fit_source   # entry-fail-closed C2b: which frame the Watchlist's sector / beta checks read
 from stock_analyzer import effective_capital as _effective_capital
@@ -7490,7 +7491,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 31  # bumped: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 32  # bumped: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -12704,7 +12705,7 @@ if page == "🏠 Home":
                 + f"</div>",
                 unsafe_allow_html=True,
             )
-            if _db_item.get("min_trim") and _db_ticker:
+            if act_trim_fold.shows_journal_context(_db_item) and _db_ticker:
                 _render_journal_context(_db_ticker)
             if _db_ticker:
                 # Live-price caption for stop_breach cards — confirm active or
@@ -12761,9 +12762,11 @@ if page == "🏠 Home":
                             key_suffix="stopsell",
                             label=f"📒 Log this sell ({_trim_sizing.fmt_shares(_db_sell_shares)} sh {_db_ticker})",
                         )
-                # Minimum trim attached to a sell_signal card by _review_list when
-                # the same name is also the largest weak holding: one card, one
-                # sizing, with the same log-the-trade affordance as a review trim.
+                # Minimum trim folded onto a partial-reduce card (sell_signal or
+                # deterioration_trim) by _review_list when a larger same-name Review
+                # trim (profit-lock, earnings-week, weak-large, the deterioration floor
+                # under a Sell) applies: one card, one sizing, with the same
+                # log-the-trade affordance as a review trim.
                 _db_min_trim = _db_item.get("min_trim")
                 _db_mt_sh = int(_db_min_trim["trim_shares"]) if _db_min_trim else 0
                 if _db_mt_sh >= 1:

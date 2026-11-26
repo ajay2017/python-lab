@@ -551,3 +551,26 @@ def test_risk_advisor_card_is_the_only_producer_of_the_card_size():
     for px in (None, 0.0, -5.0):
         assert _sn_rec(0.05, px)["trim_shares"] is None
     assert math.isfinite(sized["trim_shares"])
+
+
+# -- BriefSkipSizeBlind: a deterioration trim covers max(its own count, the folded min_trim) -----
+
+def test_a_deterioration_trim_covers_the_larger_of_its_count_and_its_min_trim():
+    mk = lambda **kw: {"kind": "deterioration_trim", "ticker": "AAA", **kw}
+    assert asc.item_covers(mk(trim_shares=25, min_trim={"trim_shares": 40}))["AAA"] == {
+        "exit": False, "shares": 40}
+    assert asc.item_covers(mk(trim_shares=40, min_trim={"trim_shares": 25}))["AAA"]["shares"] == 40
+    assert asc.item_covers(mk(trim_shares=25, min_trim={"trim_shares": 0}))["AAA"]["shares"] == 25
+    assert asc.item_covers(mk(trim_shares=25, min_trim="x"))["AAA"]["shares"] == 25
+    assert asc.item_covers(mk(trim_shares=25, min_trim={"trim_shares": True}))["AAA"]["shares"] == 25
+    assert asc.item_covers(mk(trim_shares=0, min_trim={"trim_shares": 7}))["AAA"]["shares"] == 7
+    assert asc.item_covers(mk(trim_shares=0, min_trim={"trim_shares": 0}))["AAA"]["shares"] is None
+    assert asc.item_covers(mk(min_trim={"trim_shares": float("nan")}))["AAA"]["shares"] is None
+    assert asc.item_covers(mk())["AAA"]["shares"] is None
+
+
+def test_a_sell_signal_still_covers_only_its_min_trim():
+    assert asc.item_covers({"kind": "sell_signal", "ticker": "AAA", "trim_shares": 9,
+                            "min_trim": {"trim_shares": 4}})["AAA"]["shares"] == 4
+    assert asc.item_covers({"kind": "sell_signal", "ticker": "AAA",
+                            "trim_shares": 9})["AAA"]["shares"] is None

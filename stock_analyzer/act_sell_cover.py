@@ -26,7 +26,9 @@ Never a sell (same membership as `held_trim_owner.brief_sell_names_ticker`): Act
 `risk` (its ticker is an attribution), `critical_news`, `premortem_triggered`, a macro
 Act item, a WATCH / HOLD / TIGHTEN_ONLY review item. `risk_off_derisk` is a sell of
 unknown size (owner Q2: never a full cover, since its smallest sale is zero). A
-`sell_signal` covers only up to its `min_trim` shares (owner Q1), else unknown.
+`sell_signal` covers only up to its `min_trim` shares (owner Q1), else unknown. A
+`deterioration_trim` covers the larger of its own `trim_shares` and its `min_trim`
+shares (a bigger same-name Review trim folded onto it, `act_trim_fold`).
 
 THE FAIL DIRECTIONS (the card is never hidden on a guess): cover None never defers;
 an unknown size never fully defers; a malformed entry reads unknown. The card's own
@@ -106,7 +108,13 @@ def item_covers(item) -> dict:
             n = valid_shares(mt.get("trim_shares")) if isinstance(mt, dict) else None
             return {t: {"exit": False, "shares": n}}
         if kind == "deterioration_trim":
-            return {t: {"exit": False, "shares": valid_shares(item.get("trim_shares"))}}
+            # The card's own floor, or the larger same-name Review trim folded onto it
+            # (BriefSkipSizeBlind): the max of the two valid counts.
+            mt = item.get("min_trim")
+            own = valid_shares(item.get("trim_shares"))
+            folded = valid_shares(mt.get("trim_shares")) if isinstance(mt, dict) else None
+            counts = [n for n in (own, folded) if n is not None]
+            return {t: {"exit": False, "shares": max(counts) if counts else None}}
         if kind == "risk_off_derisk":
             return {t: {"exit": False, "shares": None}}      # owner Q2: never a full cover
         return {}

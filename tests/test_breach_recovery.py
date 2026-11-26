@@ -201,6 +201,28 @@ def test_the_scenes_actually_exercise_each_lane(monkeypatch):
     assert "min_trim" in sell                                   # the weak-large sizing rode on it
 
 
+def test_a_recovered_sell_with_an_earnings_trim_restores_one_card_carrying_the_earnings_min_trim(monkeypatch):
+    # BriefSkipSizeBlind: the alternate pass runs the fold too, so a recovered name whose
+    # no-breach build has a sell_signal AND an earnings-week trim restores ONE sell card
+    # (the Sell, carrying the earnings size), never a second trim card beside it.
+    df, pv = _book(-1.0, w=22.0, score=70.0, signal="Sell")
+    held = {"AAA": {"earnings": (_TODAY + timedelta(days=3)).isoformat()}}
+    monkeypatch.setattr(db, "deterioration_signals", lambda *a, **k: [])
+    brief = db.build_daily_briefing(
+        port_df=df, alert_list=[], risk_recs=[], news_items=[], macro_events=[],
+        held_data=held, scanner_results=None, portfolio_value=pv, today=_TODAY,
+        market_context={"tone": "bull"})
+    alt = brief["breach_alternates"]["AAA"]
+    assert [i["kind"] for i in alt["act"]] == ["sell_signal"]
+    assert alt["act"][0]["min_trim"]["reason_key"] == "earnings"
+    assert not [i for i in alt["review"]
+                if (i.get("action") or {}).get("type") in ("TRIM_TO_TARGET", "TRIM_AND_TIGHTEN")]
+    v = _view(brief, _ABOVE_APPROACHING)
+    mine = [i for i in v["active"] if str(i.get("ticker", "")).upper() == "AAA"]
+    assert [i.get("kind") for i in mine] == ["sell_signal"]
+    assert mine[0]["min_trim"]["reason_key"] == "earnings"
+
+
 @pytest.mark.parametrize("name", ["exit", "sell_signal_weak_large", "review_trims"])
 def test_main_lists_are_identical_with_the_pass_on_or_off(monkeypatch, name):
     on = _build(monkeypatch, name, -1.0)
@@ -584,8 +606,11 @@ def test_no_dollar_bold_or_share_count_in_any_produced_text(t):
 
 # ------------------------------------------------------------------ 14 pins
 
-def test_synth_schema_version_is_31():
-    assert "_SYNTH_SCHEMA_VER = 31  # bumped: the Brief result carries breach_alternates" in (
+def test_synth_schema_version_is_32_and_keeps_the_breach_note_in_its_history():
+    # BriefSkipSizeBlind bumped 31 -> 32; the BriefBreachRestore note sits in "was 31:".
+    assert "_SYNTH_SCHEMA_VER = 32  # bumped: a larger same-name Review trim" in (
+        (ROOT / "app.py").read_text(encoding="utf-8"))
+    assert "was 31: the Brief result carries breach_alternates" in (
         (ROOT / "app.py").read_text(encoding="utf-8"))
 
 
