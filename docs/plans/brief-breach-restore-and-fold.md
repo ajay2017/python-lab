@@ -1,0 +1,71 @@
+# BriefBreachRestore + BriefSkipSizeBlind: the Brief-internal siblings of DeferSizeBlind
+
+**Status:** DESIGNED 2026-11-26 (Opus planner `claude-opus-5-5`, PROCEED WITH CHANGES; checked against HEAD `211cbe5f` + the DeferSizeBlind code, since shipped as `882d5e09`). **Owner took every default Q1–Q10 2026-11-26** (Q1 restore everything the breach hid, both lanes; Q4 fold a larger Review trim into the Act card; Q5 weight + shares, no $; Q2 / Q3 / Q6–Q10 as written). Nothing built; next = Batch 1 (BriefBreachRestore) build. Two batches, each with its own Opus review: **Batch 1 BriefBreachRestore (Bug A) first, then Batch 2 BriefSkipSizeBlind (Bug B).** No constant changes value; no new constant. Bug-register rows BriefBreachRestore, BriefSkipSizeBlind.
+
+## Planner's changes to the framing
+
+1. **Bug A is wider than the Review list.** A stop breach also suppresses the same name's ACT-lane cards at build time (`_act_today`: sell_signal skipped ~:2977; deterioration TRIM / EXIT skipped ~:3001-3006; critical_news ~:3145; the same-ticker `risk` card dropped by consolidation ~:3313-3325). Restoring only the earnings-week / weak-large trims would leave a recovered name with a deterioration EXIT or a composite Sell showing **no sell at all**.
+2. **Bug B folds into the Act card, it doesn't cover the Review card.** A Review trim larger than the Act sell is folded into the Act card's `min_trim` (generalising today's Sell + weak-large pattern). The Act-lane card can't lose: it is persisted to `exit_signals` and read by the judgment opinions; "largest wins" = the Act card adopts the largest size.
+
+## 1. Defect sites (confirmed)
+
+`daily_briefing._review_list`: :3442-3449 `_exit_tickers` (EXIT_KINDS: stop_breach, sell_signal, deterioration_exit) / `_reduce_tickers` (+ deterioration_trim); :3534 stop card → TIGHTEN_ONLY under a reduce (its profit-lock `trim_shares` computed then dropped); :3626 earnings-week card skipped; :3758-3791 weak-large skipped, only a sell_signal gets `min_trim` via `_first_act` (**latent bug:** `_first_act` = first act item with the ticker, which can be a passthrough `premortem_triggered` card, :3359, on a `dollar_risk` tie); :3460 DETERIORATION_WATCH skips `_act_tickers`; :3860 news WATCH; :3942-3944 macro eligibility reads `_act_tickers`. `_act_today`: the act-lane sites above. Build level: :4419-4423 the risk-off pool excludes `all_flagged_tickers`; :4502 / :464-471 `_portfolio_tuneup` drops the beta card when its primary has any non-news card. Recovery today: `act_today_view.py` :176-202 demotes only `stop_breach` (`stop_recovery_state`, `STOP_RECOVERY_MARGIN_PCT`); the memo (app.py ~:7519-7527) rebuilds only on a NEW breach, so nothing restores what the build skipped; the Resolved card (~:13681-13720) says "Monitor the position" even when a deterioration EXIT was suppressed.
+
+## 2. Bug A: build the alternates, let the view choose
+
+Rejected: rebuild the Brief on recovery (flaps around the stop, defeats the "only NEW breaches" hysteresis, rewrites Grow Today / macro / risk-off mid-day); recompute at render (two freshnesses per number, decisions in render code); put restorable items into `act_today` / `review_list` (raw readers would see two sells: `_reduce_calls`, `all_flagged_tickers`, `exit_signals` capture, `brief_sell_tickers`).
+
+Chosen: **a counterfactual alternate pass at build, under a separate key only `act_today_view` reads.**
+1. R = tickers of `stop_breach` items in the final act list; empty → no second pass.
+2. `act_alt = _act_today(..., skip_breach=R)` (new kwarg; section 1 skips those rows; sections 2 / 2.5 / 3 + consolidation produce T's sell_signal, deterioration EXIT / TRIM, critical_news and risk cards as a no-breach build would).
+3. `review_alt = _review_list(..., act_today=act_alt, macro_exclude=R)` (macro eligibility only); cross-name picks (macro, risk-off) stay as built: a recovered name never becomes the pre-event / risk-off pick mid-day (U6-3 reasoning).
+4. `brief["breach_alternates"] = breach_recovery.alternates_for(R, act_alt, review_alt)`: `{T: {"act": [...], "review": [...]}}`, every T in R present (empty lists = checked, nothing else); excludes `premortem_triggered`, `macro`, `risk_off_derisk`; on an exception, log and set None (main lists unchanged).
+
+The U6 merge needn't re-run on Home: the alternate pass runs the whole `_review_list` pipeline (incl. `one_trim_per_name` and the Batch 2 fold). Invariant (tested): the main review list carries no item whose subject is in R.
+
+**View (`act_today_view`, delegating to new gate module `breach_recovery`):** after the demotion loop finds resolved tickers RT, `breach_recovery.augment(brief, RT)` → act' = main act minus the resolved stop_breach items + act alternates for RT; review' = main review + review alternates for RT; re-split; keep the original `resolved` copies; add `recovery_unchecked` (sorted T whose alternates are None / malformed). Removing the resolved breach items before re-splitting matters (else `_reconcile_act` folds a restored critical-news note onto a demoted breach copy that never renders). Restored copies carry `_restored_after_recovery: True`; the Brief is never mutated; alternates go after the main items of their lane.
+
+**Fail directions:** no key (legacy Brief) → byte-identical to today; key None → nothing restored + a disclosure line; live gap unavailable → stays active (the breach, the bigger sell, stays); view offline → unchanged. Downstream for free: `view_sell_cover`, the verified sell cover, Summary, the dock digest, `reconcile_tuneup` all read the view.
+
+**Time context:** recover → re-breach intraday gives breach / restored / breach with the same memoized Brief; gap exactly at `STOP_RECOVERY_MARGIN_PCT` stays active; weekend visit (live = build price) no recovery; an earlier-day Brief is gated by the verified-cover `built_date` check. Accepted: restored cards carry Brief-time sizes, like every Brief card.
+
+**Wording (render-only; no `$`, no `**`, no share count):** restored tag "↩️ Shown because {T}'s stop breach recovered (live price back above the stop); this call was in today's Brief behind that sell."; Resolved card, when the view still has a sell on T: "{T} still has its own Act Today call above; follow that, not this resolved stop." (else today's line); unchecked: "{T}'s other checks (earnings week, low score, sell signals) couldn't be rebuilt after the stop recovered; open 📈 Analysis before trading {T}."
+
+**Schema / history:** `_SYNTH_SCHEMA_VER` 30 → 31; nothing new persisted (`exit_signals`, `rec_events`, `recommendations`, gate ledger, `decision_context` read raw lists); pin it. `n_active` can rise on a recovery day (Summary and the dock agree: same view).
+
+## 3. Bug B: a cross-lane fold into the Act card
+
+Per subject T: **full exits** (`stop_breach`, `deterioration_exit`) skip as today. **Partial reduce kinds** (`deterioration_trim`, `sell_signal`): sections 1 / 2 / 3 build T's cards as normal, tagged `_fold_subject`. New gate module **`act_trim_fold.fold(items, act_today)`**, run **before** U6: removes T's tagged cards (TRIM_AND_TIGHTEN → TIGHTEN_ONLY with today's under-reduce `why`, via `_u6_tighten`; tagged WATCH dropped, as today's output); candidates = the sized lock, earnings and weak-large `trim_shares` (+ the deterioration TRIM floor that `_act_today` drops under a Sell, if Q7); M = largest candidate, N_A = the Act item's own count (`deterioration_trim.trim_shares`; None for sell_signal); N_A known and ≥ M → Act item unchanged; else `min_trim = {trim_shares, trim_dollars, from_weight, target_weight, reason_key}` from the winning candidate + a directive / why tail. `_review_list` applies it to the Act item whose kind is in `PARTIAL_REDUCE_KINDS` (never a premortem card; fixes `_first_act`), replacing today's inline weak-large attach. Fail-safe per subject: an invalid `trim_shares` leaves T's cards as built; a raising fold logs, strips the carriers, keeps the cards (both paths show every sell). Invariant: the Act card's cover = max(N_A, every candidate), at most one sell card per subject across both lanes. `act_sell_cover.item_covers` for `deterioration_trim` reads max(`trim_shares`, `min_trim.trim_shares`), so the standing surfaces see the true size. Crossovers (100 shares): deterioration 25% vs earnings-to-10% at weight 13.33, vs weak-large at 10.67, vs standing-to-15% at 20; the lock equals the deterioration floor (both 25%).
+
+**Beta / sharpe Tune-up (separate chunk B-C3):** `risk_advisor` beta rec gains `trim_shares` = floor(`beta_levers.trim.dollars_50pct` / price) (None without a trim row or price); `_portfolio_tuneup` stops build-time beta / sharpe filtering and annotates `subject` (Q9) + `trim_shares`; new gate module `tuneup_cover.reconcile_trim_drivers(cards, view_cover)` on Home after `reconcile_tuneup`: beta covered → drop with a visible 🔧 line (today silent); partial / unknown → keep + `act_cover_note(state, T, "beta trim")`; show → keep; chips removed only for exit-covered names; a sharpe card dropped (with a line) only when all its chips are exit-covered; view None → keep all. A WATCH-only card no longer hides the beta card (Q8).
+
+**Wording (Q5 default):** directive tails " At minimum, trim {w:.1f}% → {target:.1f}% before the earnings report ({N} share/s)." / " At minimum, trim {w:.1f}% → {WEAK_LARGE_TRIM_TO_PCT:.1f}% ({N} shares)." / " At minimum, sell {STOP_PROFIT_LOCK_TRIM_PCT:.0f}% of the position ({N} shares) to lock part of the gain."; why tails per reason + a U6-style "also covers …" clause; no `$`, no `**`; the share count stays (the card already prints "(n of m shares)" and the 📒 button needs it); app.py shows the journal-context block under `min_trim` only when `reason_key == "weak_large"`.
+
+**Schema / history:** `_SYNTH_SCHEMA_VER` → 32; `min_trim` not persisted to `exit_signals` (pin); flagged / reduce-call / add-blocking sets unchanged; risk-off pool and Grow Today unchanged.
+
+## Owner questions (defaults recommended)
+
+1. **(A) What a recovery restores:** every per-name card the breach suppressed, both lanes (Sell, deterioration EXIT / TRIM, critical news, the T-attributed risk card, earnings, weak-large, deterioration Watch, news Watch). [default] Alt: the Review trims only (leaves a recovered deterioration-EXIT name with no sell).
+2. **(A) Cross-name picks stay as built** (macro pre-event trim, risk-off de-risk, macro affected list). [yes]
+3. **(A) Labels:** the restored tag, the Resolved card's "still has its own Act Today call above" line, the unchecked disclosure. [yes]
+4. **(B) Fold shape:** a larger Review trim folds into the Act card's `min_trim` (one sell card per name). [default] Alt: keep the Review card beside the Act card with a cross-reference (two sells on one name, which U6 rejected).
+5. **(B) Wording:** fold tails print the target weight and share count, no "≈ $"; the existing weak-large `min_trim` sentence is unified to that shape (drops its "≈ $…"; pinned tests updated on purpose). [default] Alt: weights only, count on the 📒 button.
+6. **(B) Unknown Sell size:** a Sell with no sized candidate stays "Reduce or exit" (reads unknown on the standing surfaces, DeferSizeBlind Q1). [accept]
+7. **(B) Sell beside a deterioration TRIM:** carry the TRIM's 25% floor as a fold candidate so the Sell is sized. [default] A deterioration EXIT under a Sell is a precedence call → separate row.
+8. **(B) Beta card beside a Watch-only card:** stays, re-decided against the view's sell size with a visible line. [default] Alt: today's hide on any card.
+9. **(B) Beta card subject:** the name its text sells (`beta_levers.trim.ticker`), not `root_tickers[0]`. [default]
+10. **Batch order:** A first, then B (B then makes A's alternates size-aware automatically). [default]
+
+## Plan
+
+**Batch 1 (BriefBreachRestore):** A-C1 `breach_recovery.py` (`alternates_for`, `augment`, text helpers; `_GATE_FILES` + review-policy) → A-C2 `daily_briefing` (`_act_today(skip_breach=)`, `_review_list(macro_exclude=)`, the alternate pass + `breach_alternates`), `act_today_view` (`augment`, removal of resolved breach items, `recovery_unchecked`, restored tag), `_SYNTH_SCHEMA_VER` 31 → A-C3 app.py render (restored tag, Resolved card lines ~13681, Summary resolved caption ~15734; ships with C2) → A-C4 docs (F-25 / F-25a + Resolved section, architecture, User Guide, bug register, shipped-log, CLAUDE.md). One Opus review over A-C1–C3.
+
+**Batch 2 (BriefSkipSizeBlind):** B-C1 `act_trim_fold.py` + `act_sell_cover` reads `min_trim` for `deterioration_trim` → B-C2 `_review_list` exit / partial split, tagging, fold-before-U6 with fallback, payload applied, inline weak-large attach + `_first_act` removed, Q7 carrier, app.py journal-context gate, `_SYNTH_SCHEMA_VER` 32 (Opus review of C1 + C2) → B-C3 beta / sharpe (`risk_advisor` beta `trim_shares`, `_portfolio_tuneup` annotations, `tuneup_cover.py`, Home wiring; Opus review; may ship alone) → B-C4 docs.
+
+## Siblings named, not fixed here
+
+`_reduce_calls` (app.py ~3036) still pre-demotion (📈 Analysis banner, Overview badge; EWSiblings (18) / (19)); the `risk` attribution ticker suppressing the same name's deterioration Watch / news Watch / macro eligibility / the mechanical consolidation (card_ticker_semantics class, new row + planner); the macro affected list after a recovery (MacroAff f/u); bare literals `is_critical = gap <= 3.0` (~3527) and `_tf = 0.50` (risk_advisor ~259) (new constants at the same value, separate row); deterioration EXIT vs Sell precedence (Q7).
+
+## Tests the build must include
+
+The planner's 18-item list (alternate equivalence vs a no-breach build; non-R subjects unchanged; the main-list invariant; view boundaries at gap {−1, 0, 0.49, 0.5, 0.51, None} incl. re-breach and no mutation; critical news on a recovered T; legacy / None / raising-pass fail-safes and a single `_act_today` call on a no-breach day; time context; DeferSizeBlind end to end; the fold matrix and crossovers; the "never sells less" property; fold fail-safes; the premortem ordering case; Sell + weak-large regression; stop card under a partial reduce; `act_sell_cover` with `min_trim`; beta / sharpe cases; text rules; history and render pins, `_SYNTH_SCHEMA_VER` 31 / 32).

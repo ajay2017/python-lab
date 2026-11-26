@@ -53,6 +53,8 @@ Weight basis is the same everywhere today: every surface reads `port_df["Weight 
 
 ## 3. Fix shape
 
+**Superseded in part by DeferSizeBlind (2026-11-26, `docs/plans/defer-size-blind.md`):** the standing surfaces defer only to an Act sell that is an exit or at least as big as their own card (size-aware, `act_sell_cover`); a smaller or unsized sell keeps the card with a "do that sale first" line.
+
 **Principle.** In earnings week a held name's size is decided once, by one pure rule, on the highest-priority surface: Act Today. Earnings week never sizes looser than the week before. Standing surfaces (Tune-up, Risk Analysis, Rebalancer) defer to a Brief sell that names that ticker, with a visible line; never a silent drop.
 
 **Rule (recommended U1a + U1b).** New `trim_sizing.earnings_week_decision(weight, n_positions, shares)`: `basis="earnings_week"`, target `EARNINGS_OVERWEIGHT_TRIM_TO_PCT`, when w > floor; else `basis="standing_in_window"`, target `SINGLE_NAME_CEILING`, when w > `SINGLE_NAME_TRIM_TRIGGER` (reachable only for N ≤ 7); else None. Also returns `floor_pct`, `trim_shares` (floored), `over_ceiling` (w ≥ `SINGLE_NAME_CEILING`). `earnings_week_trim` stays as the first branch for backward compatibility.
