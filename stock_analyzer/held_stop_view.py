@@ -48,6 +48,21 @@ def _saved_part(h) -> tuple[float | None, object]:
     return _f(h.get("saved")), h.get("saved_on")
 
 
+def _carried_part(h) -> tuple[float | None, object]:
+    """(carried value, the date it was first reached) when the carried stop
+    (SlidingStop C3) BOUND, else (None, None). Reads a `build_held_stops` result's
+    `carry` dict (state "applied") or the `from_row` keys "carried" / "carried_on"
+    (the portfolio's "Stop Carried" / "Stop Carried On" columns, set only when it
+    bound)."""
+    h = h if isinstance(h, dict) else {}
+    cy = h.get("carry")
+    if isinstance(cy, dict):
+        if cy.get("state") == "applied" and _f(cy.get("value")) is not None:
+            return _f(cy.get("value")), cy.get("set_on")
+        return None, None
+    return _f(h.get("carried")), h.get("carried_on")
+
+
 def _saved_label(h: dict) -> str:
     """The saved row's own component label: `label_for(basis, binding, ratchet
     label)`. A result already carries it (`label`); only a hand-built dict lacks it."""
@@ -82,6 +97,9 @@ def from_row(row) -> dict:
         # the saved full-history floor, only when it bound ("Stop Saved" columns)
         "saved": _f(g("Stop Saved")),
         "saved_on": g("Stop Saved On"),
+        # the carried stop, only when it bound ("Stop Carried" columns)
+        "carried": _f(g("Stop Carried")),
+        "carried_on": g("Stop Carried On"),
         "components": {"entry": _f(g("Stop Entry")), "trailing": _f(g("Stop Trailing")),
                        "ratchet": _f(g("Stop Ratchet"))},
     }
@@ -145,6 +163,13 @@ def component_rows(h: dict) -> list[dict]:
         rows.append({"kind": "saved", "label": f"{_saved_label(h)} (saved)", "value": round(saved, 2),
                      "text": f"The stop saved from your full price history{on}. It is held here "
                              f"because {why}."})
+    carried, carried_on = _carried_part(h)
+    if carried is not None:
+        # a "carried" row only when the carry binds (it is applied after the floor)
+        on = f" from {carried_on}" if carried_on else ""
+        rows.append({"kind": "carried", "label": "Carried Stop", "value": round(carried, 2),
+                     "text": f"The stop carried{on}. It is held here because your trades in this "
+                             "position haven't changed since then and today's figure came out lower."})
     rows.sort(key=lambda x: -x["value"])
     return rows
 
@@ -197,12 +222,19 @@ def what_if(h: dict, price: float, avg_cost: float) -> dict | None:
     best = max(v for v in (entry, trailing, ratchet) if v is not None)
     stop = max(cur, round(best, 2))
     saved, _ = _saved_part(h)
+    saved_label = _saved_label(h) if saved is not None else None
+    carried, _ = _carried_part(h)
+    if carried is not None:
+        # the carry is applied AFTER the floor, on the floored stop, so when it binds
+        # its value is the stop in force (>= any floor value): it takes the slot
+        from stock_analyzer.held_stop_wiring import LABEL_CARRIED
+        saved, saved_label = carried, LABEL_CARRIED
     return {"stop": stop, "current": cur, "raised": stop > cur,
             "components": {"entry": entry, "trailing": trailing, "ratchet": ratchet},
             "ratchet_label": label, "price": px,
             # the saved full-history floor (None unless it bound today) and its label,
             # so `driver_label` can name it when it is above every rebuilt part
-            "saved": saved, "saved_label": _saved_label(h) if saved is not None else None}
+            "saved": saved, "saved_label": saved_label}
 
 
 # ── one-time "stops recalculated" notice (owner decision D4, 2026-10-30) ─────
