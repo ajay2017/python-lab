@@ -44,7 +44,7 @@ def early_trail(monkeypatch):
 
 
 def build(h, held, trades, fetch, as_of=AS_OF):
-    return hw.build_held_stops(h, held, trades, as_of, fetch_history=fetch, floors={})["AAA"]
+    return hw.build_held_stops(h, held, trades, as_of, fetch_history=fetch, floors={}, carry={})["AAA"]
 
 
 def _boom(t, p):
@@ -215,14 +215,14 @@ def test_never_raises(monkeypatch):
     df, e, px, h, tr = setup()
     junk = [None, 5, {"Ticker": ""}, {"Ticker": "BAD", "Shares": "x", "Avg Cost ($)": 1},
             {"Ticker": "AAA", "Shares Exact": 10.0, "Avg Cost ($)": px}]
-    out = hw.build_held_stops(junk, {"AAA": 5}, tr, AS_OF, fetch_history=lambda t, p: 1 / 0, floors={})
+    out = hw.build_held_stops(junk, {"AAA": 5}, tr, AS_OF, fetch_history=lambda t, p: 1 / 0, floors={}, carry={})
     assert set(out) <= {"AAA"}
-    assert hw.build_held_stops(None, None, None, AS_OF, fetch_history=None, floors={}) == {}
+    assert hw.build_held_stops(None, None, None, AS_OF, fetch_history=None, floors={}, carry={}) == {}
     monkeypatch.setattr(hs, "compute_held_stop", lambda *a, **k: 1 / 0)
     r = build(h, {"AAA": {"df": df}}, tr, lambda t, p: df)
     assert r["basis"] == "unavailable" and r["stop"] is None and "ZeroDivisionError" in r["note"]
     monkeypatch.setattr(C, "HELD_TRAIL_START", "not-a-date")
-    assert hw.build_held_stops(h, {}, tr, AS_OF, fetch_history=lambda t, p: df, floors={})["AAA"]["stop"] is None
+    assert hw.build_held_stops(h, {}, tr, AS_OF, fetch_history=lambda t, p: df, floors={}, carry={})["AAA"]["stop"] is None
 
 
 # ── rule properties through the driver ───────────────────────────────────────
@@ -817,7 +817,7 @@ def test_cron_runner_builds_email_footer_notes_through_plain_text_note():
 # ── fetch_range: today's High / Low when no history frame has a today row ─────
 def build_r(h, held, trades, fetch, fetch_range, as_of=AS_OF):
     return hw.build_held_stops(h, held, trades, as_of, fetch_history=fetch,
-                               floors={}, fetch_range=fetch_range)["AAA"]
+                               floors={}, carry={}, fetch_range=fetch_range)["AAA"]
 
 
 def _range_case():

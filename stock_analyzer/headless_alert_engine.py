@@ -29,6 +29,8 @@ from stock_analyzer import risk_off_check as _risk_off_check
 from stock_analyzer import split_detector
 from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import stop_breach_text as _stop_breach_text
+from stock_analyzer import held_stop as _held_stop
+from stock_analyzer import held_stop_carry as _held_stop_carry
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import young_holding_stop as _young_holding_stop
 from stock_analyzer import news_feed
@@ -207,11 +209,41 @@ def _build_context(today: date) -> dict:
     except Exception:
         held_stop_floors = None
     held_stop_floors_readable = held_stop_floors is not None
+    # Saved carried stops (SlidingStop C3), read ONCE the same way: None = couldn't
+    # read (the carry stays off, a degraded note says so, the premarket lane may go
+    # red, the EOD writes nothing); {} = read, none saved. Never collapsed.
+    try:
+        held_stop_carry = db.load_held_stop_carry_or_none(held_tickers)
+    except Exception:
+        held_stop_carry = None
+    held_stop_carry_readable = held_stop_carry is not None
     held_stops = _held_stop_wiring.build_held_stops(
         holdings, held_data, trades_strict, today,
         fetch_history=_held_stop_wiring.fetch_or_raise,
         floors=held_stop_floors,
+        carry=held_stop_carry,
         fetch_range=fetch_session_range)
+    # What the EOD carry writer needs besides `held_stops` (SlidingStop C3): the
+    # strict journal's BUY / SPLIT fingerprint per name (None when unreadable), and
+    # each name's Close for the session dated `today` (the seed guard). Only a bar
+    # whose ET date IS `today` counts, never the last bar blindly: a frame that
+    # ends yesterday, a NaN or a non-positive Close gives no entry.
+    held_stop_journal_readable = trades_strict is not None
+    held_stop_journal_sigs = {t: _held_stop_carry.journal_buy_sig(trades_strict, t)
+                              for t in held_stops}
+    held_stop_session_closes: dict = {}
+    for _t in held_stops:
+        try:
+            _r = held_data.get(_t)
+            _df = _r.get("df") if isinstance(_r, dict) else None
+            if _df is None or len(_df) == 0:
+                continue
+            _bars = _df[_held_stop._et_dates(_df.index) == pd.Timestamp(today)]
+            _c = _bars["Close"].dropna()
+            if len(_c) and float(_c.iloc[-1]) > 0 and math.isfinite(float(_c.iloc[-1])):
+                held_stop_session_closes[_t] = float(_c.iloc[-1])
+        except Exception:
+            continue
     # One line per holding with no automatic stop yet (a new listing), or a stop on a
     # limited basis. A manual-stops read that failed (None) keeps today's lines: the
     # footer never claims "your manual stop is in force" from an unread table.
@@ -307,7 +339,18 @@ def _build_context(today: date) -> dict:
             # EOD floor writer reads it. `held_stop_floors_readable` is False when the
             # saved floors couldn't be read (distinct from "none saved").
             "held_stops": held_stops,
-            "held_stop_floors_readable": held_stop_floors_readable}
+            "held_stop_floors_readable": held_stop_floors_readable,
+            # Additive (SlidingStop C3): what the EOD carry writer reads.
+            # `held_stop_carry` = the saved rows as read (the writer's `prior_rows`;
+            # None = couldn't read, {} = none saved); `*_readable` flags distinguish
+            # "couldn't read" from "none"; `held_stop_journal_sigs` = {T: (count,
+            # max id) of BUY + SPLIT rows | None}; `held_stop_session_closes` = {T:
+            # Close of the bar dated `today`} (absent when there is none).
+            "held_stop_carry": held_stop_carry,
+            "held_stop_carry_readable": held_stop_carry_readable,
+            "held_stop_journal_readable": held_stop_journal_readable,
+            "held_stop_journal_sigs": held_stop_journal_sigs,
+            "held_stop_session_closes": held_stop_session_closes}
 
 
 def compute_protective_alerts(today: date | None = None) -> dict:
@@ -522,6 +565,12 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         # Additive (#26 C3c): the premarket lane's saved-floor heartbeat inputs
         "held_stops": ctx.get("held_stops"),
         "held_stop_floors_readable": ctx.get("held_stop_floors_readable"),
+        # Additive (SlidingStop C3): the premarket lane's saved-carry heartbeat input
+        "held_stop_carry": ctx.get("held_stop_carry"),
+        "held_stop_carry_readable": ctx.get("held_stop_carry_readable"),
+        "held_stop_journal_readable": ctx.get("held_stop_journal_readable"),
+        "held_stop_journal_sigs": ctx.get("held_stop_journal_sigs"),
+        "held_stop_session_closes": ctx.get("held_stop_session_closes"),
         # Additive — full WATCH/TRIM/EXIT + RISK_OFF signal lists (composite_score
         # attached above) for exit_signals capture. Never used to build `alerts`
         # above; the EXIT-only/risk_off email scope is unchanged.
@@ -1919,4 +1968,10 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
             "manual_stops_unreadable": bool(ctx.get("manual_stops_unreadable")),
             # Additive (#26 C3c): what the EOD floor writer saves (see _build_context)
             "held_stops": ctx.get("held_stops"),
-            "held_stop_floors_readable": ctx.get("held_stop_floors_readable")}
+            "held_stop_floors_readable": ctx.get("held_stop_floors_readable"),
+            # Additive (SlidingStop C3): what the EOD carry writer saves (see _build_context)
+            "held_stop_carry": ctx.get("held_stop_carry"),
+            "held_stop_carry_readable": ctx.get("held_stop_carry_readable"),
+            "held_stop_journal_readable": ctx.get("held_stop_journal_readable"),
+            "held_stop_journal_sigs": ctx.get("held_stop_journal_sigs"),
+            "held_stop_session_closes": ctx.get("held_stop_session_closes")}

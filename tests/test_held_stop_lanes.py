@@ -27,6 +27,7 @@ def _ctx(held_stops, trades):
          patch.object(hae.db, "load_trades_or_none", return_value=trades), \
          patch.object(hae.db, "load_manual_stops_or_none", return_value={}), \
          patch.object(hae.db, "load_held_stop_floors_or_none", return_value={}), \
+         patch.object(hae.db, "load_held_stop_carry_or_none", return_value={}), \
          patch.object(hae, "fetch_risk_free_rate", return_value=0.045), \
          patch.object(hae, "fetch_spy", return_value=pd.DataFrame({"Close": [1.0, 2.0]})), \
          patch.object(hae, "_vix_level", return_value=16.0), \

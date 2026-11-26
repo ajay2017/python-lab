@@ -593,3 +593,50 @@ def test_ddl_nullable_columns_are_exactly_ratchet_label():
 def test_ddl_is_rerunnable_and_never_destructive():
     s = _sql().upper()
     assert "DROP TABLE" not in s and "TRUNCATE" not in s and "DELETE FROM" not in s
+
+
+# ── load_held_stop_carry_tickers_or_none (SlidingStop C3: the EOD sweep's saved set) ──
+def test_tickers_loader_returns_every_saved_ticker_upper_cased_from_one_unfiltered_select():
+    c = _install(_Client(rows=[_db_row("aaa"), _db_row("BBB "), _db_row("ccc")]))
+    assert db.load_held_stop_carry_tickers_or_none() == {"AAA", "BBB", "CCC"}
+    assert c.tables and set(c.tables) == {"held_stop_carry"}
+    assert c.selects and set(c.selects) == {"ticker"} and c.ins == []     # no ticker filter
+    assert _ERRORS == []
+
+
+def test_tickers_loader_empty_table_is_an_empty_set_not_none():
+    _install(_Client(rows=[]))
+    out = db.load_held_stop_carry_tickers_or_none()
+    assert out == set() and out is not None
+
+
+def test_tickers_loader_pages_past_a_server_cap():
+    rows = [_db_row(f"T{i:03d}") for i in range(7)]
+    _install(_Client(rows=rows, server_cap=3))
+    assert db.load_held_stop_carry_tickers_or_none() == {r["ticker"] for r in rows}
+
+
+def test_tickers_loader_no_credentials_is_none_with_no_call(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: False)
+    c = _install(_Client(rows=[_db_row()]))
+    assert db.load_held_stop_carry_tickers_or_none() is None
+    assert c.tables == []
+
+
+def test_tickers_loader_query_error_is_none_and_recorded():
+    _install(_Client(exc=RuntimeError("boom 503")))
+    assert db.load_held_stop_carry_tickers_or_none() is None
+    assert any("held_stop_carry_read" in m for m in _ERRORS)
+
+
+def test_tickers_loader_missing_table_is_none_and_not_recorded():
+    _install(_Client(exc=RuntimeError(MISSING_TABLE)))
+    assert db.load_held_stop_carry_tickers_or_none() is None
+    assert _ERRORS == []
+
+
+def test_tickers_loader_client_construction_failure_never_raises(monkeypatch):
+    def boom():
+        raise RuntimeError("no client")
+    monkeypatch.setattr(db, "_client", boom)
+    assert db.load_held_stop_carry_tickers_or_none() is None

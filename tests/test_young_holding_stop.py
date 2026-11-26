@@ -132,7 +132,7 @@ def test_build_held_stops_passes_bars_through_to_the_state(monkeypatch):
                             "price": 100.0, "traded_at": f"{start}T14:00:00+00:00"}])
     h = [{"Ticker": "ANT", "Shares": 10, "Shares Exact": 10.0, "Avg Cost ($)": 100.0}]
     out = hw.build_held_stops(h, {}, trades, date(2026, 10, 30),
-                              fetch_history=lambda t, p: df, floors={})
+                              fetch_history=lambda t, p: df, floors={}, carry={})
     assert out["ANT"]["basis"] == "unavailable"
     s = y.stop_state(out["ANT"], None)
     assert s["state"] == "none" and s["bars"] == 3 and s["need"] == C.HELD_STOP_MIN_BARS
@@ -506,6 +506,7 @@ def _ctx(held_stops, manual):
          patch.object(hae.db, "load_trades_or_none", return_value=pd.DataFrame({"ticker": ["ANT"]})), \
          patch.object(hae.db, "load_manual_stops_or_none", return_value=manual), \
          patch.object(hae.db, "load_held_stop_floors_or_none", return_value={}), \
+         patch.object(hae.db, "load_held_stop_carry_or_none", return_value={}), \
          patch.object(hae, "fetch_risk_free_rate", return_value=0.045), \
          patch.object(hae, "fetch_spy", return_value=pd.DataFrame({"Close": [1.0, 2.0]})), \
          patch.object(hae, "_vix_level", return_value=16.0), \

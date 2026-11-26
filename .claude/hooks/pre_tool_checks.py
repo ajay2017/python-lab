@@ -1327,6 +1327,11 @@ _GATE_FILES = {
     # a wrong call lets a stop slide down with the price, or carries one into a
     # different position.
     "stock_analyzer/held_stop_carry.py",
+    # Added 2026-11-26 (SlidingStop C3, docs/plans/sliding-stop-c3-spec.md): whether
+    # the EOD carry writer may trust the session closes its seed guard reads (a
+    # forced run before the close passes none); a wrong call seeds a carried stop
+    # from a half-finished bar.
+    "stock_analyzer/eod_session_closes.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

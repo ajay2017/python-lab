@@ -70,7 +70,7 @@ def _full(s, i, floors, trades=None, holdings=None, as_of=None):
     """The long-frame (full path) result for as_of = days[i] (bars before it)."""
     return hw.build_held_stops(
         holdings or _holdings(s), {}, _entry(s) if trades is None else trades,
-        as_of or s.days[i], fetch_history=lambda t, p: s.df.iloc[:i], floors=floors)[T]
+        as_of or s.days[i], fetch_history=lambda t, p: s.df.iloc[:i], floors=floors, carry={})[T]
 
 
 def _fallback(s, i, floors, trades=None, holdings=None, as_of=None, window=80):
@@ -81,7 +81,7 @@ def _fallback(s, i, floors, trades=None, holdings=None, as_of=None, window=80):
     return hw.build_held_stops(
         holdings or _holdings(s), {T: {"df": s.df.iloc[max(0, i - window):i]}},
         _entry(s) if trades is None else trades, as_of or s.days[i],
-        fetch_history=_down, floors=floors)[T]
+        fetch_history=_down, floors=floors, carry={})[T]
 
 
 def _db_shape(row):
@@ -166,13 +166,13 @@ def _scenarios(s):
         "fallback": lambda fl: _fallback(s, 120, fl),
         "prior_session": lambda fl: hw.build_held_stops(
             _holdings(s), {T: {"df": s.df.iloc[:118]}}, None, s.days[118],
-            fetch_history=lambda t, p: s.df.iloc[:118], floors=fl)[T],
+            fetch_history=lambda t, p: s.df.iloc[:118], floors=fl, carry={})[T],
         "unavailable": lambda fl: hw.build_held_stops(
             _holdings(s), {}, _entry(s), s.days[118],
-            fetch_history=lambda t, p: 1 / 0, floors=fl)[T],
+            fetch_history=lambda t, p: 1 / 0, floors=fl, carry={})[T],
         "buy_day": lambda fl: hw.build_held_stops(
             _holdings(s, avg=s.avg), {T: {"df": s.df.iloc[:118]}}, buy_trades, s.days[118],
-            fetch_history=lambda t, p: s.df.iloc[:118], floors=fl)[T],
+            fetch_history=lambda t, p: s.df.iloc[:118], floors=fl, carry={})[T],
     }
 
 
@@ -362,7 +362,8 @@ def test_late_first_buy_that_moves_the_start_finds_no_row(s, saved):
 def _pm_payload(held_stops, readable):
     return {"alerts": [{"kind": "stop_breach", "ticker": "AAPL"}], "built_at": "x", "errors": [],
             "held_stops_failed": None, "held_stop_notes": [],
-            "held_stops": held_stops, "held_stop_floors_readable": readable}
+            "held_stops": held_stops, "held_stop_floors_readable": readable,
+            "held_stop_carry_readable": True}   # the carry heartbeat is test_held_stop_carry_wiring's
 
 
 _DAY = datetime(2026, 12, 1, 8, 30)
@@ -462,7 +463,7 @@ def test_eod_uses_the_et_date_not_the_utc_date(logs, writes):
     es = Scenario(end=date(2026, 11, 3))                 # last bar Tue 11-03, as_of Wed 11-04
     payload = {"held_stops": {T: hw.build_held_stops(
         _holdings(es), {}, _entry(es), date(2026, 11, 4),
-        fetch_history=lambda t, p: es.df, floors={})[T]}, "held_stop_floors_readable": True}
+        fetch_history=lambda t, p: es.df, floors={}, carry={})[T]}, "held_stop_floors_readable": True}
     assert _WED_2030.astimezone(pytz.utc).date() == date(2026, 11, 5)
     assert cr._eod_held_stop_floors(payload, _WED_2030) == []
     assert writes[0][0]["as_of"] == "2026-11-04"
@@ -513,6 +514,7 @@ def _ctx_with_floors(floors, held_stops):
          patch.object(hae.db, "load_trades_or_none", return_value=GOOD), \
          patch.object(hae.db, "load_manual_stops_or_none", return_value={}), \
          patch.object(hae.db, "load_held_stop_floors_or_none", return_value=floors) as ld, \
+         patch.object(hae.db, "load_held_stop_carry_or_none", return_value={}), \
          patch.object(hae, "fetch_risk_free_rate", return_value=0.045), \
          patch.object(hae, "fetch_spy", return_value=pd.DataFrame({"Close": [1.0, 2.0]})), \
          patch.object(hae, "_vix_level", return_value=16.0), \
@@ -607,7 +609,7 @@ def test_unrecorded_split_on_a_fallback_day_never_adds_a_breach(s, saved):
 
     def _build(fl):
         return hw.build_held_stops(_holdings(s), {T: {"df": halved}}, _entry(s), s.days[i],
-                                   fetch_history=_down, floors=fl)[T]
+                                   fetch_history=_down, floors=fl, carry={})[T]
     raw, eff = _build({}), _build(floors)
     assert eff["floor"]["state"] == hf.INVALID
     assert eff["floor"]["reason"].startswith(hf.R_HISTORY)

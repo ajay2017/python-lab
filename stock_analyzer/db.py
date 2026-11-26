@@ -4322,6 +4322,32 @@ def load_held_stop_carry_or_none(tickers) -> "dict | None":
         return None
 
 
+def load_held_stop_carry_tickers_or_none() -> "set[str] | None":
+    """Every ticker with a saved carried stop (upper-cased), for the EOD sweep of
+    sold positions only (`held_stop_carry.sweep_tickers`). One unfiltered
+    `select("ticker")` (the table holds one row per held name).
+
+    Offline-sentinel contract: None on ANY failure (no DB, missing table, network /
+    auth error), which also records a Supabase error except for a missing table
+    (like `load_held_stop_carry_or_none`); `set()` when the read SUCCEEDED and
+    nothing is saved. Never collapse the two: the sweep deletes nothing on None.
+    Never raises."""
+    if not has_db():
+        return None
+    try:
+        rows = _read_all_pages(
+            lambda: _client().table("held_stop_carry").select("ticker").order("ticker"),
+            _HELD_STOP_CARRY_PAGE_SIZE,
+            dedupe_key=None,
+        )
+        return {str(r.get("ticker") or "").strip().upper()
+                for r in rows if isinstance(r, dict) and str(r.get("ticker") or "").strip()}
+    except Exception as exc:
+        if not _held_stop_carry_missing_table(exc):
+            _record_db_error(f"held_stop_carry_read: {str(exc)[:100]}")
+        return None
+
+
 def save_held_stop_carry(rows) -> "tuple[bool, str]":
     """Upsert `held_stop_carry.rows_to_write` rows into `held_stop_carry`.
     Returns (ok, detail); `detail` is a short human-readable line for the EOD

@@ -5,7 +5,7 @@ is the DRIVER the app, the cron and the headless engine all call, so every
 surface judges a breach against the same number:
 
   build_held_stops(holdings, held_data, trades_df, as_of, *, fetch_history,
-                   floors, fetch_range=None)
+                   floors, carry, fetch_range=None)
       -> {TICKER: result dict}      (never raises)
 
 `floors` (REQUIRED, no default; #26 C3c) is `db.load_held_stop_floors_or_none`'s
@@ -13,6 +13,16 @@ result: {TICKER: {episode_start: row}}, `{}` = read with nothing saved, `None` =
 couldn't be read. `held_stop_floor.apply_floor` is applied ONCE per ticker, to the
 result of the frame that produced it, so every surface reads the same effective
 stop (it never changes the basis; a buy-day / unavailable result is not floored).
+
+`carry` (REQUIRED, no default; SlidingStop C3) is `db.load_held_stop_carry_or_none`'s
+result: {TICKER: saved row}, `{}` = read with nothing saved, `None` (or any non-dict) =
+couldn't be read. `held_stop_carry.apply_carry` runs AFTER the floor, once per ticker,
+on the same frame, and only on a partial / prior_session result: the saved carried
+stop is a lower bound, so the stop never falls while the carry is trusted (it never
+lowers the computed stop, and a buy-day / unavailable / rejected-fill result is never
+carried: `_one` tags a buy-day return `buy_day_path` and gives it no `carry` key).
+When the carry binds the label is `LABEL_CARRIED`. Every result carries
+`episode_status` (the journal episode's status, None when none applies).
 
 `fetch_range(ticker, as_of) -> {"low", "high"} | None` is consulted only for a
 position bought today and only when no history frame has a row for today: Yahoo
@@ -35,7 +45,7 @@ Policy values are read from `constants` at call time: the entry multiple is
 `HELD_TRAIL_START`, plus `HELD_STOP_*` tolerances and `STOP_RATCHET_LEVELS`.
 
 A manual stop is NOT applied here (`held_stop.compose_with_manual` does that);
-this module only builds the AUTOMATIC stop. Not wired as of the commit that added it.
+this module only builds the AUTOMATIC stop.
 """
 from __future__ import annotations
 
@@ -47,6 +57,7 @@ import pandas as pd
 from stock_analyzer import constants as _C
 from stock_analyzer import data as _data
 from stock_analyzer import held_stop as hs
+from stock_analyzer import held_stop_carry as hsc
 from stock_analyzer import held_stop_floor as hsf
 from stock_analyzer.act_today_precedence import is_stop_breached
 
@@ -62,6 +73,14 @@ LABEL_TRAILING = "Trailing Stop"
 LABEL_PRIOR = "Prior-close ATR"
 LABEL_FALLBACK = "Fallback Stop"
 LABEL_UNAVAILABLE = "Stop Unavailable"
+LABEL_CARRIED = "Carried Stop"
+
+# The prior-close note's trailing sentence, and what replaces it once the carry
+# holds the stop (APPLIED or NOT_BINDING): "can move down" is then false while the
+# carry is trusted. A test pins both strings.
+NOTE_NO_TRAIL = "It does not trail, and it can move down as the price falls."
+NOTE_NO_TRAIL_CARRIED = ("It does not trail on its own; a saved stop keeps it from moving "
+                         "down while your trades in this position don't change.")
 
 
 # ── small helpers ────────────────────────────────────────────────────────────
@@ -208,6 +227,10 @@ def _wrap(ticker: str, res: dict, note: str, avg_cost: float, *, fell_back: bool
         "degraded": basis in _DEGRADED_BASES,
         "fell_back": fell_back,
         "buy_day": basis == "buy_day",
+        # additive (SlidingStop C3): the journal episode's status (ok / mismatch /
+        # no_history / unreadable); `_one` sets it on every result it returns. The
+        # Home notice tier (`held_stop_carry.notice_tier`) reads it.
+        "episode_status": None,
     }
 
 
@@ -385,10 +408,14 @@ def _note_for(res: dict, ep: dict, *, bundle: bool, n_sessions: int | None,
                 else "No stop could be built: price history is missing.")
     if basis == "prior_session":
         mult = max(float(_C.ATR_STOP_MULT), float(_C.HELD_TRAIL_ATR_MULT))
-        why = (_ep_reason_text(ep) if (ep or {}).get("status") != "ok" else reason)
-        return (f"This position's start isn't usable ({why}), so the stop is the last "
-                f"completed close minus {mult:g} x ATR. It does not trail, and it can "
-                "move down as the price falls.")
+        if (ep or {}).get("status") == "ok":
+            # a young listing: the start IS usable, but no part of the full stop can be
+            # computed yet (the old "start isn't usable" wording was false here)
+            why = reason or "too little price history before the entry"
+            return (f"No part of the full stop can be computed yet ({why}), so the stop "
+                    f"is the last completed close minus {mult:g} x ATR. {NOTE_NO_TRAIL}")
+        return (f"This position's start isn't usable ({_ep_reason_text(ep)}), so the stop is "
+                f"the last completed close minus {mult:g} x ATR. {NOTE_NO_TRAIL}")
     parts: list[str] = []
     if bundle:
         n = f" ({n_sessions} sessions)" if n_sessions else ""
@@ -443,7 +470,7 @@ def _long_frame(ticker: str, ep: dict, as_of: date, pol: dict, fetch_history):
 
 
 def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
-         floors, fetch_range=None) -> dict:
+         floors, carry, fetch_range=None) -> dict:
     t = _ticker(h)
     shares, avg_cost = _exact_shares(h), _avg_cost(h)
     ep = hs.episode_from_journal(t, trades_df, shares, shares_tol=float(_C.HELD_STOP_SHARES_TOL))
@@ -469,33 +496,76 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
             kept["stop_set_on"] = None
             return kept
 
+    def carried(out: dict, frame) -> dict:
+        """The saved carried stop (SlidingStop C3), applied once to the FLOORED `out`
+        with the frame that produced it. `carry` not a dict = the saved rows couldn't
+        be read. `apply_carry` never raises and never lowers; a fault in the inputs
+        computed here becomes the same FAILED shape (the stop stays, the EOD goes red)."""
+        readable = isinstance(carry, dict)
+        try:
+            row = carry.get(t) if readable else None
+            res = hsc.apply_carry(
+                out, row, as_of=as_of, bars=frame, avg_cost=avg_cost,
+                journal_sig=hsc.journal_buy_sig(trades_df, t),
+                journal_readable=trades_df is not None,
+                policy_sig_now=hsf.policy_sig(), carry_readable=readable)
+        except Exception as e:      # a carry bug must never remove or lower today's stop
+            kept = dict(out)
+            kept["carry"] = hsc._carry_dict(
+                hsc.FAILED, reason=f"{hsc.CARRY_CHECK_FAILED}: {type(e).__name__}",
+                computed=_f(out.get("stop")),
+                note=("The carried stop couldn't be checked, so this stop may be lower than "
+                      "on earlier days."))
+            return kept
+        cs = res.get("carry")
+        state = cs.get("state") if isinstance(cs, dict) else None
+        if state == hsc.APPLIED:
+            # the carried stop's own label: `label_for("prior_session", "trailing")`
+            # would read "Prior-close ATR", which is false for a carried trailing stop
+            res["label"] = LABEL_CARRIED
+        if state in (hsc.APPLIED, hsc.NOT_BINDING) and NOTE_NO_TRAIL in str(res.get("note") or ""):
+            res["note"] = str(res["note"]).replace(NOTE_NO_TRAIL, NOTE_NO_TRAIL_CARRIED)
+        return res
+
+    def tagged(out: dict) -> dict:
+        """`out` (a copy) with the journal episode's status, on every path."""
+        r = dict(out)
+        r["episode_status"] = ep.get("status")
+        return r
+
     if ep.get("status") == "ok" and ep.get("start") is not None and ep["start"] >= as_of:
-        return _buy_day(t, ep, bundle, avg_cost, as_of, pol, fetch_history, fetch_range)
+        # bought today: never floored or carried; `buy_day_path` lets a test pin that
+        # (the existing `buy_day` key is False on the rejected-fill prior_session result)
+        r = tagged(_buy_day(t, ep, bundle, avg_cost, as_of, pol, fetch_history, fetch_range))
+        r["buy_day_path"] = True
+        return r
 
     if ep.get("status") != "ok":
-        df = bundle
-        if df is None:
-            try:
-                df = fetch_history(t, "1y")
-            except Exception:
-                df = None
+        # U6: the unadjusted 1-year frame FIRST (as buy-day does; its closes are the ones
+        # the saved carry was written from), the 6-month bundle only when that fails.
+        try:
+            df = fetch_history(t, "1y")
+        except Exception:
+            df = None
         if not _usable_frame(df):
-            return _unavailable(t, "No price history is available for this position.", avg_cost)
+            df = bundle
+        if not _usable_frame(df):
+            return tagged(_unavailable(t, "No price history is available for this position.", avg_cost))
         res = run(df)
-        return floored(_wrap(t, res, _note_for(res, ep, bundle=False, n_sessions=None,
-                                               fetch_problem=None), avg_cost, ep=ep), df)
+        return tagged(carried(floored(_wrap(t, res, _note_for(res, ep, bundle=False, n_sessions=None,
+                                                               fetch_problem=None), avg_cost, ep=ep), df), df))
 
     long_df, problem = _long_frame(t, ep, as_of, pol, fetch_history)
     if long_df is not None and problem is None:
         res = run(long_df)
-        return floored(_wrap(t, res, _note_for(res, ep, bundle=False, n_sessions=None,
-                                               fetch_problem=None), avg_cost, ep=ep), long_df)
+        return tagged(carried(floored(_wrap(t, res, _note_for(res, ep, bundle=False, n_sessions=None,
+                                                               fetch_problem=None), avg_cost, ep=ep), long_df), long_df))
 
     # fallback: the app's bundle frame, always "partial"
     problem = problem or "Longer price history couldn't be loaded"
     frame = bundle if bundle is not None else long_df
     if frame is None:
-        return _unavailable(t, problem + " and the app's own price history is missing.", avg_cost)
+        return tagged(_unavailable(t, problem + " and the app's own price history is missing.", avg_cost))
     res = run(frame)
     if res["basis"] == "unavailable" and bundle is not None and long_df is not None:
         res = run(long_df)     # a stale long frame beats a too-short bundle
@@ -506,11 +576,11 @@ def _one(h: dict, held_data, trades_df, as_of: date, fetch_history, pol: dict,
     note = _note_for(res, ep, bundle=True, n_sessions=n, fetch_problem=problem)
     if res["basis"] in ("prior_session", "unavailable"):
         note = _note_for(res, ep, bundle=False, n_sessions=None, fetch_problem=None)
-    return floored(_wrap(t, res, note, avg_cost, fell_back=True, ep=ep), frame)
+    return tagged(carried(floored(_wrap(t, res, note, avg_cost, fell_back=True, ep=ep), frame), frame))
 
 
 def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_history,
-                     floors, fetch_range=None) -> dict:
+                     floors, carry, fetch_range=None) -> dict:
     """{TICKER: held-stop result} for every valid holding. NEVER raises: a ticker
     whose build throws becomes a degraded "Stop Unavailable" result with a note.
 
@@ -523,7 +593,10 @@ def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_histo
     bought-today position when no frame has a today row (see `_buy_day`).
     floors: REQUIRED (no default, so a caller can't forget it): the saved held-stop
     floors, {TICKER: {episode_start: row}}; `{}` = read, none saved; `None` = couldn't
-    be read (the floor stays off and a degraded note says so)."""
+    be read (the floor stays off and a degraded note says so).
+    carry: REQUIRED (no default, same reason): the saved carried stops, {TICKER: row};
+    `{}` = read, none saved; `None` = couldn't be read (the carry stays off, the
+    result's `carry.state` says "unreadable" and a degraded note says so)."""
     out: dict[str, dict] = {}
     try:
         pol = _policy()
@@ -536,7 +609,8 @@ def build_held_stops(holdings, held_data, trades_df, as_of: date, *, fetch_histo
             t = _ticker(h)
             if not t or _exact_shares(h) <= 0 or _avg_cost(h) <= 0:
                 continue
-            out[t] = _one(h, held_data, trades_df, as_of, fetch_history, pol, floors, fetch_range)
+            out[t] = _one(h, held_data, trades_df, as_of, fetch_history, pol, floors, carry,
+                          fetch_range)
         except Exception as exc:
             try:
                 t = _ticker(h)
@@ -564,20 +638,24 @@ def plain_text_note(note) -> str:
 
 def full_note(h) -> str:
     """A held-stop result's note plus its saved-floor sentence (`floor.note`, set
-    only on a degraded basis; empty otherwise), joined by a space. Unchanged
-    when there is no floor note."""
+    only on a degraded basis; empty otherwise) and its carried-stop sentence
+    (`carry.note`; empty when there is none), each joined by a space. Unchanged
+    when there is neither."""
     if not isinstance(h, dict):
         return ""
     note = str(h.get("note") or "")
-    fl = h.get("floor")
-    fnote = str(fl.get("note") or "") if isinstance(fl, dict) else ""
-    return f"{note} {fnote}".strip() if fnote else note
+    for key in ("floor", "carry"):
+        part = h.get(key)
+        extra = str(part.get("note") or "") if isinstance(part, dict) else ""
+        if extra:
+            note = f"{note} {extra}".strip()
+    return note
 
 
 def degraded_notes(held_stops) -> list[tuple[str, str, str]]:
     """[(ticker, label, note)] for every degraded result, sorted by ticker: the
-    rows of the degraded-basis banner. The note includes the saved-floor sentence
-    (`full_note`) when there is one."""
+    rows of the degraded-basis banner. The note includes the saved-floor and carried-stop
+    sentences (`full_note`) when there are any."""
     if not isinstance(held_stops, dict):
         return []
     return [(t, str(h.get("label") or ""), full_note(h))

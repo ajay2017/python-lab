@@ -222,6 +222,8 @@ def _run_build_context(cfg):
                return_value=cfg["held_stops"]), \
          patch("stock_analyzer.headless_alert_engine.db.load_held_stop_floors_or_none",
                return_value={}), \
+         patch("stock_analyzer.headless_alert_engine.db.load_held_stop_carry_or_none",
+               return_value={}), \
          patch("stock_analyzer.headless_alert_engine.db.load_manual_stops_or_none",
                return_value=cfg["load_manual_stops"]), \
          patch("stock_analyzer.headless_alert_engine.fetch_risk_free_rate",

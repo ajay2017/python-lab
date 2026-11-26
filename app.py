@@ -2838,6 +2838,27 @@ def _held_stop_floors_for(tickers):
         return None
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_held_stop_carry(tickers: tuple, et_date: str):
+    # The saved carried stops (SlidingStop C3), one read per ET day like the floors
+    # (`et_date` is the cache key; before EOD it holds the D-1 row). RAISES on a failed
+    # read (None) so st.cache_data never stores "couldn't check"; `{}` (read, none
+    # saved) is cached.
+    _cr = db.load_held_stop_carry_or_none(tickers)
+    if _cr is None:
+        raise RuntimeError("saved carried held stops could not be read")
+    return _cr
+
+
+def _held_stop_carry_for(tickers):
+    """{TICKER: row} for `build_held_stops(carry=)`, or None when the read failed
+    (three-state: None = couldn't check, {} = none saved)."""
+    try:
+        return _cached_held_stop_carry(tuple(sorted(tickers)), _today_et().isoformat())
+    except Exception:
+        return None
+
+
 @st.cache_resource
 def _unadj_negative_cache() -> dict:
     return {}
@@ -2868,15 +2889,18 @@ def _held_stops_for(holdings, held_data) -> dict:
     if not _rows:
         return {}
     # Saved floors: read ONCE here, before the thread fan-out (a real ticker list).
-    _floors = _held_stop_floors_for(
-        {str(h.get("Ticker", h.get("ticker", "")) or "").strip().upper() for h in _rows}
-        - {""})
+    _held_names = {str(h.get("Ticker", h.get("ticker", "")) or "").strip().upper()
+                   for h in _rows} - {""}
+    _floors = _held_stop_floors_for(_held_names)
+    # Saved carried stops (SlidingStop C3): the same ticker set, read once here too.
+    _carry = _held_stop_carry_for(_held_names)
 
     def _one(_h):
         return _held_stop_wiring.build_held_stops(
             [_h], held_data, _trades, _as_of,
             fetch_history=_unadjusted_history_or_raise,
             floors=_floors,
+            carry=_carry,
             fetch_range=lambda _t, _d: _cached_session_range(str(_t).upper(), _d.isoformat()))
 
     out: dict = {}

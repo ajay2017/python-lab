@@ -53,6 +53,7 @@ def _build_ctx(young_pct):
          patch(_H + "_held_stop_wiring.build_held_stops", return_value={}), \
          patch(_H + "_young_holding_stop.plain_notes", return_value=[]), \
          patch(_H + "db.load_held_stop_floors_or_none", return_value={}), \
+         patch(_H + "db.load_held_stop_carry_or_none", return_value={}), \
          patch(_H + "db.load_manual_stops_or_none", return_value={}), \
          patch(_H + "fetch_risk_free_rate", return_value=0.045), \
          patch(_H + "fetch_spy", return_value=spy), \

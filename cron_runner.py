@@ -93,6 +93,8 @@ from stock_analyzer.headless_alert_engine import (
     compute_watchlist_entries, _build_context, run_daily_budget,
 )
 from stock_analyzer import hold_reasons
+from stock_analyzer import eod_session_closes as _eod_session_closes
+from stock_analyzer import held_stop_carry as _held_stop_carry
 from stock_analyzer import held_stop_floor as _held_stop_floor
 from stock_analyzer import held_stop_view as _held_stop_view
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
@@ -664,6 +666,17 @@ def _run_premarket(now_et, force: bool) -> int:
     elif _floor_readable is False:
         _log("held_stop_floor: saved floors could not be read; no holding is on a partial "
              "stop basis, so nothing was lowered by it.")
+    # Saved carried stops (SlidingStop C3), the same rule: red only when the carried
+    # stops could not be read AND at least one name is on a partial / prior-close basis
+    # (the only bases a carry can lift). Alerts are still sent (as above).
+    _carry_readable = payload.get("held_stop_carry_readable")
+    _carry_fail = _held_stop_carry.lane_failure(payload.get("held_stops"), _carry_readable is True)
+    if _carry_fail:
+        failures.append(f"held_stop_carry: {_carry_fail}; stops may be lower than the carried "
+                        "stops (protective alerts that were computed were still sent)")
+    elif _carry_readable is False:
+        _log("held_stop_carry: saved carried stops could not be read; no holding is on a "
+             "partial / prior-close stop basis, so nothing was lowered by it.")
     # Per-name degradation is logged above ("engine note: held stop on a limited
     # basis ...") and rides in the email footer below.
     # held-stop notes escape "$" for Streamlit markdown; the email footer is plain text
@@ -932,6 +945,107 @@ def _eod_held_stop_floors(payload, now_et) -> list[str]:
         return [f"held_stop_floor: {str(e)[:120]}"]
 
 
+def _eod_held_stop_carry(payload, now_et) -> list[str]:
+    """EOD writer for the saved carried held stops (SlidingStop C3). Returns the
+    failure lines for `_run_eod` (empty = fine); NEVER raises and never blocks the
+    lane's other steps. Like `_eod_held_stop_floors` it saves the EFFECTIVE AUTO
+    result `payload["held_stops"]` (never `port_df["Stop"]`, so a manual stop can't
+    leak in) as of the ET date `now_et.date()`; a non-trading day writes nothing.
+    FAIL CLOSED: unreadable saved rows or an unreadable journal write nothing (the
+    write would overwrite rows it never saw / lapse-check against nothing) and fail.
+    Then it sweeps the rows of sold positions (`held_stop_carry.sweep_tickers`),
+    after the save and even when no row was written."""
+    try:
+        as_of = now_et.date()
+        if not is_trading_day(as_of):
+            _log("held_stop_carry: not an ET trading day; nothing to write.")
+            return []
+        held_stops = payload.get("held_stops")
+        if not isinstance(held_stops, dict):
+            _log("held_stop_carry: no held stops in the payload (no book or no prices); "
+                 "nothing to write.")
+            return []
+        if payload.get("held_stop_carry_readable") is not True:
+            _log("held_stop_carry: NOT written; the saved carried stops could not be read "
+                 "(if the table is new: apply docs/sql/held-stop-carry.sql).")
+            return ["held_stop_carry: carried stops could not be read; not written "
+                    "(if the table is new: apply docs/sql/held-stop-carry.sql)"]
+        if payload.get("held_stop_journal_readable") is not True:
+            _log("held_stop_carry: NOT written; the trade journal could not be read.")
+            return ["held_stop_carry: the trade journal could not be read; not written"]
+        failures: list[str] = []
+        # a forced mid-session run would pass a partial bar: before the close the map is
+        # empty, so the seed guard blocks every seed while a valid row still advances
+        session_closes, _after_close = _eod_session_closes.session_closes_for_write(
+            payload.get("held_stop_session_closes"), now_et)
+        if not _after_close:
+            _log("held_stop_carry: forced before the close; no new carried stop is "
+                 "seeded today.")
+        _prior = payload.get("held_stop_carry")
+        _sigs = payload.get("held_stop_journal_sigs")
+        rows = _held_stop_carry.rows_to_write(
+            held_stops, as_of,
+            journal_sigs=_sigs if isinstance(_sigs, dict) else {},
+            avg_costs={},
+            prior_rows=_prior if isinstance(_prior, dict) else {},
+            session_closes=session_closes,
+            journal_readable=True, carry_readable=True)
+        # A carry check that RAISED keeps today's stop but is never written (a code
+        # defect, like C3cFloorBug): red.
+        bug = _held_stop_carry.carry_check_failures(held_stops)
+        for _t in bug:
+            _h = held_stops.get(_t)
+            _c = _h.get("carry") if isinstance(_h, dict) else None
+            _log(f"held_stop_carry: {_t} carry check failed "
+                 f"({_c.get('reason') if isinstance(_c, dict) else '?'}); "
+                 "today's stop kept, nothing saved for it.")
+        if bug:
+            failures.append(f"held_stop_carry: carry check failed for {', '.join(bug)}")
+        # One line per name whose carried stop bound today, with the amount.
+        for _t, _h in sorted(held_stops.items(), key=lambda kv: str(kv[0])):
+            _c = _h.get("carry") if isinstance(_h, dict) else None
+            if isinstance(_c, dict) and _c.get("state") == _held_stop_carry.APPLIED:
+                try:
+                    _diff = float(_c["value"]) - float(_c["computed"])
+                    _log(f"held_stop_carry: {_t} carried stop bound ({_h.get('basis')}): "
+                         f"carried {float(_c['value']):.2f} vs computed {float(_c['computed']):.2f} "
+                         f"(+{_diff:.2f})")
+                except (KeyError, TypeError, ValueError):
+                    _log(f"held_stop_carry: {_t} carried stop bound ({_h.get('basis')}) "
+                         "(amount unreadable)")
+        if rows:
+            _ok, _detail = db.save_held_stop_carry(rows)
+            if _ok:
+                _log(f"held_stop_carry: wrote {len(rows)} row(s) "
+                     f"({', '.join(r['ticker'] for r in rows)}).")
+            else:
+                _log(f"held_stop_carry: NOT written; {_detail}")
+                failures.append("held_stop_carry: " + str(_detail))
+        else:
+            _log("held_stop_carry: nothing to write.")
+        # Sweep: saved - held. `held` is known only from a real ticker list; None
+        # (held or saved unknown) deletes nothing.
+        _held_list = payload.get("held_tickers")
+        held = ({str(t).strip().upper() for t in _held_list}
+                if isinstance(_held_list, list) else None)
+        saved = db.load_held_stop_carry_tickers_or_none()
+        to_del = _held_stop_carry.sweep_tickers(saved, held)
+        if to_del is None:
+            _log("held_stop_carry: sweep skipped (held or saved set unknown).")
+        elif to_del:
+            _ok, _detail = db.delete_held_stop_carry(sorted(to_del))
+            if _ok:
+                _log(f"held_stop_carry: swept {len(to_del)} sold position(s) "
+                     f"({', '.join(sorted(to_del))}); {_detail}.")
+            else:
+                _log(f"held_stop_carry: sweep NOT done; {_detail}")
+                failures.append("held_stop_carry: " + str(_detail))
+        return failures
+    except Exception as e:  # noqa: BLE001
+        _log(f"held_stop_carry FAILED; {str(e)[:120]}; continuing.")
+        return [f"held_stop_carry: {str(e)[:120]}"]
+
+
 def _run_eod(now_et, force: bool) -> int:
     # Reset at the top, mirroring `_run_maintenance`'s own established
     # pattern -- otherwise a stale detail string from a PRIOR failed run
@@ -1068,6 +1182,9 @@ def _run_eod(now_et, force: bool) -> int:
 
     # 1a2. Saved held-stop floors (#26 C3c): the effective AUTO stops, full basis only.
     failures.extend(_eod_held_stop_floors(payload, now_et))
+    # 1a3. Saved carried held stops (SlidingStop C3): the effective AUTO stops on
+    # full / partial / prior-close basis, plus the sweep of sold positions.
+    failures.extend(_eod_held_stop_carry(payload, now_et))
 
     if _book_outage:
         _log(f"account_daily_snapshot / portfolio_risk_snapshot / rec_events SKIPPED — "
