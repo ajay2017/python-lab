@@ -676,10 +676,24 @@ def _run_premarket(now_et, force: bool) -> int:
     # line every run; the footer note only when the beta could not be measured.
     _risk_cov = payload.get("risk_coverage")
     _log(risk_window.coverage_log_text(_risk_cov))
+    _ro_unchecked = payload.get("risk_off_unchecked")
+    # The RiskOffUnchecked text below can already end with this coverage note; the
+    # note is skipped only when that text contains it (so it isn't printed twice).
     if isinstance(_risk_cov, dict) and _risk_cov.get("state") == "unmeasured":
         _risk_cov_note = risk_window.coverage_note(_risk_cov)
-        if _risk_cov_note:
+        _ro_in_text = (str(_ro_unchecked.get("text") or "")
+                       if isinstance(_ro_unchecked, dict) else "")
+        if _risk_cov_note and _risk_cov_note not in _ro_in_text:
             _footer_lines.append(_risk_cov_note)
+    # RiskOffUnchecked (C4): a risk-off day with the portfolio beta unmeasured made
+    # the de-risk check return nothing silently. Disclosure only: alerts that were
+    # computed are still sent; the lane goes red + emails the failure (precedent:
+    # held_stops_failed / manual_stops_unreadable).
+    if isinstance(_ro_unchecked, dict):
+        _ro_text = str(_ro_unchecked.get("text") or "")
+        _log("RISK-OFF DE-RISK NOT CHECKED: " + _ro_text)
+        _footer_lines.append(_ro_text)
+        failures.append("risk_off_unchecked -- " + _ro_text)
     _log(f"computed {len(alerts)} protective alert(s): "
          + (", ".join(f"{a.get('kind')}/{a.get('ticker')}" for a in alerts) or "(none)"))
     # A dead news feed (docs/plans/news-feed-restore.md, D-4): the lane still does
@@ -818,7 +832,12 @@ def _run_premarket(now_et, force: bool) -> int:
     if _price_outage:
         _log("no protective email — the scan could not run (see failure email).")
     elif not alerts and not velocity_alerts and not split_withheld:
-        _log("nothing to act on — no email.")
+        if isinstance(payload.get("risk_off_unchecked"), dict):
+            # Not an all-clear: the de-risk check couldn't run (failure logged above).
+            _log("no protective alert — no alert email (the de-risk check couldn't "
+                 "run: see the failure above).")
+        else:
+            _log("nothing to act on — no email.")
     elif fp == state.get("last_fingerprint") and not force:
         _log(f"unchanged since last send (fp={fp}) — no email (anti-spam).")
     else:

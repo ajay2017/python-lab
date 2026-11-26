@@ -1332,6 +1332,11 @@ _GATE_FILES = {
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window
     # to a new holding's few days.
     "stock_analyzer/risk_window.py",
+    # Added 2026-11-25 (RiskListwiseYoung C4, docs/plans/risk-off-unchecked-c4-spec.md):
+    # decides when the risk-off de-risk check "couldn't run" (portfolio beta unmeasured
+    # while the market regime is armed) and words the Home / pre-market disclosure; a
+    # wrong call stays silent on a skipped protective check or warns when it ran.
+    "stock_analyzer/risk_off_check.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

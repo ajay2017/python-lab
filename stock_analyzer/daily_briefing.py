@@ -90,6 +90,7 @@ from stock_analyzer.signal_reconciliation import (
 from stock_analyzer.position_lifecycle import classify_position_state
 from stock_analyzer.sector_fit import gate_sector
 from stock_analyzer import exit_advisor
+from stock_analyzer import risk_off_check
 from stock_analyzer import decision_bucket
 from stock_analyzer.predictive_analytics import divergence_at_entry
 from stock_analyzer.personalized_discovery import score_candidate_match
@@ -4157,6 +4158,7 @@ def build_daily_briefing(
     pair_add_blocks: dict | None = None,
     corr_unchecked: list | None = None,
     news_feed: dict | None = None,
+    risk_coverage: dict | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -4203,6 +4205,10 @@ def build_daily_briefing(
                      `news_feed_disclosure` ({"level", "text"}) for the Home
                      banner; otherwise (None, ok, thin) the key is absent and
                      the output is byte-identical to a build without it.
+    risk_coverage:   optional (RiskListwiseYoung C4) the `coverage` dict of the
+                     same book-risk build `fragility` came from; read only to
+                     word the `risk_off_unchecked` disclosure. Never read by a
+                     gate. None (the default) leaves the note's coverage clause out.
 
     Returns dict with: act_today, review_list, grow_today, portfolio_tuneup.
     Grow Today owns every new-position and add-to-winner suggestion (the
@@ -4280,6 +4286,14 @@ def build_daily_briefing(
         port_df, held_data,
         fragility=fragility, spy_trend_df=spy_trend_df, vix_level=vix_level,
         exclude_tickers=decision_bucket.all_flagged_tickers(act, review, ignore_news=True),
+    )
+    # RiskOffUnchecked: a None fragility on a risk-off day made the call above
+    # return [] silently; disclose it (never changes a card). Never raises. An
+    # empty book has nothing to de-risk, so nothing was missed.
+    _ro_unchecked = (
+        risk_off_check.derisk_unchecked(
+            fragility, spy_trend_df, vix_level, coverage=risk_coverage)
+        if port_df is not None and not getattr(port_df, "empty", True) else None
     )
     if _risk_off:
         # Where a risk-off TRIM lands, the same name's news WATCH is redundant:
@@ -4370,6 +4384,7 @@ def build_daily_briefing(
     _result = {"act_today": act, "review_list": review,
                "grow_today": grow, "portfolio_tuneup": tuneup,
                "portfolio_tuneup_deferred": _tuneup_deferred,
+               "risk_off_unchecked": _ro_unchecked,
                "news_flags": held_news_check.news_flags_from_detectors(_nf_crit, _nf_warn)}
     _nf_disclosure = brief_news_disclosure(news_feed)
     if _nf_disclosure is not None:

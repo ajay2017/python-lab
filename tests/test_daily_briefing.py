@@ -527,7 +527,7 @@ def test_build_daily_briefing_top_level_keys_exclude_grow_today_fields():
     )
     assert set(brief.keys()) == {
         "act_today", "review_list", "grow_today", "portfolio_tuneup",
-        "portfolio_tuneup_deferred", "news_flags",
+        "portfolio_tuneup_deferred", "risk_off_unchecked", "news_flags",
     }
     assert brief["portfolio_tuneup_deferred"] == {}
     grow_only_keys = (

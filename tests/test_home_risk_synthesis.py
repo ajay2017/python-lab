@@ -8,6 +8,7 @@ returns `None`/empty shapes, never a fabricated value) can finally be asserted
 directly instead of only verified by inline reading.
 """
 import ast
+import re
 from pathlib import Path
 from tests._ast_cache import parse_file_cached
 
@@ -710,7 +711,7 @@ class TestRiskBundleHappyPath:
         h_rets = {"AAA": 0.01, "BBB": -0.02, "CCC": 0.03}
         monkeypatch.setattr(
             hrs, "compute_portfolio_risk_metrics",
-            lambda pdf, hd, spy, rfr: {"beta": 1.1, "sharpe": 0.8},
+            lambda pdf, hd, spy, rfr, **kw: {"beta": 1.1, "sharpe": 0.8},
         )
         monkeypatch.setattr(
             hrs, "run_scenario",
@@ -733,7 +734,7 @@ class TestRiskBundleHappyPath:
 
         assert set(bundle) == {
             "port_risk", "fragility", "highbeta_share",
-            "risk_advisor_recs", "risk_high_alerts", "h_rets",
+            "risk_advisor_recs", "risk_high_alerts", "h_rets", "risk_coverage",
         }
         assert bundle["port_risk"] == {"beta": 1.1, "sharpe": 0.8}
         assert bundle["fragility"] == {"severity": "elevated"}
@@ -749,6 +750,79 @@ class TestRiskBundleHappyPath:
             "h_rets is passed straight through — the bundle stays the single "
             "source of truth for what this call computed"
         )
+
+
+def _young_book(young_pct, n_young=10):
+    """AAA / BBB with 126 closes plus a young name YNG with n_young closes."""
+    import numpy as np
+
+    def _frame(n, seed):
+        rng = np.random.default_rng(seed)
+        vals = 100.0 * np.cumprod(1 + rng.normal(0.0005, 0.012, n))
+        idx = pd.bdate_range(end="2026-11-20", periods=n)
+        return {"df": pd.DataFrame({"Close": vals, "High": vals + 1, "Low": vals - 1}, index=idx)}
+
+    big = 100.0 - young_pct
+    port = pd.DataFrame([
+        {"Ticker": "AAA", "Sector": "X", "Weight (%)": big * 0.6, "Market Value": big * 600},
+        {"Ticker": "BBB", "Sector": "X", "Weight (%)": big * 0.4, "Market Value": big * 400},
+        {"Ticker": "YNG", "Sector": "X", "Weight (%)": young_pct, "Market Value": young_pct * 1000},
+    ])
+    held = {"AAA": _frame(126, 1), "BBB": _frame(126, 2), "YNG": _frame(n_young, 7)}
+    return port, held
+
+
+class TestRiskBundleCoverage:
+    """RiskOffUnchecked C4 fix round: the bundle carries the coverage of the
+    risk build, filled even when port_risk is None (the case the disclosure
+    exists for)."""
+
+    def test_unmeasured_coverage_when_port_risk_is_none(self):
+        from stock_analyzer.constants import PORTFOLIO_RISK_UNMEASURED_MAX_PCT
+        port, held = _young_book(PORTFOLIO_RISK_UNMEASURED_MAX_PCT + 5.0)
+        bundle = _call_risk_bundle(port_df=port, held_data=held)
+        assert bundle["port_risk"] is None
+        cov = bundle["risk_coverage"]
+        assert isinstance(cov, dict) and cov["state"] == "unmeasured"
+        assert [x["ticker"] for x in cov["left_out"]] == ["YNG"]
+
+    def test_partial_coverage_when_a_young_holding_is_left_out(self):
+        port, held = _young_book(5.0)
+        bundle = _call_risk_bundle(port_df=port, held_data=held)
+        assert isinstance(bundle["port_risk"], dict)
+        cov = bundle["risk_coverage"]
+        assert isinstance(cov, dict) and cov["state"] == "partial"
+
+    def test_coverage_is_none_when_the_metrics_call_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            hrs, "compute_portfolio_risk_metrics",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        bundle = _call_risk_bundle()
+        assert bundle["port_risk"] is None
+        assert bundle["risk_coverage"] is None
+
+
+def test_home_passes_the_bundle_coverage_not_one_read_from_port_risk():
+    """Both build_daily_briefing call sites on Home pass risk_coverage= the bare
+    name `_risk_coverage` (restored from the memo bundle on a HIT, taken from the
+    risk bundle on a MISS); never `_port_risk.get("coverage")`, which is None
+    exactly when the disclosure matters (port_risk None)."""
+    src = APP_PY.read_text(encoding="utf-8")
+    assert '_port_risk.get("coverage")' not in src
+    tree = parse_file_cached(APP_PY)
+    vals = []
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "build_daily_briefing"):
+            for kw in n.keywords:
+                if kw.arg == "risk_coverage":
+                    vals.append(kw.value)
+    assert len(vals) == 2, "both Home call sites pass risk_coverage="
+    assert all(isinstance(v, ast.Name) and v.id == "_risk_coverage" for v in vals)
+    assert re.search(r'_risk_coverage\s*=\s*_rb\["risk_coverage"\]', src)
+    assert re.search(r'_risk_coverage\s*=\s*_b\.get\("risk_coverage"\)', src)
+    assert re.search(r'"risk_coverage":\s*_risk_coverage', src)
 
 
 class TestPortRiskFailureCascade:
@@ -803,7 +877,7 @@ class TestRiskAdvisorFailureModes:
     def _setup_healthy_port_risk(self, monkeypatch):
         monkeypatch.setattr(
             hrs, "compute_portfolio_risk_metrics",
-            lambda pdf, hd, spy, rfr: {"beta": 1.1},
+            lambda pdf, hd, spy, rfr, **kw: {"beta": 1.1},
         )
 
     def test_advisor_returns_none_yields_both_caches_none_no_crash(self, monkeypatch):
@@ -839,7 +913,7 @@ class TestHighBetaShareIsolation:
         mask a real failure here either."""
         monkeypatch.setattr(
             hrs, "compute_portfolio_risk_metrics",
-            lambda pdf, hd, spy, rfr: {"beta": 1.1},
+            lambda pdf, hd, spy, rfr, **kw: {"beta": 1.1},
         )
         monkeypatch.setattr(
             hrs, "run_scenario",
@@ -870,7 +944,7 @@ class TestFragilityInternalBranching:
     def test_beta_available_and_nonempty_port_df_computes_fragility_via_scenario(self, monkeypatch):
         monkeypatch.setattr(
             hrs, "compute_portfolio_risk_metrics",
-            lambda pdf, hd, spy, rfr: {"beta": 1.3},
+            lambda pdf, hd, spy, rfr, **kw: {"beta": 1.3},
         )
         scenario_spy = MagicMock(return_value={"portfolio_loss_pct": -7.0})
         monkeypatch.setattr(hrs, "run_scenario", scenario_spy)
@@ -897,7 +971,7 @@ class TestFragilityInternalBranching:
         (which an accidentally-broadened except could also produce)."""
         monkeypatch.setattr(
             hrs, "compute_portfolio_risk_metrics",
-            lambda pdf, hd, spy, rfr: {"beta": None},
+            lambda pdf, hd, spy, rfr, **kw: {"beta": None},
         )
         scenario_spy = MagicMock()
         monkeypatch.setattr(hrs, "run_scenario", scenario_spy)

@@ -52,6 +52,7 @@ def build_digest(
     built_at_iso,
     *,
     no_holdings: bool = False,
+    risk_off_unchecked=None,
 ) -> dict:
     """What 🏠 Home knew when a build finished.
 
@@ -63,6 +64,10 @@ def build_digest(
     broken one, so it reads `offline` rather than as a calm all-clear.
     `no_holdings=True` is its own state: nothing exists to act on, and it is not
     an outage either.
+    `risk_off_unchecked` is the Brief's `risk_off_unchecked` value (a dict with a
+    `text` when the risk-off de-risk check couldn't run, else None): it is stored
+    as a bool, and a `clear` Act Today with it set is never worded as an
+    all-clear (RiskOffUnchecked, RiskListwiseYoung C4).
     """
     act, n_act = _normalize_act(act_view, no_holdings)
 
@@ -82,6 +87,8 @@ def build_digest(
         "built_at": built_at_iso if isinstance(built_at_iso, str) else None,
         "act": act,
         "n_act": n_act,
+        "risk_off_unchecked": (
+            isinstance(risk_off_unchecked, dict) and bool(risk_off_unchecked.get("text"))),
         "notices_tier": tier,
         "notices_headline": headline,
     }
@@ -125,13 +132,16 @@ def _time_label(built: datetime, now_et_dt: datetime) -> str:
     return f"{built.strftime('%b')} {built.day}, {clock}"
 
 
-def _act_text(act: str, n_act) -> str:
+def _act_text(act: str, n_act, derisk_unchecked: bool = False) -> str:
     if act == ACT:
         return f"🔴 {n_act} Act Today"
     if act == OFFLINE:
         return "Act Today was NOT checked (the Brief couldn't be built)"
     if act == NO_HOLDINGS:
         return "no holdings yet"
+    if derisk_unchecked:
+        # Nothing to act on, but not an all-clear: the risk-off check didn't run.
+        return "⚠️ de-risk check couldn't run"
     return "✅ nothing to act on"
 
 
@@ -169,10 +179,14 @@ def digest_line(digest, freshness, now_et_dt) -> dict:
     if act == ACT and n_act is None:
         act = OFFLINE   # a call to act with no count can't be worded; say not checked
 
-    text = f"🏠 Home at {time_label}: {_act_text(act, n_act)}" + _notices_text(
+    # `is True`: a memoised pre-C4 digest has no key, and only a real bool counts.
+    derisk_unchecked = digest.get("risk_off_unchecked") is True
+    text = f"🏠 Home at {time_label}: {_act_text(act, n_act, derisk_unchecked)}" + _notices_text(
         digest.get("notices_headline"))
 
     tier = {ACT: "error", OFFLINE: "warning"}.get(act, "info")
+    if act == CLEAR and derisk_unchecked:
+        tier = "warning"   # attention, not red: no trade call is pending
     notices_tier = digest.get("notices_tier")
     if notices_tier in _TIERS:
         tier = _max_tier(tier, notices_tier)

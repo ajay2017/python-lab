@@ -211,7 +211,7 @@ def build_risk_bundle(
     as a plain argument rather than reaching into session_state.
 
     Returns a dict with keys `port_risk`, `fragility`, `highbeta_share`,
-    `risk_advisor_recs`, `risk_high_alerts`, `h_rets` — the caller republishes
+    `risk_advisor_recs`, `risk_high_alerts`, `h_rets`, `risk_coverage` — the caller republishes
     the first five into the matching `_*_cache` session_state keys. `h_rets`
     is passed straight through (it is also a parameter) so the bundle stays
     the single source of truth for what this call computed, matching the
@@ -222,8 +222,12 @@ def build_risk_bundle(
     `port_risk` failure must cascade into a `fragility` failure too.
     """
     # Portfolio-level risk metrics (Beta, Sharpe, Sortino, VaR, CVaR, Max Drawdown)
+    # `_cov` is filled even when the metrics come back None (a young holding
+    # above the unmeasured cap), so the RiskOffUnchecked note can say why.
+    _cov: dict = {}
     try:
-        _port_risk = compute_portfolio_risk_metrics(port_df, held_data, spy_df, rfr)
+        _port_risk = compute_portfolio_risk_metrics(
+            port_df, held_data, spy_df, rfr, coverage_out=_cov)
     except Exception:
         _port_risk = None  # offline sentinel, not {} — matches sibling cache contract
 
@@ -308,6 +312,9 @@ def build_risk_bundle(
         "risk_advisor_recs": _risk_advisor_recs,
         "risk_high_alerts": _risk_high_alerts,
         "h_rets": h_rets,
+        # Coverage of THIS risk build (None when it was never filled): the
+        # Brief's RiskOffUnchecked disclosure reads it, never a gate.
+        "risk_coverage": _cov or None,
     }
 
 

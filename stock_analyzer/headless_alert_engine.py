@@ -25,6 +25,7 @@ import pytz
 from stock_analyzer import db
 from stock_analyzer import broker_sync
 from stock_analyzer import exit_advisor
+from stock_analyzer import risk_off_check as _risk_off_check
 from stock_analyzer import split_detector
 from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import stop_breach_text as _stop_breach_text
@@ -507,8 +508,14 @@ def compute_protective_alerts(today: date | None = None) -> dict:
             "pnl_pct": c.get("pnl_pct"),
         })
 
+    # RiskOffUnchecked: fragility None on a risk-off day made the call above
+    # return [] silently; same inputs, disclosure only (never raises).
+    risk_off_unchecked = _risk_off_check.derisk_unchecked(
+        fragility, spy_1y, vix, coverage=ctx.get("risk_coverage"))
+
     return {
         "alerts": alerts, "built_at": built_at, "errors": errors,
+        "risk_off_unchecked": risk_off_unchecked,
         "manual_stops_unreadable": bool(ctx.get("manual_stops_unreadable")),
         "held_stop_notes": list(ctx.get("held_stop_notes", [])),
         "held_stops_failed": ctx.get("held_stops_failed"),
@@ -784,6 +791,9 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
             portfolio_value=portfolio_value, today=today, market_context=market_context,
             grow_composites=grow_composites, movers=[], spy_df=spy_6mo,
             fragility=fragility, spy_trend_df=spy_1y, vix_level=vix,
+            # RiskOffUnchecked (C4): the same coverage the protective lane words its
+            # note from; this brief's disclosure key is never read by the picks email.
+            risk_coverage=ctx.get("risk_coverage"),
             net_capital=_f255_net_cap,
             etf_candidates=etf_candidates_for_grow,
             # 2026-10-11 audit B-H1: the app has always passed trades_df here,

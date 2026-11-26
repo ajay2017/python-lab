@@ -6073,7 +6073,8 @@ if page == "🏠 Home":
         except Exception:
             _notices_summary_ph.caption("⚠️ Notices summary unavailable")
 
-    def _publish_home_dock_digest(act_view, *, no_holdings: bool = False) -> None:
+    def _publish_home_dock_digest(act_view, *, no_holdings: bool = False,
+                                  risk_off_unchecked=None) -> None:
         """Publish what this finished Home build knows for the dock on the other
         pages: the single Act Today view and the notices roll-up. The decision
         (normalization, the offline-vs-clear rule) is in `home_dock_digest`.
@@ -6087,6 +6088,7 @@ if page == "🏠 Home":
                 _home_notices_mod.notices_headline(_dg_summary),
                 _now_et().isoformat(),
                 no_holdings=no_holdings,
+                risk_off_unchecked=risk_off_unchecked,
             )
         except Exception:
             st.session_state["_home_dock_digest"] = None
@@ -7422,7 +7424,7 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 27  # bumped: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 28  # bumped: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -7482,6 +7484,9 @@ if page == "🏠 Home":
         h_rets             = _b["h_rets"]
         _port_risk         = _b["_port_risk"]
         _fragility         = _b["_fragility"]
+        # `.get()`: a bundle memoized before this key lacks it; None = coverage
+        # unknown (the RiskOffUnchecked note then leaves its coverage clause out).
+        _risk_coverage     = _b.get("risk_coverage")
         _risk_advisor_recs = _b["_risk_advisor_recs"]
         _rag_label         = _b["_rag_label"]
         _rag_color         = _b["_rag_color"]
@@ -7598,6 +7603,11 @@ if page == "🏠 Home":
                         # The refreshed bundles this build actually used.
                         news_feed       = _news_feed.home_feed_state(
                             _grow_composites, held_data),
+                        # RiskOffUnchecked (C4): the coverage of the SAME risk build
+                        # `_fragility_cache` came from (wording of the disclosure only).
+                        # The bundle's own key: `_port_risk` has no "coverage" to read
+                        # when it is None, which is exactly when the note matters.
+                        risk_coverage   = _risk_coverage,
                     )
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
@@ -7751,6 +7761,8 @@ if page == "🏠 Home":
         )
         _port_risk         = _rb["port_risk"]
         _fragility         = _rb["fragility"]
+        # Coverage of THIS risk build, filled even when _port_risk is None.
+        _risk_coverage     = _rb["risk_coverage"]
         _risk_advisor_recs = _rb["risk_advisor_recs"]
         h_rets             = _rb["h_rets"]
         st.session_state["_port_risk_cache"]         = _port_risk  # available to Analysis page
@@ -8042,6 +8054,11 @@ if page == "🏠 Home":
                     corr_unchecked  = _corr_unchecked,
                     news_feed       = _news_feed.home_feed_state(
                         st.session_state.get("_grow_composites", {}), held_data),
+                    # RiskOffUnchecked (C4): the coverage of the SAME risk build
+                    # `_fragility_cache` came from (wording of the disclosure only).
+                    # The bundle's own key: `_port_risk` has no "coverage" to read
+                    # when it is None, which is exactly when the note matters.
+                    risk_coverage   = _risk_coverage,
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -8592,6 +8609,7 @@ if page == "🏠 Home":
                 "div_score": div_score, "avg_corr": avg_corr, "risk_pairs": risk_pairs,
                 "_div_label": _div_label, "div_recs": div_recs, "h_rets": h_rets,
                 "_port_risk": _port_risk, "_fragility": _fragility,
+                "risk_coverage": _risk_coverage,   # travels WITH _port_risk
                 "_highbeta_share": st.session_state.get("_highbeta_share"),
                 "_risk_advisor_recs": _risk_advisor_recs,
                 "_rag_label": _rag_label, "_rag_color": _rag_color,
@@ -13423,6 +13441,10 @@ if page == "🏠 Home":
                 _render_act_card(_item, in_act=in_act)
 
         # Act Today — genuine decisions only (resolved stop_breaches demoted below)
+        # RiskOffUnchecked (C4): on a risk-off day with the portfolio beta unmeasured
+        # the de-risk check returned nothing silently; never call that day "you're set".
+        _ro_unchk = (_daily_brief or {}).get("risk_off_unchecked")
+        _ro_unchk_on = isinstance(_ro_unchk, dict) and bool(_ro_unchk.get("text"))
         if _db_offline:
             _act_label  = "⚠️ Act Today — NOT CHECKED"
             _act_bg     = "#451a03"
@@ -13431,6 +13453,10 @@ if page == "🏠 Home":
             _act_label  = f"🔴 Act Today ({len(_active_act_bucket)})"
             _act_bg     = "#7f1d1d"
             _act_border = "#ef4444"
+        elif _ro_unchk_on:
+            _act_label  = "⚠️ Act Today — de-risk check couldn't run"
+            _act_bg     = "#451a03"
+            _act_border = "#92400e"
         else:
             _act_label  = "✅ Act Today — you're set"
             _act_bg     = "#14532d"
@@ -13442,6 +13468,10 @@ if page == "🏠 Home":
             f"</div>",
             unsafe_allow_html=True,
         )
+        # Shown whether or not the Act list is empty (the empty case matters most).
+        # Plain text, so markdown-safe.
+        if _ro_unchk_on:
+            st.warning("⚠️ " + str(_ro_unchk["text"]))
         # The offline branch MUST be checked before "not _active_act_bucket" —
         # act_today_view() returns an empty active list when offline (never a
         # fabricated one), so without this ordering a crashed Brief build would
@@ -13455,6 +13485,10 @@ if page == "🏠 Home":
                 f"</div>",
                 unsafe_allow_html=True,
             )
+        elif not _active_act_bucket and _ro_unchk_on:
+            # No trade call, but not an all-clear: the warning above says what wasn't checked.
+            st.caption("No trade calls today, but this is not an all-clear: the risk-off "
+                       "de-risk check above couldn't run.")
         elif not _active_act_bucket:
             _n_aware = len(_aware_bucket) + len(_resolved_breaches)
             st.markdown(
@@ -14577,7 +14611,12 @@ if page == "🏠 Home":
     # `_act_view` every Act Today surface reads (never a second count) and the
     # notices roll-up. This is the last statement of Home's branch, after the
     # last `_home_notice` call (the Evening Debrief fill).
-    _publish_home_dock_digest(_act_view)
+    # The Brief's RiskOffUnchecked value rides along so the dock never words a
+    # day whose de-risk check couldn't run as "nothing to act on".
+    _publish_home_dock_digest(
+        _act_view,
+        risk_off_unchecked=(_daily_brief or {}).get("risk_off_unchecked"),
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -15537,7 +15576,18 @@ elif page == "🧾 Summary":
                 f"ℹ️ {len(_sm_resolved)} stop breach(es) resolved — live price "
                 f"recovered above stop: {_sm_resolved_tks} → see 🏠 Home for detail."
             )
-        if not _sm_act_bucket:
+        # RiskOffUnchecked (C4): a risk-off day whose de-risk check couldn't run is
+        # never the green all-clear below. Plain text, so st.warning markdown is safe.
+        _sm_ro_unchk = (_sm_daily_brief or {}).get("risk_off_unchecked")
+        _sm_ro_text = (str(_sm_ro_unchk["text"])
+                       if isinstance(_sm_ro_unchk, dict) and _sm_ro_unchk.get("text") else "")
+        if _sm_ro_text:
+            st.warning(("⚠️ " if _sm_act_bucket
+                        else "⚠️ No trade calls today, but this is not an all-clear: ")
+                       + _sm_ro_text)
+        if not _sm_act_bucket and _sm_ro_text:
+            pass   # the warning above replaces the green "you're clear" box
+        elif not _sm_act_bucket:
             with st.container(border=True, key="sm_act_clear"):
                 st.markdown(
                     "<style>.st-key-sm_act_clear{"
@@ -16138,6 +16188,16 @@ elif page == "🧾 Summary":
                         f"{_sm_pc_n} protective call(s)</div>"
                         f"<div style='color:#9ca3af;font-size:0.82em;margin-top:4px'>"
                         f"{_sm_pc_bits}</div>",
+                        unsafe_allow_html=True,
+                    )
+                elif _sm_ro_text:
+                    # RiskOffUnchecked (C4): the Brief was built but its risk-off
+                    # de-risk check couldn't run, so no green "No protective calls".
+                    st.markdown(
+                        "<div style='font-size:1.15em;font-weight:600;color:#f59e0b'>"
+                        "De-risk check couldn't run</div>"
+                        "<div style='color:#9ca3af;font-size:0.82em;margin-top:4px'>"
+                        "see Act Today above</div>",
                         unsafe_allow_html=True,
                     )
                 else:
@@ -46732,7 +46792,7 @@ The footer line beneath the cards states **risk, not capital** — "if every sto
 📰 If the news feed is down or partly down for a run, a warning above the Brief says so — for the names it lists, the critical-news and warning-news checks and Grow Today's negative-news Skip didn't run, so "no news" there doesn't mean the name is quiet.
 
 **Right — three lanes, by urgency:**
-- **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a **deterioration trim or exit** on a position that's rolling over (see *loss protection* below), a sized trim, breaking critical news (two or more tier-1/2 headlines at or below −0.25 on a holding since midnight ET of the previous trading day — every holding is checked, and the card names the window, e.g. "since Fri Oct 16"). If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."** **Stop-breach cards are re-evaluated against the live intraday price on every render** — the Brief is memoized on portfolio composition (not price), so a breach can fire from yesterday's close even when the live price has already recovered. When the live price is more than 0.5% above the stop, the card is demoted to an amber **"⚠️ Stop Breach — Resolved"** section below Act Today rather than staying in the action lane; when live price data is not yet available the card stays in Act Today with a note to verify the current price before acting. **Tickers you sell during a session are immediately suppressed from Grow Today** — so an exit call you acted on won't re-appear as a BUY recommendation in the same session.
+- **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a **deterioration trim or exit** on a position that's rolling over (see *loss protection* below), a sized trim, breaking critical news (two or more tier-1/2 headlines at or below −0.25 on a holding since midnight ET of the previous trading day — every holding is checked, and the card names the window, e.g. "since Fri Oct 16"). If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."** One exception: on a risk-off day when your portfolio beta couldn't be measured (for example a holding too new to measure is a large part of your book), the header reads **"⚠️ Act Today — de-risk check couldn't run"** and a warning says the risk-off de-risk trim wasn't considered and why; 🧾 Summary and the dock line say the same instead of an all-clear, and the pre-market run emails it (in the alert email's footer, or as a failure email when there is no alert). **Stop-breach cards are re-evaluated against the live intraday price on every render** — the Brief is memoized on portfolio composition (not price), so a breach can fire from yesterday's close even when the live price has already recovered. When the live price is more than 0.5% above the stop, the card is demoted to an amber **"⚠️ Stop Breach — Resolved"** section below Act Today rather than staying in the action lane; when live price data is not yet available the card stays in Act Today with a note to verify the current price before acting. **Tickers you sell during a session are immediately suppressed from Grow Today** — so an exit call you acted on won't re-appear as a BUY recommendation in the same session.
 - **⚠️ Stop Breach — Resolved** (appears between Act Today and Monitoring when present) — a stop-breach signal from overnight's close that the live intraday price has since cleared. Not a directive to act — the breach resolved — but kept visible for one session as context. An Analyze link bridges to the full signal picture for the name.
 - **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, negative news on a holding (any headline at or below −0.05 since the previous trading day; the card says how many more tier-1/2 headlines would move it to Act Today), a broad macro event to hold through. Only headlines whose title names the company (or its ticker) count — a story that just mentions it in passing, like a market wrap or a rival's earnings, is ignored everywhere news is used; 📈 Analysis lists those under "Not counted" (if the app has no usable company name for a ticker, every tagged headline still counts, and Analysis says so). If the optional AI news noise filter is set up and couldn't check some negative headlines, a one-line note above this section says so — those cards use raw sentiment. When it does run, a line in the same place says how many headlines it re-read and how many it raised. While a hold is on a deterioration watch, the app also **won't nudge you to add to it** — even if its score still reads Strong Buy — and shows a "🟡 Add Suppressed — Early Deterioration Watch" note instead (don't add to a weakening name).
 - **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown, a single name over the 15% ceiling). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock. When Act Today already sells a name, its single-name ceiling card steps aside with one line ("🔧 X already has a sell in today's Act Today call; …") and comes back if the name is still over 15% after that sell.

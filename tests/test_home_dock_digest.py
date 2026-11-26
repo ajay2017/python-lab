@@ -52,7 +52,8 @@ def test_active_items_make_it_act_with_the_int_count():
 def test_n_active_alone_makes_it_act_and_a_list_alone_does_too():
     assert hdd.build_digest(_view("act", [], 3), None, None, "x")["n_act"] == 3
     assert hdd.build_digest(_view("act", [{"a": 1}], None), None, None, "x") == {
-        "built_at": "x", "act": "act", "n_act": 1, "notices_tier": None, "notices_headline": None}
+        "built_at": "x", "act": "act", "n_act": 1, "risk_off_unchecked": False,
+        "notices_tier": None, "notices_headline": None}
 
 
 def test_a_bool_is_not_a_count():
@@ -234,3 +235,50 @@ def test_naive_now_is_read_as_et_and_junk_now_degrades_to_unknown_time():
 def test_unknown_act_value_or_act_without_a_count_reads_not_checked():
     assert "NOT checked" in hdd.digest_line(_dg("???", None), cf.FRESH, NOW)["text"]
     assert "NOT checked" in hdd.digest_line(_dg("act", None), cf.FRESH, NOW)["text"]
+
+
+# ── RiskOffUnchecked (RiskListwiseYoung C4 fix round) ────────────────────────
+_UNCHK = {"reasons": ["x"], "text": "Risk-off de-risk check couldn't run: ..."}
+
+
+@pytest.mark.parametrize("val,expected", [
+    (_UNCHK, True), (None, False), ({}, False), ({"text": ""}, False),
+    ("junk", False), (True, False),
+])
+def test_build_digest_stores_the_unchecked_flag_as_a_bool(val, expected):
+    d = hdd.build_digest(_view(), None, None, "x", risk_off_unchecked=val)
+    assert d["risk_off_unchecked"] is expected
+
+
+def test_clear_with_unchecked_never_says_nothing_to_act_on_and_is_amber():
+    dg = _dg("clear", 0)
+    dg["risk_off_unchecked"] = True
+    line = hdd.digest_line(dg, cf.FRESH, NOW)
+    assert line == {"tier": "warning", "text": (
+        "🏠 Home at 8:46 PM ET: ⚠️ de-risk check couldn't run · no notices")}
+    assert "nothing to act on" not in line["text"] and "$" not in line["text"]
+
+
+def test_clear_without_the_flag_or_with_a_non_bool_stays_the_calm_line():
+    for extra in ({}, {"risk_off_unchecked": False}, {"risk_off_unchecked": "yes"}):
+        dg = _dg("clear", 0)
+        dg.update(extra)
+        line = hdd.digest_line(dg, cf.FRESH, NOW)
+        assert line == {"tier": "info",
+                        "text": "🏠 Home at 8:46 PM ET: ✅ nothing to act on · no notices"}
+
+
+def test_unchecked_flag_never_softens_the_act_or_offline_states():
+    dg = _dg("act", 2)
+    dg["risk_off_unchecked"] = True
+    assert hdd.digest_line(dg, cf.FRESH, NOW)["tier"] == "error"
+    assert "🔴 2 Act Today" in hdd.digest_line(dg, cf.FRESH, NOW)["text"]
+    dg = _dg("offline", None)
+    dg["risk_off_unchecked"] = True
+    assert "NOT checked" in hdd.digest_line(dg, cf.FRESH, NOW)["text"]
+
+
+def test_unchecked_clear_can_still_be_raised_by_a_louder_notices_tier():
+    dg = _dg("clear", 0, tier="error", headline="🔴 something")
+    dg["risk_off_unchecked"] = True
+    assert hdd.digest_line(dg, cf.FRESH, NOW)["tier"] == "error"

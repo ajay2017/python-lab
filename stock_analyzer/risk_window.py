@@ -292,6 +292,14 @@ def _names(items: list[dict]) -> str:
     return ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
+def _join_tickers(items: list[dict]) -> str:
+    """Tickers only ("AAA", "AAA and BBB", "AAA, BBB and CCC")."""
+    names = [str(x.get("ticker")) for x in items]
+    if len(names) <= 1:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
 def coverage_log_text(coverage) -> str:
     """One cron log line for a coverage dict (premarket and EOD print the same
     text): state, who was left out (TICKER:reason:n_returns:weight_pct), the worst
@@ -392,6 +400,12 @@ def _coverage_note(coverage: dict) -> str | None:
 
     # unmeasured
     share = coverage.get("unmeasured_pct")
+    if left_out and all(x.get("reason") == "no_prices" for x in left_out):
+        # A price outage, not young holdings: don't blame a "limit".
+        return (
+            f"Portfolio risk can't be measured: no price history could be loaded for "
+            f"{_join_tickers(left_out)} (market data offline?)."
+        )
     if left_out and share is not None and share > cap:
         return (
             f"Portfolio risk can't be measured: {_names(left_out)} "

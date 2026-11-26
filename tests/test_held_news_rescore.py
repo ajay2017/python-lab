@@ -275,7 +275,7 @@ def test_home_wiring():
 def test_status_carried_in_synth_bundle():
     assert re.search(r'"_brief_news_rescore_status":\s*st\.session_state\.get\("_brief_news_rescore_status"\)', _APP)
     assert '_b.get("_brief_news_rescore_status")' in _APP
-    assert re.search(r"_SYNTH_SCHEMA_VER = 27\b", _APP)  # 26 -> 27 by RiskListwiseYoung C2
+    assert re.search(r"_SYNTH_SCHEMA_VER = 28\b", _APP)  # 27 -> 28 by RiskListwiseYoung C4
 
 
 # ── review fix-first round ─────────────────────────────────────────────────

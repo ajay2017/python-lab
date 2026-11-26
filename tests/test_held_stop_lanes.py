@@ -150,3 +150,82 @@ def test_premarket_missing_risk_coverage_logs_not_built(monkeypatch, capsys):
     rc, sent, saved, renders, notified = _run_pm(monkeypatch, _cov_payload(None), _LATE)
     assert renders[0]["footer_lines"] == []
     assert "portfolio risk coverage: not built" in capsys.readouterr().out
+
+
+# ── RiskListwiseYoung C4: a risk-off de-risk check that could not run ─────────
+_RO_TEXT = ("Risk-off de-risk check couldn't run: the market is in a risk-off regime "
+            "(S&P 500 is below its 200-day average (downtrend)), but your portfolio beta "
+            "couldn't be measured, so no de-risk trim was considered today. Review your "
+            "highest-beta holdings yourself before adding risk.")
+
+
+def test_premarket_risk_off_unchecked_logs_footers_and_reddens_but_still_sends(monkeypatch, capsys):
+    payload = _cov_payload(None)
+    payload["risk_off_unchecked"] = {"reasons": ["x"], "text": _RO_TEXT}
+    rc, sent, saved, renders, notified = _run_pm(monkeypatch, payload, _LATE)
+    assert rc == 1
+    assert "risk_off_unchecked -- " + _RO_TEXT in cr._LAST_LANE_FAILURE_DETAIL
+    assert len(sent) == 1 and len(saved) == 1            # computed alerts still go out
+    assert renders[0]["footer_lines"] == [_RO_TEXT]
+    assert "RISK-OFF DE-RISK NOT CHECKED: " + _RO_TEXT in capsys.readouterr().out
+    assert notified and "risk_off_unchecked" in notified[0][1]
+
+
+@pytest.mark.parametrize("val", [None, "junk"])
+def test_premarket_risk_off_unchecked_unset_is_green_and_silent(monkeypatch, capsys, val):
+    payload = _cov_payload(None)
+    if val is not None:
+        payload["risk_off_unchecked"] = val
+    rc, sent, saved, renders, notified = _run_pm(monkeypatch, payload, _LATE)
+    assert rc == 0 and not notified
+    assert renders[0]["footer_lines"] == []
+    assert "RISK-OFF DE-RISK NOT CHECKED" not in capsys.readouterr().out
+
+
+_UNM_COV = {"state": "unmeasured", "left_out": [
+    {"ticker": "ANT", "reason": "short_history", "n_returns": 3, "weight_pct": 15.0}],
+    "window_returns": 0, "min_returns": 20, "max_unmeasured_pct": 10.0,
+    "unmeasured_pct": 15.0, "late_start": []}
+
+
+def test_premarket_unmeasured_coverage_note_appears_once_when_the_risk_off_text_has_it(monkeypatch):
+    from stock_analyzer import risk_window
+    note = risk_window.coverage_note(_UNM_COV)
+    payload = _cov_payload(_UNM_COV)
+    payload["risk_off_unchecked"] = {"reasons": ["x"], "text": _RO_TEXT + " " + note}
+    rc, sent, saved, renders, notified = _run_pm(monkeypatch, payload, _LATE)
+    lines = renders[0]["footer_lines"]
+    assert lines == [_RO_TEXT + " " + note]
+    assert sum(ln.count(note) for ln in lines) == 1
+
+
+def test_premarket_regime_unreadable_text_and_unmeasured_coverage_both_appear(monkeypatch):
+    from stock_analyzer import risk_off_check, risk_window
+    note = risk_window.coverage_note(_UNM_COV)
+    generic = risk_off_check._REGIME_UNREADABLE_TEXT
+    payload = _cov_payload(_UNM_COV)
+    payload["risk_off_unchecked"] = {"reasons": [], "text": generic}
+    rc, sent, saved, renders, notified = _run_pm(monkeypatch, payload, _LATE)
+    lines = renders[0]["footer_lines"]
+    assert note in lines and generic in lines
+    assert sum(ln.count(note) for ln in lines) == 1
+
+
+def test_premarket_no_alerts_with_unchecked_dict_never_logs_nothing_to_act_on(monkeypatch, capsys):
+    payload = _cov_payload(None)
+    payload["alerts"] = []
+    payload["risk_off_unchecked"] = {"reasons": ["x"], "text": _RO_TEXT}
+    rc, sent, saved, renders, notified = _run_pm(monkeypatch, payload, _LATE)
+    out = capsys.readouterr().out
+    assert rc == 1 and not sent
+    assert "nothing to act on" not in out
+    assert ("no protective alert — no alert email (the de-risk check couldn't run: "
+            "see the failure above).") in out
+    assert notified and "risk_off_unchecked" in notified[0][1]
+
+
+def test_premarket_no_alerts_and_no_unchecked_dict_keeps_the_old_log_line(monkeypatch, capsys):
+    payload = _cov_payload(None)
+    payload["alerts"] = []
+    rc, sent, saved, renders, notified = _run_pm(monkeypatch, payload, _LATE)
+    assert "nothing to act on — no email." in capsys.readouterr().out
