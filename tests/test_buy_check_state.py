@@ -302,11 +302,15 @@ def test_unreadable_beta_values_read_as_unknown(unread):
 
 
 def test_beta_mirrors_the_advisor_comparison_exactly():
-    """Pin the mirror: the advisor's hard G-06 branch uses strict `>` on both legs."""
+    """Pin the mirror: the advisor's hard G-06 branch calls `beta_fit_gate.breached`,
+    which uses strict `>` on both legs (beta gate C1)."""
     import inspect
+    from stock_analyzer import beta_fit_gate
     from stock_analyzer import watchlist_advisor as wa
     src = inspect.getsource(wa._portfolio_risk_gate)
-    assert "port_beta > PORTFOLIO_BETA_CEILING and ticker_beta > TICKER_BETA_CRITICAL" in src
+    assert "_beta_fit_gate.breached(port_beta, ticker_beta)" in src
+    bsrc = inspect.getsource(beta_fit_gate.breached)
+    assert "pb > PORTFOLIO_BETA_CEILING and tb > TICKER_BETA_CRITICAL" in bsrc
     assert "PORTFOLIO_BETA_CEILING" in inspect.getsource(bcs.beta_leg_could_bind)
     assert "TICKER_BETA_CRITICAL" in inspect.getsource(bcs.beta_leg_could_bind)
 

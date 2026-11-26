@@ -47,6 +47,7 @@ from stock_analyzer.rr_readout import fmt_ratio_vs
 from stock_analyzer import asset_type as _asset_type_mod
 from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer import buy_check_state as _buy_check_state
+from stock_analyzer import beta_fit_gate as _beta_fit_gate
 from stock_analyzer.pillar_availability import (
     technical_clause, technical_history_short, verdict_basis, withheld_split,
 )
@@ -202,8 +203,14 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
         }
 
     # ── Hard breach: high portfolio beta + critical ticker beta ─────────────
-    if (port_beta is not None and ticker_beta is not None
-            and port_beta > PORTFOLIO_BETA_CEILING and ticker_beta > TICKER_BETA_CRITICAL):
+    # The comparison lives in `beta_fit_gate.breached` (beta-gate C1) so Grow Today
+    # and the cron emails apply the same predicate. Both legs are known readable
+    # inside the branch; format the `beta_or_none` floats. A non-numeric string
+    # beta used to raise TypeError at the `>`; it now reads as unread and falls
+    # to the C2a beta_unknown branch below.
+    if _beta_fit_gate.breached(port_beta, ticker_beta):
+        port_beta = _buy_check_state.beta_or_none(port_beta)
+        ticker_beta = _buy_check_state.beta_or_none(ticker_beta)
         return {
             "severity": "hard",
             "kind":     "beta",

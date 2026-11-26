@@ -1365,6 +1365,11 @@ _GATE_FILES = {
     # a wrong call hides a beta trim behind a smaller sell or shows a second sale beside
     # a covering one.
     "stock_analyzer/tuneup_cover.py",
+    # Added 2026-11-26 (beta gate C1, docs/plans/beta-gate-c1-spec.md): the one G-06
+    # portfolio-beta predicate and its couldn't-check decision, shared by the Watchlist
+    # and (from C2) Grow Today and the cron emails; a wrong call lets a high-beta buy
+    # onto a high-beta book, or holds one that fits.
+    "stock_analyzer/beta_fit_gate.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window
