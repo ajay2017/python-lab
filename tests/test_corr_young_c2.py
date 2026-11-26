@@ -325,8 +325,8 @@ _COV_NONE_COUNTED = {"n_obs": 0, "n_obs_max": 0, "min_returns": 20, "left_out": 
 def test_unchecked_note_none_with_left_out_names_them_and_keeps_the_unconfirmed_fact():
     text = util.correlation_unchecked_note(None, _COV_NONE_COUNTED)
     assert text == (
-        "🔍 ANT was left out of this reading (it has only 4 daily returns of price "
-        "history, 20 needed); whether every other holding was included couldn't be "
+        "🔍 ANT was left out of this reading — it has only 4 daily returns of price "
+        "history (20 needed); whether every other holding was included couldn't be "
         "confirmed this session.")
     assert "couldn't be confirmed" in text
     assert "other holdings only" not in text and "classification" not in text
@@ -337,13 +337,13 @@ def test_unchecked_note_none_with_left_out_names_them_and_keeps_the_unconfirmed_
         {"ticker": "XYZ", "reason": "no_prices", "n_returns": 0}]}
     two = util.correlation_unchecked_note(None, cov)
     assert two == (
-        "🔍 ANT, XYZ were left out of this reading (ANT has only 4 daily returns of "
-        "price history and XYZ has no price history, 20 needed); whether every other "
+        "🔍 ANT, XYZ were left out of this reading — ANT has only 4 daily returns of "
+        "price history (20 needed) and XYZ has no price history; whether every other "
         "holding was included couldn't be confirmed this session.")
     # only an unpriced holding: no floor quoted
     only = util.correlation_unchecked_note(
         None, {"n_obs": 0, "left_out": [{"ticker": "XYZ", "reason": "no_prices", "n_returns": 0}]})
-    assert "(it has no price history)" in only and "needed" not in only
+    assert "— it has no price history;" in only and "needed" not in only
     # no left_out in the coverage keeps the old unknown line
     assert util.correlation_unchecked_note(None, _COV_OK) == _OLD["unchk_none"]
     # a published empty list still says nothing
@@ -404,16 +404,16 @@ def test_unchecked_disclosure_short_history_and_mixed():
 def test_unchecked_disclosure_none_with_left_out_names_them_and_keeps_the_unconfirmed_fact():
     text = pair_add_gate.unchecked_disclosure(None, True, False, _COV_NONE_COUNTED)
     assert text == (
-        "🔍 The correlation add-pause checks didn't include ANT (it has only 4 daily "
-        "returns of price history, 20 needed); couldn't confirm every other holding was "
+        "🔍 The correlation add-pause checks didn't include ANT — it has only 4 daily "
+        "returns of price history (20 needed); couldn't confirm every other holding was "
         "included this run.")
     assert "couldn't confirm" in text and "other holdings only" not in text
     cov = {"n_obs": 0, "min_returns": 20, "left_out": [
         {"ticker": "ANT", "reason": "short_history", "n_returns": 4},
         {"ticker": "XYZ", "reason": "no_prices", "n_returns": 0}]}
     assert pair_add_gate.unchecked_disclosure(None, False, True, cov) == (
-        "🔍 The correlation add-pause checks didn't include ANT, XYZ (ANT has only 4 daily "
-        "returns of price history and XYZ has no price history, 20 needed); couldn't "
+        "🔍 The correlation add-pause checks didn't include ANT, XYZ — ANT has only 4 daily "
+        "returns of price history (20 needed) and XYZ has no price history; couldn't "
         "confirm every other holding was included this run.")
     assert pair_add_gate.unchecked_disclosure(None, True, False, _COV_OK) == _OLD["disc_none_pc"]
     # neither gate checked still says nothing; a clean [] still says nothing
@@ -517,7 +517,11 @@ def test_view_state_unchecked_rest_present_in_every_state():
 def test_unconfirmed_reasons_wording():
     one = [{"ticker": "ANT", "reason": "short_history", "n_returns": 1}]
     assert corr_window.unconfirmed_reasons(one, need=20) == \
-        "it has only 1 daily return of price history, 20 needed"
+        "it has only 1 daily return of price history (20 needed)"
     assert corr_window.unconfirmed_reasons(
         [{"ticker": "XYZ", "reason": "no_prices", "n_returns": 0}], need=20) == \
         "it has no price history"
+    assert corr_window.unconfirmed_reasons(
+        [{"ticker": "ANT", "reason": "short_history", "n_returns": 4},
+         {"ticker": "XYZ", "reason": "no_prices", "n_returns": 0}], need=20) == \
+        "ANT has only 4 daily returns of price history (20 needed) and XYZ has no price history"

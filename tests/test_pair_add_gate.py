@@ -453,6 +453,12 @@ def test_corr_coverage_omitted_is_byte_identical_to_before_blocking_fixture():
     assert omitted == explicit_none
 
 
+def _untagged(blocks):
+    """A block map without the CorrYoung C3 "sample" / "n_obs" tags."""
+    return {t: {k: v for k, v in e.items() if k not in ("sample", "n_obs")}
+            for t, e in blocks.items()}
+
+
 def test_corr_coverage_thin_sample_NEVER_discards_a_real_block():
     """THE regression guard. A thin sample must not lift a live pause.
 
@@ -478,10 +484,14 @@ def test_corr_coverage_thin_sample_NEVER_discards_a_real_block():
         df, pair, [], ["AAA", "BBB"],
         corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED - 1},
     )
-    assert thin == control, (
+    # CorrYoung C3: a thin map is KEPT whole and only gains the book-wide
+    # sample tag (and n_obs); nothing about who is paused or why changes here.
+    assert set(thin) == set(control) and _untagged(thin) == _untagged(control), (
         "a thin sample discarded a live suppression -- that is a gate being "
         "switched off by a short price history, not a disclosure change."
     )
+    assert all(e["sample"] == "thin" and e["n_obs"] == CORR_MIN_OBS_TRUSTED - 1
+               for e in thin.values())
 
 
 def _no_block_inputs():
@@ -641,4 +651,6 @@ def test_gate_firing_map_is_never_changed_by_a_thin_state(monkeypatch):
     control = add_block_map(df, pair, [], ["AAA", "BBB"], corr_coverage={"n_obs": 125})
     assert control  # a live, non-empty map
     monkeypatch.setattr(_portfolio_mod, "correlation_sample_state", lambda c: "thin")
-    assert add_block_map(df, pair, [], ["AAA", "BBB"], corr_coverage={"n_obs": 125}) == control
+    thin = add_block_map(df, pair, [], ["AAA", "BBB"], corr_coverage={"n_obs": 125})
+    assert set(thin) == set(control) and _untagged(thin) == _untagged(control)
+    assert all(e["sample"] == "thin" for e in thin.values())

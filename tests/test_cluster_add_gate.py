@@ -346,6 +346,12 @@ def test_corr_coverage_omitted_is_byte_identical_to_before():
     assert omitted == explicit_none
 
 
+def _untagged(blocks):
+    """A block map without the CorrYoung C3 "sample" / "n_obs" tags."""
+    return {t: {k: v for k, v in e.items() if k not in ("sample", "n_obs")}
+            for t, e in blocks.items()}
+
+
 def test_corr_coverage_thin_sample_NEVER_discards_a_real_block():
     """THE regression guard — this asserted the OPPOSITE until an Opus
     review caught it (2026-10-09). See the pair_add_gate sibling's docstring
@@ -362,10 +368,13 @@ def test_corr_coverage_thin_sample_NEVER_discards_a_real_block():
         clusters, df, ["AAPL", "MSFT"], "2026-10-01",
         corr_coverage={"n_obs": CORR_MIN_OBS_TRUSTED - 1},
     )
-    assert thin == control, (
+    # CorrYoung C3: kept whole, gaining only the book-wide sample tag + n_obs.
+    assert set(thin) == set(control) and _untagged(thin) == _untagged(control), (
         "a thin sample discarded a live suppression -- that is a gate being "
         "switched off by a short price history, not a disclosure change."
     )
+    assert all(e["sample"] == "thin" and e["n_obs"] == CORR_MIN_OBS_TRUSTED - 1
+               for e in thin.values())
 
 
 def test_corr_coverage_thin_sample_downgrades_an_EMPTY_map_to_none():
@@ -528,7 +537,9 @@ def test_gate_firing_map_is_never_changed_by_a_thin_state(monkeypatch):
     control = add_block_map(clusters, df, ["AAPL", "MSFT"], "2026-10-01", corr_coverage={"n_obs": 125})
     assert control  # a live, non-empty map
     monkeypatch.setattr(_portfolio_mod, "correlation_sample_state", lambda c: "thin")
-    assert add_block_map(clusters, df, ["AAPL", "MSFT"], "2026-10-01", corr_coverage={"n_obs": 125}) == control
+    thin = add_block_map(clusters, df, ["AAPL", "MSFT"], "2026-10-01", corr_coverage={"n_obs": 125})
+    assert set(thin) == set(control) and _untagged(thin) == _untagged(control)
+    assert all(e["sample"] == "thin" for e in thin.values())
 
 
 # ── resolve_new_clusters thin-sample downgrade (2026-10-13) ──────────────────

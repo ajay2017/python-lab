@@ -1,0 +1,54 @@
+# CorrYoung C3 + C3b — gates, Home banner, Grow Today hold (lead spec, 2026-11-25)
+
+Parent: `docs/plans/corr-young-holding.md` §7 (owner Q1 = B, Q2 hold the left-out holding's own add, Q3 pairwise, Q4 trusted-sample banner rule) and the C1 / C2 review must-cover lists in its Status line. C1 (`37eae84f`) and C2 are local commits, not pushed. No app.py in this chunk (C4), no cron_runner.py (SlidingStop C3 owns it until it lands).
+
+Lead decision: the sample tag on a block entry is **book-wide** (`portfolio.correlation_sample_state(corr_coverage)`), not per pair. Conservative and simple; with pairwise measurement and young holdings left out, the book-wide `n_obs` only goes thin on a real data failure. Per-pair (`pair_n_obs`) is a possible later refinement: note it in the plan, don't build it.
+
+## C3 (gate modules)
+
+1. **`pair_add_gate.add_block_map`** and **`cluster_add_gate.add_block_map`**: every entry in a returned non-empty map gains `"sample": "trusted" | "thin" | "unknown"` (from `portfolio.correlation_sample_state(corr_coverage)`; coverage not passed → "unknown"). Nothing else changes: a map that fired is never dropped (F-294 order kept); empty-map → None on thin as today. If `cluster_add_gate.add_block_map` does not take `corr_coverage` today, add it as an optional keyword (default None) and check its callers (app.py passes it in C4; tests here).
+2. **`pair_add_gate.describe_reason(entry)`**: when `entry.get("sample") == "thin"`, return the thin text (≤ 300 chars): "Correlation with X couldn't be measured: only N shared daily returns (20 needed). Add paused until it can be; this is not a finding that they move together, and no trim is recommended." X = the partners joined as today; N needs the coverage: add an optional `corr_coverage=None` kwarg to `describe_reason`, and store `"n_obs"` on the entry in `add_block_map` when thin so describe_reason can print it without the kwarg. Same for cluster entries (store `n_obs`).
+3. **`home_risk_synthesis.build_correlation_bundle`**: when `correlation_sample_state(_corr_cov) == CORR_SAMPLE_THIN`, publish `div_score = None`, `avg_corr = None`, `_div_label = "Unavailable"`, and a `div` copy with `score` / `avg_correlation` None (keep `risk_pairs` unchanged: the gates and `PAIR_RISK_WITHHELD` still need them). Pass the ORIGINAL `div` to `diversification_recommendations` only if it reads more than `risk_pairs` — verify what it reads; if it reads only `risk_pairs`, pass the copy. TRUSTED and UNKNOWN unchanged.
+4. **`home_risk_synthesis.classify_risk_banner`** (Q4): the two `div_score` escalation legs apply only when the sample is TRUSTED (`correlation_sample_state(corr_coverage) == CORR_SAMPLE_TRUSTED`); `n_danger` / `n_warning` legs unchanged; then not verified → Check Incomplete; else All Clear. Rewrite the docstring (lines ~352-386): keep the load-bearing ordering note (pair alerts first), replace "escalation is honest evidence even from a partial / unverified matrix" with the trusted-sample rule and why (a thin sample's score is noise in both directions: CorrYoung), keep that a TRUSTED partial reading (a young holding left out) still escalates. `risk_banner_record_label` unchanged.
+5. **`risk_metric_history.build_portfolio_risk_snapshot`**: `diagnostics["corr_left_out"]` = the left-out tickers from coverage (`[]` when none, None when coverage is None). No change to what is written (Q1 = B: unverified → withheld, as today).
+
+## C3b (`daily_briefing.py`)
+
+6. New keyword `corr_coverage: dict | None = None` on `build_daily_briefing` and `_grow_today` (passed through). None = today's behaviour exactly (the cron passes nothing).
+7. `_add_block_gate`: G-26 binds in place only when the ticker's pair entry is not thin (`entry.get("sample") != "thin"`); G-25 likewise. After the ENTRY check, return a new code `"CORR_UNMEASURED"` when (a) the ticker has a thin pair or cluster entry, or (b) **Q2:** the ticker is in `corr_coverage["left_out"]` (read via `corr_window.left_out_items`; tolerant of a missing key). Update its docstring list of codes.
+8. Bucket: in the add loop, `"CORR_UNMEASURED"` appends to `entry_held_adds` (reuse the existing bucket and its renderer; verify app.py renders `entry_held_adds` by `reason` / `clears_when` / `check` generically) with `"check": "corr_unmeasured"`, `"gate_id": None` (no ledger row), `"counterfactual": True`, and:
+   - thin pair: reason = `pair_add_gate.describe_reason(entry)` thin text; clears_when "when the correlation sample reaches 20 shared daily returns".
+   - thin cluster: "New-cluster check with X couldn't be measured: only N shared daily returns (20 needed). Add paused until it can be (a Structural Scan can't be saved on this sample); this is not a finding that they move together."; same clears_when.
+   - Q2 short_history: "T's correlation with your other holdings can't be measured: only N daily returns of price history (20 needed). Add held until it can be."; clears_when "when T has 20 daily returns of price history".
+   - Q2 no_prices: "T's correlation with your other holdings can't be measured: no usable price history this run. Add held until it can be."; clears_when "when T's price history loads".
+   (20 = `CORR_MIN_OBS_TRUSTED` / coverage `min_returns`; never a literal.) Verify the gate-suppression ledger writer skips rows with `gate_id` None (as for non-news ENTRY holds today).
+9. `_adds_paused_list` already treats any non-None gate as held: confirm no change needed.
+10. Placement: keep the new branch clear of the `_entry_verdict` code (entry-fail-closed C3 / C4 will edit it).
+
+## Tests
+
+- add_block_map tags (pair + cluster): thin / trusted / unknown; a thin fired map is kept and tagged with n_obs; empty thin → None as today.
+- describe_reason thin text: contains "couldn't be measured", never "move together" except in the negation "not a finding that they move together" — assert the exact phrase "this is not a finding that they move together" and that the old positive wording is absent; ≤ 300 chars.
+- build_correlation_bundle thin → div_score / avg_corr None, label "Unavailable", risk_pairs kept, div_recs still built (PAIR_RISK_WITHHELD on thin); trusted unchanged.
+- classify_risk_banner Q4 table: thin 36 → Check Incomplete; UNKNOWN 25 → Check Incomplete; trusted + ANT unchecked 36 → Monitor; trusted full 25 → Action Required; thin + n_danger → Action Required; thin + n_warning → Monitor; verified 50 → All Clear. `risk_banner_record_label` outputs unchanged on its existing tests.
+- risk_metric_history diagnostics `corr_left_out`; row still withheld with ANT left out.
+- daily_briefing: thin G-26 / G-25 entries → CORR_UNMEASURED after ENTRY (an ENTRY-held ticker stays ENTRY), in entry_held_adds with gate_id None, no ledger row; a trusted fired map still binds as G-26 / G-25 with its ledger row; Q2 hold for a left-out ticker (short_history and no_prices texts); `corr_coverage=None` → behaviour identical to before (regression on an existing Brief fixture); adds_paused excludes CORR_UNMEASURED names.
+- Plain text, antipatterns, no constant comparison added to app.py (none touched).
+
+Checks: py_compile; tests/test_pair_add_gate*.py, tests/test_cluster_add_gate*.py, tests/test_home_risk_synthesis.py, tests/test_risk_metric_history.py, tests/test_daily_briefing*.py, tests/test_gate_suppression*.py, tests/test_corr_*.py and any test pinning the banner docstring / reason texts (`-n 4`); `python scripts/check_antipatterns.py`. No full suite, no commit. Don't touch app.py, cron_runner.py, headless_alert_engine.py, CLAUDE.md.
+
+## C2 review leftovers (fold into C3; Opus C2 confirming round, non-blocking)
+
+11. `corr_window.unconfirmed_reasons` (~204-221): put the floor right after the young clause(s): "ANT has only 4 daily returns of price history (20 needed) and XYZ has no price history" (not "…, 20 needed)" at the end of the bracket). Update pinned tests.
+12. `left_out_items` (or `unconfirmed_reasons` / `short_history_clause`) must never raise on a short_history item without a numeric `n_returns`: drop such items in `left_out_items` (they then fall to the generic couldn't-confirm wording). `pair_add_gate.unchecked_disclosure`'s None branch must not raise (Grow Today renders it). Test with a malformed item.
+13. `util.correlation_record_withheld_note` with fewer than 2 counted (n_obs 0 and a non-empty `left_out`): replace the "only 0 shared daily returns … only overlap on those days" clause with "fewer than 2 holdings have enough price history to pair". Test.
+
+## Notes for C4 from the C3 build
+
+- Home's `entry_held_adds` line (app.py ~11765-11800) prints "{tk} — would qualify as an add; held: {reason}." + " Clears when: {clears_when.rstrip('.')}." under the heading "📰 Adds held — entry check". The CORR_UNMEASURED reasons end with a period (→ "..") and their clears_when start with "when" (→ "Clears when: when …"). C4: strip a trailing period from the reason before adding ".", strip a leading "when " from clears_when, and give `check == "corr_unmeasured"` rows a fitting heading (e.g. "🔗 Adds held — correlation couldn't be measured") instead of "entry check".
+- Per-pair sample tagging (`pair_n_obs`) deliberately not built: the tag is book-wide (lead decision, C3 spec). Possible later refinement only.
+
+## C3 Opus review (round 1, FIX-FIRST → fixes in progress): what C4 / C5 must cover
+
+C4: (1) pass `corr_coverage=_corr_cov` to both `build_daily_briefing` calls (app.py ~7600, ~8052): the Q2 hold is inert until then (thin-tag holds work already: app passes `corr_coverage` to both `add_block_map` calls ~7722 / ~7731); (2) the `entry_held_adds` render notes above + a heading for `check == "corr_unmeasured"`; (3) Home's Structural banner (~8858-8888) on a thin cluster / pair map still says "new correlation cluster formed", "paused until you review … Structural Scan", "standing danger-tier correlated pair (G-26)": read `entry["sample"]` and use the thin wording; (4) 🔗 Risk Analysis (~19065-19099) on a thin sample: pair cards "These positions move together", the ⛔ text saying the score / classification "are not reliable" (now "—" / "Unavailable"), and the "shared by all … usually what caps the sample" wording: replace with `view_state` notes; (5) push C3 and C4 together (C3 alone shows thin holds under "📰 Adds held — entry check").
+C5: log `corr_left_out` in the EOD cron (cron_runner.py, after SlidingStop C3); docs (requirements F-IDs for G-25 / G-26 thin behaviour and the Q4 banner, User Guide); gate-suppression-ledger plan dated note: from this commit G-26 / G-25 rows no longer record thin-sample pauses (they are `corr_unmeasured` holds, no gate id), so the counterfactual readout's earlier rows mix in thin days; record the book-wide tag trade-off (a well-measured pair is worded thin and unledgered when another pair is thin) with the `pair_n_obs` refinement.

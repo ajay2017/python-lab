@@ -168,15 +168,41 @@ def need_of(coverage) -> int:
     return int(v)
 
 
-def left_out_items(coverage) -> list[dict]:
-    """The coverage's left_out entries that are dicts with a ticker, in order.
-    A non-dict coverage or a pre-C1 dict (no left_out) reads as []."""
+def _num_returns(x) -> bool:
+    """True when a left_out dict carries a real finite numeric n_returns."""
+    v = x.get("n_returns")
+    return not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)
+
+
+def raw_left_out(coverage) -> list[dict]:
+    """Every dict with a ticker in the coverage's left_out list, in order, with NO
+    n_returns filter (unlike left_out_items). For decisions that must hold a
+    name even when its count is unreadable (the Grow Today Q2 add hold, the EOD
+    diagnostics). A non-dict coverage, a missing key or a non-list reads as []."""
     if not isinstance(coverage, dict):
         return []
     raw = coverage.get("left_out")
     if not isinstance(raw, (list, tuple)):
         return []
     return [x for x in raw if isinstance(x, dict) and x.get("ticker") is not None]
+
+
+def left_out_items(coverage) -> list[dict]:
+    """The coverage's left_out entries that are dicts with a ticker, in order.
+    A non-dict coverage or a pre-C1 dict (no left_out) reads as []. A
+    short_history entry without a numeric n_returns is dropped (it cannot be
+    worded with a count), so the callers' wording never raises on it; the
+    callers then use their generic couldn't-confirm wording."""
+    if not isinstance(coverage, dict):
+        return []
+    raw = coverage.get("left_out")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [
+        x for x in raw
+        if isinstance(x, dict) and x.get("ticker") is not None
+        and (x.get("reason") != "short_history" or _num_returns(x))
+    ]
 
 
 def short_history_clause(
@@ -204,21 +230,23 @@ def short_history_clause(
 def unconfirmed_reasons(items: list[dict], *, need) -> str:
     """The reason clause (no brackets) for a left-out list in a sentence that
     already names the holdings: one name reads "it has only 4 daily returns of
-    price history, 20 needed" / "it has no price history"; several read
-    "ANT has only 4 daily returns of price history and XYZ has no price history,
-    20 needed" (the floor is quoted only when a young holding is among them)."""
+    price history (20 needed)" / "it has no price history"; several read
+    "ANT has only 4 daily returns of price history (20 needed) and XYZ has no
+    price history" (the floor is quoted once, right after the last young
+    holding's clause, and only when a young holding is among them)."""
     one = len(items) == 1
-    parts, young = [], False
+    parts, last_young = [], None
     for x in items:
         who = "it" if one else str(x["ticker"])
         if x.get("reason") == "short_history":
-            young = True
+            last_young = len(parts)
             n = int(x["n_returns"])
             parts.append(f"{who} has only {n} daily return{'' if n == 1 else 's'} of price history")
         else:
             parts.append(f"{who} has no price history")
-    text = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
-    return f"{text}, {need} needed" if young else text
+    if last_young is not None:
+        parts[last_young] += f" ({need} needed)"
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
 def left_out_note(coverage) -> str | None:

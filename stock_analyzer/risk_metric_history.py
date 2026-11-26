@@ -18,6 +18,8 @@ wrapped in its own try/except so one failure can never blank the others.
 
 from __future__ import annotations
 
+from . import corr_window as _corr_window
+
 
 def _gate_weight_col(port_df) -> str:
     """Same column-resolution convention used across the codebase (e.g.
@@ -85,8 +87,8 @@ def build_portfolio_risk_snapshot(
     of verification and is never withheld.
 
     `diagnostics`, if passed a dict, is populated in-place with
-    `{"corr_unchecked", "corr_n_obs", "corr_withheld"}` so a caller (the EOD
-    cron) can log *why* a reading was withheld without this function needing
+    `{"corr_unchecked", "corr_n_obs", "corr_withheld", "corr_left_out"}` so a
+    caller (the EOD cron) can log *why* a reading was withheld without this function needing
     to log anything itself. `None` (the default) means "don't bother" — never
     crashes either way.
 
@@ -171,5 +173,12 @@ def build_portfolio_risk_snapshot(
         diagnostics["corr_unchecked"] = corr_unchecked
         diagnostics["corr_n_obs"] = coverage.get("n_obs") if isinstance(coverage, dict) else None
         diagnostics["corr_withheld"] = not verified
+        # CorrYoung: the holdings the matrix left out (too little history, or no
+        # prices): [] when none, None when coverage is None (couldn't check).
+        # A diagnostic only; the row above is unchanged (an unverified reading
+        # is still withheld).
+        diagnostics["corr_left_out"] = (
+            [str(x["ticker"]) for x in _corr_window.raw_left_out(coverage)]
+            if isinstance(coverage, dict) else None)
 
     return row

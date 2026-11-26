@@ -48,6 +48,7 @@ no acknowledge/override; checked before G-25; no new constants.py value
 from __future__ import annotations
 
 from stock_analyzer import corr_window, portfolio
+from stock_analyzer.constants import CORR_MIN_OBS_TRUSTED
 
 _MAX_REASON_LEN = 300  # matches gate_ledger.py's own free-text reason cap
 
@@ -84,6 +85,13 @@ def add_block_map(corr_df, risk_pairs, div_recs, held_tickers, corr_coverage=Non
     no trim is recommended; audit A-H2). A None div_recs does
     NOT disable the gate -- the correlation pairing itself (risk_pairs) is
     the trigger, independent of whether a trim card could be built for it.
+
+    Every entry of a non-empty map also carries "sample": "trusted" | "thin" |
+    "unknown" (BOOK-WIDE, portfolio.correlation_sample_state(corr_coverage);
+    "unknown" when coverage isn't passed) and, when "thin", "n_obs": the
+    book-wide fewest shared returns (CorrYoung C3). A tag never drops an entry:
+    a thin map that fired is kept, and describe_reason words it as "couldn't be
+    measured" (the add stays paused; no finding that the pair moves together).
 
     Each partner dict: {"partner": TICKER, "corr": float, "trim_call":
     "named"|"withheld"|"not_named"|"unknown", "weaker": TICKER | None}
@@ -192,6 +200,13 @@ def add_block_map(corr_df, risk_pairs, div_recs, held_tickers, corr_coverage=Non
             if _sample == portfolio.CORR_SAMPLE_UNKNOWN:
                 return blocks  # {} -- unusable coverage is never "thin"
             return blocks      # {} -- trusted sample, genuinely nothing fired
+        # A map that fired is kept whole (F-294); it only gains the book-wide
+        # sample tag (and n_obs when thin) so the reason can be worded honestly.
+        _tag = portfolio.correlation_sample_state(corr_coverage)
+        for _entry in blocks.values():
+            _entry["sample"] = _tag
+            if _tag == portfolio.CORR_SAMPLE_THIN:
+                _entry["n_obs"] = int(corr_coverage["n_obs"])
         return blocks
     except Exception:
         return None
@@ -220,6 +235,24 @@ def describe_reason(entry: "dict | None") -> str:
     partners = entry.get("partners") if isinstance(entry, dict) else None
     if not isinstance(partners, list):
         partners = []
+    if isinstance(entry, dict) and entry.get("sample") == "thin":
+        # CorrYoung C3: the pair was read on too few shared returns, so this is
+        # a "couldn't be measured" hold, never a finding that they move together.
+        _names = ", ".join(sorted({
+            str(p.get("partner")).upper() for p in partners
+            if isinstance(p, dict) and p.get("partner")
+        })) or "its partner"
+        _n = entry.get("n_obs")
+        if isinstance(_n, int) and not isinstance(_n, bool):
+            _count = f"only {_n} shared daily return{'' if _n == 1 else 's'}"
+        else:
+            _count = "too few shared daily returns"
+        return (
+            f"Correlation with {_names} couldn't be measured: {_count} "
+            f"({CORR_MIN_OBS_TRUSTED} needed). Add paused until it can be; "
+            "this is not a finding that they move together, and no trim is "
+            "recommended."
+        )[:_MAX_REASON_LEN]
     clauses: list[str] = []
     for p in partners:
         _trim = p.get("trim_call") if isinstance(p, dict) else None
@@ -347,13 +380,20 @@ def unchecked_disclosure(
         # Fewer than 2 holdings were counted (no matrix, no pairs): name the
         # left-out holdings AND keep the fact that the rest couldn't be
         # confirmed. No "checked against your other holdings" clause: nothing was.
-        _lo_names = ", ".join(str(x["ticker"]).strip().upper() for x in _items[:5]) + (
-            f" +{len(_items) - 5} more" if len(_items) > 5 else "")
-        return (
-            f"🔍 The correlation add-pause checks didn't include {_lo_names} "
-            f"({corr_window.unconfirmed_reasons(_items, need=corr_window.need_of(corr_coverage))}); "
-            f"couldn't confirm every other holding was included this run."
-        )
+        try:
+            _lo_names = ", ".join(str(x["ticker"]).strip().upper() for x in _items[:5]) + (
+                f" +{len(_items) - 5} more" if len(_items) > 5 else "")
+            return (
+                f"🔍 The correlation add-pause checks didn't include {_lo_names} "
+                f"— {corr_window.unconfirmed_reasons(_items, need=corr_window.need_of(corr_coverage))}; "
+                f"couldn't confirm every other holding was included this run."
+            )
+        except Exception:
+            # A malformed left_out entry never breaks Grow Today's render.
+            return (
+                "🔍 (couldn't confirm every holding was included in the "
+                "correlation add-pause checks this run)"
+            )
 
     try:
         tickers = sorted({str(t).upper() for t in unchecked if str(t).strip()})

@@ -242,9 +242,9 @@ class TestClassifyRiskBanner:
     return "All Clear" — an all-NaN matrix (a held ticker with a short/non-
     overlapping history) makes diversification_score fall back to exactly
     50.0 off ZERO shared observations, which used to clear DIVERSIFY_WELL_PCT
-    and render a fabricated green banner. The two escalation legs are
-    UNCHANGED by this — they must still fire off any bad-enough div_score
-    regardless of verification status. Every "Check Incomplete" test below
+    and render a fabricated green banner. (CorrYoung Q4, 2026-11-25, later
+    narrowed the two div_score escalation legs to a TRUSTED sample; the alert
+    legs are unchanged.) Every "Check Incomplete" test below
     pairs its inputs with the verified (**VER) equivalent in the SAME test,
     per this repo's anti-vacuous-test rule: three straight sibling-gate
     commits (F-291/F-292/F-294) shipped tests that could not actually
@@ -341,20 +341,20 @@ class TestClassifyRiskBanner:
         assert hrs.classify_risk_banner(0, 0, 99.0, **self.VER)[0] == "All Clear"
 
     def test_ordering_verification_check_runs_after_both_escalations(self):
-        # The load-bearing ordering: an unverified/thin matrix must still be
-        # able to escalate on a bad-enough div_score. Checking verification
-        # FIRST would silently remove these live escalations (the exact
-        # blocking review finding on the sibling gate F-294).
-        label_a, _ = hrs.classify_risk_banner(
-            0, 0, DIVERSIFY_MODERATE_PCT - 0.01, **self.T19,
-        )
-        assert label_a == "Action Required"
+        # The load-bearing ordering: the verification check still runs AFTER
+        # the escalation legs. CorrYoung Q4 (2026-11-25) narrows the SCORE legs
+        # to a TRUSTED sample (a thin sample's score is noise in both
+        # directions), but a TRUSTED partial reading (a name missing from the
+        # matrix) must still escalate, and the alert legs always do.
         label_b, _ = hrs.classify_risk_banner(
             0, 0, DIVERSIFY_WELL_PCT - 0.01, **self.MISS,
         )
         assert label_b == "Monitor"
-        # Same two score inputs, verified -> same labels (escalation doesn't
-        # depend on verification status at all).
+        label_a, _ = hrs.classify_risk_banner(
+            0, 0, DIVERSIFY_MODERATE_PCT - 0.01, **self.MISS,
+        )
+        assert label_a == "Action Required"
+        # Same two score inputs, fully verified -> same labels.
         label_a2, _ = hrs.classify_risk_banner(
             0, 0, DIVERSIFY_MODERATE_PCT - 0.01, **self.VER,
         )
@@ -363,6 +363,39 @@ class TestClassifyRiskBanner:
             0, 0, DIVERSIFY_WELL_PCT - 0.01, **self.VER,
         )
         assert label_b2 == label_b == "Monitor"
+        # A THIN sample no longer lets the score escalate (it falls through to
+        # Check Incomplete), while its alert legs still do.
+        thin_a, _ = hrs.classify_risk_banner(
+            0, 0, DIVERSIFY_MODERATE_PCT - 0.01, **self.T19,
+        )
+        assert thin_a == hrs.RISK_BANNER_INCOMPLETE_LABEL
+        assert hrs.classify_risk_banner(
+            1, 0, DIVERSIFY_MODERATE_PCT - 0.01, **self.T19)[0] == "Action Required"
+
+    def test_q4_table_score_legs_need_a_trusted_sample(self):
+        """CorrYoung Q4: (alerts, score, fixture) -> label."""
+        THIN = {"corr_unchecked": [], "corr_coverage": {"n_obs": 5}}
+        UNKNOWN_SAMPLE = {"corr_unchecked": [], "corr_coverage": {"n_obs": None}}
+        TRUSTED_ANT_UNCHECKED = {"corr_unchecked": ["ANT"], "corr_coverage": {"n_obs": 125}}
+        cases = [
+            # thin sample, score 36 (a Monitor-band score): Check Incomplete
+            ((0, 0, 36.0, THIN), hrs.RISK_BANNER_INCOMPLETE_LABEL),
+            # unknown sample, score 25 (an Action-band score): Check Incomplete
+            ((0, 0, 25.0, UNKNOWN_SAMPLE), hrs.RISK_BANNER_INCOMPLETE_LABEL),
+            # trusted, ANT unchecked, score 36: the partial reading still escalates
+            ((0, 0, 36.0, TRUSTED_ANT_UNCHECKED), "Monitor"),
+            # trusted and full, score 25: Action Required
+            ((0, 0, 25.0, self.VER), "Action Required"),
+            # thin sample + a danger alert: the alert leg still escalates
+            ((1, 0, 99.0, THIN), "Action Required"),
+            # thin sample + a warning alert: Monitor
+            ((0, 1, 99.0, THIN), "Monitor"),
+            # verified, healthy score: All Clear
+            ((0, 0, 50.0, self.VER), "All Clear"),
+        ]
+        for (n_d, n_w, score, fx), expected in cases:
+            assert hrs.classify_risk_banner(n_d, n_w, score, **fx)[0] == expected, (
+                n_d, n_w, score, fx)
 
     def test_alerts_escalate_even_when_correlation_entirely_unverified(self):
         label_a, _ = hrs.classify_risk_banner(1, 0, 99.0, **self.THIN0)
@@ -438,20 +471,15 @@ class TestRiskBannerRecordLabel:
         assert record_warning is None
 
     def test_r3_div_score_driven_escalation_without_alerts_is_withheld(self):
-        # The score alone clears the DANGER band (div_score < MODERATE_PCT),
-        # which the SCREEN reads as "Action Required" even on an unverified
-        # (T19, n_obs=19) sample -- escalation is honest evidence even from
-        # a partial matrix, per classify_risk_banner's own rule. But there
-        # are NO alerts (n_danger=0, n_warning=1 only), so the record must
-        # withhold it: a thin/partial matrix can be wrong UPWARD, so this
-        # "Action Required" may overstate a book whose true full-coverage
-        # label is only "Monitor". Either way an unverified div_score
-        # alone is not safe to persist as a real claim.
+        # CorrYoung Q4: on an unverified (T19, n_obs=19) sample the score no
+        # longer escalates the SCREEN either; the warning alert alone gives
+        # "Monitor". The record is still withheld (n_danger is 0): an
+        # unverified div_score alone is never a persistable claim.
         score = DIVERSIFY_MODERATE_PCT - 0.01
         record = hrs.risk_banner_record_label(0, 1, score, **self.T19)
         assert record is None
         screen, _ = hrs.classify_risk_banner(0, 1, score, **self.T19)
-        assert screen == "Action Required"
+        assert screen == "Monitor"
         # Positive control: the SAME score, VERIFIED, persists for real --
         # isolating verification status as the only variable.
         record_verified = hrs.risk_banner_record_label(0, 1, score, **self.VER)

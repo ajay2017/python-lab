@@ -1197,7 +1197,7 @@ def correlation_unchecked_note(
             f" +{len(left_names) - 5} more" if len(left_names) > 5 else "")
         return (
             f"🔍 {_lo_names} {'were' if len(_lo) > 1 else 'was'} left out of this reading "
-            f"({_cw.unconfirmed_reasons(_lo, need=_cw.need_of(corr_coverage))}); whether "
+            f"— {_cw.unconfirmed_reasons(_lo, need=_cw.need_of(corr_coverage))}; whether "
             f"every other holding was included couldn't be confirmed this session."
         )
     if not corr_unchecked:
@@ -1425,13 +1425,27 @@ def correlation_record_withheld_note(corr_unchecked, corr_coverage, *, subject: 
 
     state = _portfolio.correlation_sample_state(corr_coverage)
     if state == _portfolio.CORR_SAMPLE_THIN:
-        _thin = (f"only {int(corr_coverage['n_obs'])} shared daily returns "
-                 f"(needs {_portfolio.CORR_MIN_OBS_TRUSTED})")
-        # No "capped by X" branch (CorrYoung C2): a young holding is left out of
-        # the matrix, so it can no longer be what caps the sample; and when the
-        # listwise cut is gone, thin always means the histories barely overlap.
-        _thin += ", because the holdings' price histories only overlap on those days"
-        reasons.append(_thin)
+        # CorrYoung C3: n_obs 0 with holdings left out and fewer than 2 counted
+        # is "nothing to pair", not "overlap on 0 days". The counted number is
+        # n_tickers (usable prices) minus the short-history names. When
+        # n_tickers is unreadable the count is unknown, so the previous
+        # overlap wording is kept (never claim "fewer than 2" unverified).
+        from stock_analyzer import corr_window as _cw
+        _lo_items = _cw.left_out_items(corr_coverage)
+        _nt = corr_coverage.get("n_tickers")
+        _counted = (_nt - sum(1 for x in _lo_items if x.get("reason") == "short_history")
+                    if isinstance(_nt, int) and not isinstance(_nt, bool) else None)
+        if (int(corr_coverage["n_obs"]) == 0 and _lo_items and _counted is not None
+                and _counted < 2):
+            reasons.append("fewer than 2 holdings have enough price history to pair")
+        else:
+            _thin = (f"only {int(corr_coverage['n_obs'])} shared daily returns "
+                     f"(needs {_portfolio.CORR_MIN_OBS_TRUSTED})")
+            # No "capped by X" branch (CorrYoung C2): a young holding is left out of
+            # the matrix, so it can no longer be what caps the sample; and when the
+            # listwise cut is gone, thin always means the histories barely overlap.
+            _thin += ", because the holdings' price histories only overlap on those days"
+            reasons.append(_thin)
     elif state == _portfolio.CORR_SAMPLE_UNKNOWN:
         reasons.append("couldn't confirm the sample size")
 

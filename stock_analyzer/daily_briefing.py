@@ -80,6 +80,7 @@ from stock_analyzer.constants import (
     ETF_MAX_PICKS,
     CORR_HIGH_PAIRS_THRESHOLD,
     CORR_DANGER_PAIRS_THRESHOLD,
+    CORR_MIN_OBS_TRUSTED,
 )
 from stock_analyzer.risk import position_sizing, sizing_unavailable_reason
 from stock_analyzer.targets import entry_zone
@@ -98,6 +99,7 @@ from stock_analyzer import asset_type
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 from stock_analyzer import etf_candidates as etf_candidates_mod
 from stock_analyzer import pair_add_gate
+from stock_analyzer import corr_window
 from stock_analyzer import entry_eligibility
 from stock_analyzer.entry_eligibility import data_trust_hold, macro_block_map
 from stock_analyzer import macro_sector_gate as _macro_sector_gate
@@ -872,7 +874,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 etf_candidates: list | None = None,
                 cluster_add_blocks: dict | None = None,
                 pair_add_blocks: dict | None = None,
-                corr_unchecked: list | None = None) -> dict:
+                corr_unchecked: list | None = None,
+                corr_coverage: dict | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -971,6 +974,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  layer can show a disclosure caption. `None` (the default,
                  and every caller before this follow-on) leaves every
                  existing key byte-identical.
+    corr_coverage : optional (CorrYoung C3b) -- portfolio.correlation_coverage()
+                 output for the SAME matrix. Read ONLY for the Q2 hold: a held
+                 name listed in corr_coverage["left_out"] (too little price
+                 history, or none) has no measured correlation, so its add is
+                 held with a visible reason (`entry_held_adds`, check
+                 "corr_unmeasured", no ledger row). The thin-sample hold itself
+                 comes from the "sample" tag on the G-26 / G-25 block entries.
+                 `None` (the default; the cron passes nothing) leaves every
+                 key byte-identical.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -1115,16 +1127,88 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         _entry_memo[_tu] = _v
         return _v
 
+    def _is_thin(_entry) -> bool:
+        """A G-26 / G-25 block entry tagged "thin" (CorrYoung C3): the pair was
+        read on too few shared returns, so it holds the add as CORR_UNMEASURED
+        rather than binding as the gate."""
+        return isinstance(_entry, dict) and _entry.get("sample") == "thin"
+
+    def _corr_unmeasured(_tu: str) -> "dict | None":
+        """Why this ticker's correlation can't be measured, or None. Three
+        cases, in order: a thin G-26 pair entry, a thin G-25 cluster entry, and
+        (Q2) a ticker left out of the matrix (`corr_coverage["left_out"]`:
+        short_history or no_prices). Returns {"kind", "reason", "clears_when",
+        "gate_value", "gate_threshold"}. Plain text, no dollar signs."""
+        _thin_clears = (f"when the correlation sample reaches {CORR_MIN_OBS_TRUSTED} "
+                        "shared daily returns")
+        if pair_add_blocks is not None and _tu in pair_add_blocks and _is_thin(pair_add_blocks[_tu]):
+            _e = pair_add_blocks[_tu]
+            return {"kind": "thin_pair", "reason": pair_add_gate.describe_reason(_e),
+                    "clears_when": _thin_clears,
+                    "gate_value": _e.get("n_obs"), "gate_threshold": CORR_MIN_OBS_TRUSTED}
+        if cluster_add_blocks is not None and _tu in cluster_add_blocks and _is_thin(cluster_add_blocks[_tu]):
+            _e = cluster_add_blocks[_tu]
+            _n = _e.get("n_obs")
+            _count = (f"only {_n} shared daily return{'' if _n == 1 else 's'}"
+                      if isinstance(_n, int) and not isinstance(_n, bool)
+                      else "too few shared daily returns")
+            _plist = _e.get("partners")
+            _names = ", ".join(sorted({
+                str(p[0]).upper() for p in (_plist if isinstance(_plist, list) else [])
+                if isinstance(p, (list, tuple)) and p
+            })) or "its partner"
+            return {"kind": "thin_cluster",
+                    "reason": (
+                        f"New-cluster check with {_names} couldn't be measured: {_count} "
+                        f"({CORR_MIN_OBS_TRUSTED} needed). Add paused until it can be "
+                        "(a Structural Scan can't be saved on this sample); this is "
+                        "not a finding that they move together."),
+                    "clears_when": _thin_clears,
+                    "gate_value": _n, "gate_threshold": CORR_MIN_OBS_TRUSTED}
+        # RAW left_out list (no n_returns filter): a name the coverage lists as
+        # left out is held even when its count is unreadable.
+        for _lo in corr_window.raw_left_out(corr_coverage):
+            if str(_lo["ticker"]).strip().upper() != _tu:
+                continue
+            _need = corr_window.need_of(corr_coverage)
+            if _lo.get("reason") == "short_history":
+                _nr = _lo.get("n_returns")
+                if isinstance(_nr, bool) or not isinstance(_nr, (int, float)) or not math.isfinite(_nr):
+                    return {"kind": "short_history_unreadable",
+                            "reason": (
+                                f"{_tu}'s correlation with your other holdings can't be measured: "
+                                f"too little price history ({_need} needed). Add held until it can be."),
+                            "clears_when": f"when {_tu} has {_need} daily returns of price history",
+                            "gate_value": None, "gate_threshold": _need}
+                _nr = int(_nr)
+                return {"kind": "short_history",
+                        "reason": (
+                            f"{_tu}'s correlation with your other holdings can't be measured: "
+                            f"only {_nr} daily return{'' if _nr == 1 else 's'} of price "
+                            f"history ({_need} needed). Add held until it can be."),
+                        "clears_when": f"when {_tu} has {_need} daily returns of price history",
+                        "gate_value": _nr, "gate_threshold": _need}
+            return {"kind": "no_prices",
+                    "reason": (
+                        f"{_tu}'s correlation with your other holdings can't be measured: "
+                        "no usable price history this run. Add held until it can be."),
+                    "clears_when": f"when {_tu}'s price history loads",
+                    "gate_value": None, "gate_threshold": _need}
+        return None
+
     def _add_block_gate(_r) -> "str | None":
         """THE add-gate decision, in the order the bull loop applies it. Returns
         None (nothing blocks), "CARD" (a card in today's Brief or a sale today),
         the gate id that holds the add (G-20 WATCH, G-24 cooldown, G-16 sector
         cap, G-01 risk trim, G-04 single-name ceiling, G-09 drift trim, G-26
-        danger pair, G-25 new cluster), or "ENTRY" (the shared entry check:
-        stale data / negative news / imminent earnings) -- checked LAST so every
-        existing gate's bucket and ledger rows are unchanged. Shared by the bull
-        add loop (which records the bucket per gate) and adds_paused, so the two
-        cannot diverge."""
+        danger pair, G-25 new cluster), "ENTRY" (the shared entry check:
+        stale data / negative news / imminent earnings) -- checked after every
+        existing gate so their buckets and ledger rows are unchanged -- or
+        "CORR_UNMEASURED" (CorrYoung C3b, after ENTRY: the correlation couldn't
+        be measured, either a thin G-26 / G-25 entry, which then does NOT bind
+        as the gate, or a left-out ticker, Q2; a hold, no ledger row). Shared by
+        the bull add loop (which records the bucket per gate) and adds_paused,
+        so the two cannot diverge."""
         _t = str(_r["Ticker"])
         _tu = _t.upper()
         if _tu in _add_cards:
@@ -1141,12 +1225,14 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             return "G-04"
         if _tu in _drift_trim_set:
             return "G-09"
-        if pair_add_blocks is not None and _tu in pair_add_blocks:
+        if pair_add_blocks is not None and _tu in pair_add_blocks and not _is_thin(pair_add_blocks[_tu]):
             return "G-26"
-        if cluster_add_blocks is not None and _tu in cluster_add_blocks:
+        if cluster_add_blocks is not None and _tu in cluster_add_blocks and not _is_thin(cluster_add_blocks[_tu]):
             return "G-25"
         if not _entry_verdict(_r)["eligible"]:
             return "ENTRY"
+        if _corr_unmeasured(_tu) is not None:
+            return "CORR_UNMEASURED"
         return None
 
     def _adds_paused_list() -> list[dict]:
@@ -2537,6 +2623,32 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         "counterfactual": True,
                         "gate_value":     _eb.get("gate_value"),
                         "gate_threshold": _eb.get("gate_threshold"),
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
+                    })
+                    continue
+                # CORR_UNMEASURED (CorrYoung C3b) -- AFTER the ENTRY check, so an
+                # ENTRY-held name keeps its own bucket. A hold, not a finding:
+                # shares the entry_held_adds bucket and its renderer, with no
+                # gate id (so no ledger row).
+                if _gate == "CORR_UNMEASURED":
+                    _cu = _corr_unmeasured(ticker.upper())
+                    entry_held_adds.append({
+                        "ticker":    ticker,
+                        "score":     scr,
+                        "pnl_pct":   _f(row.get("P&L (%)")),
+                        "gap":       gap,
+                        "sector":    sector,
+                        "check":     "corr_unmeasured",
+                        "reason":    _cu["reason"],
+                        "clears_when": _cu["clears_when"],
+                        "holds":     [],
+                        "unchecked": [],
+                        "gate_id":        None,
+                        "counterfactual": True,
+                        "gate_value":     _cu["gate_value"],
+                        "gate_threshold": _cu["gate_threshold"],
                         "price":          _f(row.get("Price"), None),
                         "composite_score": _f(row.get("Score"), None),
                         "momentum_score":  None,
@@ -4159,6 +4271,7 @@ def build_daily_briefing(
     corr_unchecked: list | None = None,
     news_feed: dict | None = None,
     risk_coverage: dict | None = None,
+    corr_coverage: dict | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -4209,6 +4322,11 @@ def build_daily_briefing(
                      same book-risk build `fragility` came from; read only to
                      word the `risk_off_unchecked` disclosure. Never read by a
                      gate. None (the default) leaves the note's coverage clause out.
+    corr_coverage:   optional (CorrYoung C3b) `portfolio.correlation_coverage()`
+                     of the same matrix `cluster_add_blocks` / `pair_add_blocks`
+                     came from, passed straight through to _grow_today, which
+                     reads only its `left_out` list (the Q2 add hold). None (the
+                     default, and the cron) leaves every output byte-identical.
 
     Returns dict with: act_today, review_list, grow_today, portfolio_tuneup.
     Grow Today owns every new-position and add-to-winner suggestion (the
@@ -4357,7 +4475,8 @@ def build_daily_briefing(
                          etf_candidates=etf_candidates,
                          cluster_add_blocks=cluster_add_blocks,
                          pair_add_blocks=pair_add_blocks,
-                         corr_unchecked=corr_unchecked)
+                         corr_unchecked=corr_unchecked,
+                         corr_coverage=corr_coverage)
     # Tune-up beta/sharpe cards restate a trim; if that name is already carrying
     # an Act Today card (incl. the risk-off TRIM appended above) or a Review
     # card, drop the redundant restatement (2026-08-04 audit — same broad

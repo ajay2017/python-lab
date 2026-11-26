@@ -146,6 +146,8 @@ def add_block_map(
             "tier": "danger" | "warning",
             "combined_weight_pct": float,
             "baseline_scan_date": baseline_scan_date,
+            "sample": "trusted" | "thin" | "unknown",   # book-wide, CorrYoung C3
+            "n_obs": int,                               # only when "thin"
         }
     Never raises -- any malformed input degrades to None (couldn't verify),
     never a fabricated {}.
@@ -202,6 +204,14 @@ def add_block_map(
             if _sample == portfolio.CORR_SAMPLE_UNKNOWN:
                 return blocks  # {} -- unusable coverage is never "thin"
             return blocks      # {} -- trusted sample, genuinely nothing fired
+        # A map that fired is kept whole (F-294); it only gains the book-wide
+        # sample tag (and n_obs when thin), CorrYoung C3. Same shape as
+        # pair_add_gate's entries.
+        _tag = portfolio.correlation_sample_state(corr_coverage)
+        for _entry in blocks.values():
+            _entry["sample"] = _tag
+            if _tag == portfolio.CORR_SAMPLE_THIN:
+                _entry["n_obs"] = int(corr_coverage["n_obs"])
         return blocks
     except Exception:
         return None

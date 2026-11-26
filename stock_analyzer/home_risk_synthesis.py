@@ -60,6 +60,9 @@ from stock_analyzer.portfolio import (
     correlation_coverage,
     correlation_unchecked,
     correlation_claim_verified,
+    correlation_sample_state,
+    CORR_SAMPLE_THIN,
+    CORR_SAMPLE_TRUSTED,
     diversification_score,
     diversification_recommendations,
 )
@@ -147,6 +150,15 @@ def build_correlation_bundle(
         div_score    = div["score"]
         avg_corr     = div["avg_correlation"]
         risk_pairs   = div["risk_pairs"]
+        if correlation_sample_state(_corr_cov) == CORR_SAMPLE_THIN:
+            # CorrYoung C3 (Q4): a score built on a thin sample is noise in both
+            # directions, so it is not published at all (score / average None,
+            # label "Unavailable"). `risk_pairs` is kept as is: the add gates
+            # and PAIR_RISK_WITHHELD still read it. diversification_recommendations
+            # reads only `risk_pairs` from this dict, so it gets the same copy.
+            div = dict(div, score=None, avg_correlation=None)
+            div_score = None
+            avg_corr  = None
         # div_score is None on a NON-empty matrix when no pair has a finite
         # correlation (diversification_score's no-finite-pair rule,
         # 2026-10-13). Labelled here rather than raising: a TypeError would
@@ -322,8 +334,8 @@ def _div_leg_verified(div_score, corr_unchecked, corr_coverage) -> bool:
     """Is `div_score` both a real finite number AND backed by a correlation
     matrix that actually covered every held ticker with a trustworthy sample
     (`portfolio.correlation_claim_verified`)? Used only to gate the "All
-    Clear" state below — never the two escalation legs, which must fire on
-    ANY evidence of danger/warning regardless of verification status."""
+    Clear" state below — never the escalation legs (the alert legs always
+    fire; the score legs need a TRUSTED sample, see classify_risk_banner)."""
     try:
         if div_score is None or not math.isfinite(float(div_score)):
             return False
@@ -361,33 +373,38 @@ def classify_risk_banner(
     catch it; only the `n_obs` floor inside `correlation_claim_verified`
     does.
 
-    The owner-ratified screen rule this encodes: **escalation is honest
-    evidence even from a partial/unverified matrix; "All Clear" is an
-    affirmative claim that requires full, trustworthy coverage.** So both
-    escalation legs below read `div_score` exactly as before — a thin or
-    partial matrix must still be able to say "Action Required"/"Monitor" if
-    the number it produced is bad enough. Only the un-escalated fall-through
-    is gated on verification, via `_div_leg_verified`, and downgraded to a
-    neutral `RISK_BANNER_INCOMPLETE_LABEL`/`_COLOR` rather than a fabricated
-    "All Clear".
+    The owner-ratified screen rule this encodes: **"All Clear" is an
+    affirmative claim that requires full, trustworthy coverage, and the
+    diversification score escalates the banner only when the correlation
+    sample is TRUSTED** (`correlation_sample_state` == trusted; CorrYoung Q4,
+    2026-11-25). A thin sample's score is noise in both directions (it can
+    read as moving together or as independent on a few chance days), so it
+    neither escalates nor clears: it falls through to "Check Incomplete". An
+    UNKNOWN sample (no readable `n_obs`) is treated the same. A TRUSTED but
+    partial reading (a young holding left out, or a name missing from the
+    matrix) still escalates: the pairs that were measured rest on a real
+    sample. The `n_danger` / `n_warning` alert legs are unchanged and always
+    escalate; they do not depend on the correlation sample.
 
-    ORDERING IS LOAD-BEARING: the verification check runs AFTER both
-    escalation `if` blocks, never before. Checking it first would silently
-    remove live escalations on a partial matrix — reproduced as a blocking
-    review finding on the sibling gate F-294 (`pair_add_gate.py`) the week
-    before this fix, where coverage-first ordering removed real suppressions
-    whenever `n_obs` was thin but a pair was still genuinely dangerous. The
-    same shape applies here: a thin/unverified matrix can still carry a
-    correlation reading bad enough to clear `DIVERSIFY_MODERATE_PCT`/
-    `DIVERSIFY_WELL_PCT`, and that reading must still escalate.
+    ORDERING IS LOAD-BEARING: pair alerts (`n_danger` / `n_warning`) are
+    checked FIRST, then the trusted-sample score legs, and the verification
+    check runs only AFTER the escalation `if` blocks, never before. Checking
+    it first would silently remove live escalations on a partial matrix --
+    reproduced as a blocking review finding on the sibling gate F-294
+    (`pair_add_gate.py`), where coverage-first ordering removed real
+    suppressions whenever `n_obs` was thin but a pair was still genuinely
+    dangerous. An unverified fall-through is downgraded to a neutral
+    `RISK_BANNER_INCOMPLETE_LABEL`/`_COLOR` rather than a fabricated "All
+    Clear".
 
     `corr_unchecked`/`corr_coverage` are keyword-only with NO default — a
     call site that forgets to pass them must raise `TypeError` immediately,
     never silently fall back to the old (score-only) behaviour.
     """
-    if n_danger > 0 or (div_score is not None and div_score < DIVERSIFY_MODERATE_PCT):
+    _trusted = correlation_sample_state(corr_coverage) == CORR_SAMPLE_TRUSTED
+    if n_danger > 0 or (_trusted and div_score is not None and div_score < DIVERSIFY_MODERATE_PCT):
         return "Action Required", "#ff4444"
-    if n_warning > 0 or (div_score is not None and div_score < DIVERSIFY_WELL_PCT):
+    if n_warning > 0 or (_trusted and div_score is not None and div_score < DIVERSIFY_WELL_PCT):
         return "Monitor", "#ffbb33"
     if not _div_leg_verified(div_score, corr_unchecked, corr_coverage):
         return RISK_BANNER_INCOMPLETE_LABEL, RISK_BANNER_INCOMPLETE_COLOR
@@ -425,7 +442,10 @@ def risk_banner_record_label(
     `classify_risk_banner` as a real-looking label string — "Monitor" or
     "Action Required" — which IS in `_VALID_RAG_LABELS` and would persist as
     a genuine claim despite resting on a matrix F-291's own
-    `correlation_claim_verified` refuses to trust.
+    `correlation_claim_verified` refuses to trust. Since CorrYoung Q4 only a
+    TRUSTED partial reading (a holding missing from the matrix, sample still
+    trusted) can escalate on the score alone; a thin or unknown sample falls
+    through to "Check Incomplete" and never reaches that string.
 
     So this function re-derives the verdict directly from the escalation
     tiers rather than trusting `classify_risk_banner`'s string output:

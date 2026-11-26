@@ -1110,17 +1110,27 @@ def test_pair_add_gate_thin_coverage_matches_explicit_empty_dict_in_grow_today()
         df, [danger_pair], [], ["AAA", "BBB"],
         corr_coverage={"n_obs": _portfolio_mod.CORR_MIN_OBS_TRUSTED - 1},
     )
-    assert thin_blocks == control_blocks, (
+    # CorrYoung C3: the thin map is kept whole, gaining only the sample tags.
+    assert (set(thin_blocks) == set(control_blocks)
+            and all(thin_blocks[t]["sample"] == "thin" for t in thin_blocks)
+            and {t: {k: v for k, v in e.items() if k not in ("sample", "n_obs")}
+                 for t, e in thin_blocks.items()}
+            == {t: {k: v for k, v in e.items() if k != "sample"}
+                for t, e in control_blocks.items()}), (
         "thin coverage discarded a live suppression -- a short price history "
         "must not switch this gate off."
     )
 
     grow_thin = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
                             pair_add_blocks=thin_blocks)
-    # The suppression survives end-to-end, identical to the control run.
-    assert grow_thin["add_positions"] == []
-    for key in ("add_positions", "pair_blocked_adds", "cluster_blocked_adds"):
-        assert grow_thin[key] == grow_control[key], f"key {key!r} differs"
+    # The pause survives end-to-end: no add. Since CorrYoung C3b it is held as
+    # "couldn't be measured" (entry_held_adds, no gate id, no ledger row), not
+    # recorded as a G-26 finding.
+    assert grow_thin["add_positions"] == grow_control["add_positions"] == []
+    assert grow_thin["pair_blocked_adds"] == [] and grow_control["pair_blocked_adds"] != []
+    assert [h["ticker"] for h in grow_thin["entry_held_adds"]] == ["AAA"]
+    assert grow_thin["entry_held_adds"][0]["check"] == "corr_unmeasured"
+    assert grow_thin["entry_held_adds"][0]["gate_id"] is None
     assert grow_thin["pair_gate_checked"] is True
 
 
@@ -1177,12 +1187,21 @@ def test_cluster_add_gate_thin_coverage_matches_explicit_empty_dict_in_grow_toda
         clusters, df, ["AAA", "BBB"], "2026-10-01",
         corr_coverage={"n_obs": _portfolio_mod.CORR_MIN_OBS_TRUSTED - 1},
     )
-    assert thin_firing == control_blocks, (
+    assert (set(thin_firing) == set(control_blocks)
+            and all(thin_firing[t]["sample"] == "thin" for t in thin_firing)
+            and {t: {k: v for k, v in e.items() if k not in ("sample", "n_obs")}
+                 for t, e in thin_firing.items()}
+            == {t: {k: v for k, v in e.items() if k != "sample"}
+                for t, e in control_blocks.items()}), (
         "thin coverage discarded a live cluster suppression."
     )
     grow_thin = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
                             cluster_add_blocks=thin_firing)
     assert grow_thin["add_positions"] == []
+    # CorrYoung C3b: held as "couldn't be measured", not recorded as G-25.
+    assert grow_thin["cluster_blocked_adds"] == []
+    assert grow_control["cluster_blocked_adds"] != []
+    assert [h["check"] for h in grow_thin["entry_held_adds"]] == ["corr_unmeasured"]
 
     # The disclosure half: nothing held sits on a new pair, so the map is
     # legitimately EMPTY -- only then may thin coverage downgrade it.
