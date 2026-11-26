@@ -10,7 +10,7 @@ C1 shipped `earnings_state`. Nothing reads it for a decision yet (C3 wires
 failure rate is visible first. C2a (this edit) adds `fit_state` and
 `beta_leg_could_bind`, read ONLY by the cron's `compute_watchlist_entries` and
 `watchlist_advisor._portfolio_risk_gate` (when the caller passes a `fit_state`; the
-app's Watchlist doesn't until C2b). `tone_unread` and the banner text builders
+app's Watchlist passes one since C2b, `watchlist_fit_source`). `tone_unread` and the banner text builders
 arrive in C4.
 
   earnings_state(bundle) -> {"state": "not_applicable" | "date" | "no_date" | "failed",

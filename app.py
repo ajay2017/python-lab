@@ -76,7 +76,7 @@ from stock_analyzer.fundamentals import (
 )
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
-from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, rate_sensitivity_per_ticker, capital_equivalent_risk, beta_vs_market
+from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, compute_portfolio_risk_metrics, rate_sensitivity_per_ticker, capital_equivalent_risk, beta_vs_market
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations, left_out_note
 from stock_analyzer.earnings_advisor import build_earnings_playbook, analyst_fields as _analyst_fields
 from stock_analyzer import earnings_intel as _earn_intel
@@ -126,6 +126,8 @@ from stock_analyzer import home_dock_digest
 from stock_analyzer import market_trend
 from stock_analyzer import playbook_trend_view
 from stock_analyzer import brief_chips
+from stock_analyzer import buy_check_state   # entry-fail-closed C2b: Watchlist fit_state / beta_or_none
+from stock_analyzer import watchlist_fit_source   # entry-fail-closed C2b: which frame the Watchlist's sector / beta checks read
 from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
@@ -30670,13 +30672,78 @@ elif page == "📋 Watchlist":
         _wl_data = _parallel_load_all(list(_wl), period="6mo")
 
     # ── Build portfolio-fit context (consumed by ENTER_NOW risk gate) ─────────
-    # Use the ENRICHED portfolio frame (Sector + Weight + Gate Weight columns),
-    # not the raw holdings_df (Ticker/Shares/cost only) — the latter has no
-    # "Sector" column, so the sector entry-fit below never fired. Mirrors the
-    # Comparison page (_port_df_enriched). Empty until Home builds it this
-    # session → the sector check falls back to 0.0 (inert, safe), same as before.
-    _wl_port_df    = st.session_state.get("_port_df_enriched", pd.DataFrame())
-    _wl_port_risk  = st.session_state.get("_port_risk_cache", {}) or {}
+    # entry-fail-closed C2b (docs/plans/entry-fail-closed-c2b-spec.md): the sector
+    # (G-05) and portfolio-beta (G-06) checks always run against a holdings frame
+    # built from the CURRENT holdings, or the name is HELD with one page banner.
+    # Which frame, which banner and which note are decided in
+    # stock_analyzer/watchlist_fit_source.py (this block is wiring only):
+    #   home        Home's ENRICHED frame (Sector + Weight + Gate Weight) + Home's
+    #               beta, only when both caches are ready and the book is unchanged
+    #   self_build  a frame built here from holdings_df (never published: its Stop
+    #               columns are blank, and publishing it would mark Home's frame
+    #               ready); a build that fails reads fit "unknown" -> held
+    #   flat        an empty book: weight 0 is true, nothing to build
+    # The self-built frame, its bundles and its beta are NEVER written to
+    # st.session_state or any coordination cache.
+    _wl_hold_df    = st.session_state.get("holdings_df")
+    _wl_hold_known = isinstance(_wl_hold_df, pd.DataFrame)
+    _wl_hold_rows  = _wl_hold_df.to_dict("records") if _wl_hold_known else None
+    _wl_home_df    = st.session_state.get("_port_df_enriched")
+    _wl_home_frame_empty = not (
+        isinstance(_wl_home_df, pd.DataFrame)
+        and not _wl_home_df.empty
+        and "Sector" in _wl_home_df.columns
+    )
+    _wl_fit_source = watchlist_fit_source.decide_source(
+        holdings_empty=(bool(_wl_hold_df.empty) if _wl_hold_known else None),
+        home_frame_state=_coord_cache_state("_port_df_enriched"),
+        home_frame_empty=_wl_home_frame_empty,
+        home_risk_state=_coord_cache_state("_port_risk_cache"),
+        # A trade logged off Home republishes the frame and bumps the epoch but
+        # leaves the risk cache on the pre-trade book: only a risk cache stamped at
+        # the CURRENT epoch may supply the beta beside Home's weights.
+        home_risk_fresh=(
+            coord_freshness.classify(
+                st.session_state.get("_coord_stamps"), _coord_epoch(), "_port_risk_cache")
+            == coord_freshness.FRESH),
+        home_stale=_portfolio_snapshot_stale(),
+    )
+    _wl_port_df = pd.DataFrame()
+    _wl_port_beta = None
+    _wl_fit_built_at = None
+    if _wl_fit_source == watchlist_fit_source.SOURCE_HOME:
+        _wl_port_df = _wl_home_df
+        _wl_port_beta = buy_check_state.beta_or_none(
+            _get_or_offline(st.session_state.get("_port_risk_cache"), "beta"))
+    elif _wl_fit_source == watchlist_fit_source.SOURCE_SELF:
+        try:
+            _wl_fit_held = sorted({
+                str(_h.get("Ticker") or "").strip().upper()
+                for _h in _wl_hold_rows if _h.get("Ticker")
+            } - {""})
+            _wl_fit_bundles = {
+                _t: _b for _t, _b in
+                _parallel_load_all(_wl_fit_held, period="6mo").items() if _b is not None
+            }
+            _wl_fit_frame = build_portfolio_df(
+                _wl_hold_rows, _wl_fit_bundles, manual_stops={}, held_stops=None)
+            _wl_fit_frame = attach_gate_weight(_wl_fit_frame)
+            _wl_port_df = (_wl_fit_frame if isinstance(_wl_fit_frame, pd.DataFrame)
+                           else pd.DataFrame())
+            _wl_fit_built_at = _now_et().strftime("%I:%M %p ET").lstrip("0")
+            try:
+                _wl_fit_risk = compute_portfolio_risk_metrics(
+                    _wl_port_df, _wl_fit_bundles, _cached_spy("6mo"), _get_rfr())
+                _wl_port_beta = buy_check_state.beta_or_none(
+                    _get_or_offline(_wl_fit_risk, "beta"))
+            except Exception:
+                _wl_port_beta = None   # frame kept; the beta note + advisor abstention speak
+        except Exception:
+            _wl_port_df = pd.DataFrame()   # no frame -> fit "unknown" -> names held
+            _wl_port_beta = None
+    _wl_fit_state = buy_check_state.fit_state(
+        _wl_hold_rows,
+        _wl_port_df if _wl_fit_source != watchlist_fit_source.SOURCE_FLAT else None)
     _wl_high_alerts = st.session_state.get("_risk_high_alerts_cache", []) or []
     _wl_grow_sectors_raw = st.session_state.get("_grow_today_sectors_cache")
     _wl_brief_offline = (
@@ -30697,27 +30764,6 @@ elif page == "📋 Watchlist":
     )
     _wl_gt_sector_tickers = _budget_view.grow_sector_tickers(
         _get_or_offline(_wl_syn_b, "grow_today"))
-    _wl_port_beta  = _wl_port_risk.get("beta")
-
-    # The G-05 sector-CEILING fallback is driven by the enriched portfolio
-    # frame, NOT by the Brief. Those fail independently: _port_df_enriched is
-    # published BEFORE the synthesis block, so the ordinary failure is a
-    # healthy frame plus a thrown risk advisor -- in which case G-05 is
-    # computing correctly and claiming otherwise would be a false "gate is
-    # off" statement, the mirror image of the silence this section fixes.
-    # COUPLING, load-bearing: this only ever reaches the user inside the
-    # `if _wl_brief_offline:` banner below. If _wl_gate_blind were ever True
-    # while _wl_brief_offline was False, G-05 would fail open silently again.
-    # Today that cannot happen -- Home's st.stop() also leaves
-    # _grow_today_sectors_cache absent, which forces _wl_brief_offline True --
-    # but that is INCIDENTAL, not designed. If the Home publish order ever
-    # changes, widen the banner condition to `_wl_brief_offline or
-    # _wl_gate_blind` rather than relying on this.
-    _wl_gate_blind = (
-        _coord_cache_state("_port_df_enriched") != "ready"
-        or _wl_port_df.empty
-        or "Sector" not in _wl_port_df.columns
-    )
 
     if _wl_brief_offline:
         st.warning(
@@ -30725,32 +30771,33 @@ elif page == "📋 Watchlist":
             "on Ready-to-Enter recommendations cannot run. The Watchlist will still show "
             "stock-level signals, but coordination with Grow Today / Risk Advisor is "
             "currently disabled. Visit the Portfolio page first to rebuild the briefing."
-            + (
-                "\n\n**Also off: the sector ceiling check (G-05).** The enriched "
-                "portfolio frame is unavailable, so the sector weight falls back to "
-                "0.0 and a name is never held back for concentration — this one "
-                "fails OPEN."
-                if _wl_gate_blind else ""
-            )
         )
 
-    # surface-proprioception F-260 finding: _port_risk_cache has its OWN
-    # independent try/except (app.py ~5238, computing beta/vol/etc. from
-    # portfolio returns) that is NOT coupled to _daily_brief_offline — a risk-
-    # metrics-only failure (e.g. a thin/NaN return series) can leave this
-    # cache offline on a day the Brief itself computed fine, so this check
-    # must NOT be folded into _wl_brief_offline above. Without it,
-    # _wl_port_beta silently reads None and _portfolio_risk_gate()'s hard
-    # beta-ceiling downgrade + soft beta caution both skip with zero
-    # disclosure — an ENTER_NOW card renders clean, indistinguishable from
-    # "beta checked, all clear." Same cache, same wording as 🎯 My Edge's
-    # existing disclosure for this exact scenario (app.py ~36956).
-    if _coord_cache_state("_port_risk_cache") != "ready":
-        st.warning(
-            "⚠ **Portfolio beta unavailable this session** — the portfolio-beta "
-            "risk check on Ready-to-Enter recommendations (both the hard ceiling "
-            "downgrade and the soft caution) cannot run. Visit 🏠 Home to compute it."
-        )
+    # entry-fail-closed C2b: the sector (G-05) and beta (G-06) checks no longer fail
+    # open on a missing Home frame, so the Brief-offline banner's old G-05 clause
+    # is gone. One banner when the fit couldn't be built (names are HELD) or
+    # when this page built the frame itself; wording lives in watchlist_fit_source.
+    # Holdings the self-built frame left out for want of a price (read defensively
+    # from attrs["dropped_holdings"]; only the self-build can have them unseen).
+    _wl_fit_unpriced = (
+        watchlist_fit_source.unpriced_tickers(_wl_port_df)
+        if _wl_fit_source == watchlist_fit_source.SOURCE_SELF else [])
+    _wl_fit_banner = watchlist_fit_source.banner(
+        source=_wl_fit_source, fit_state=_wl_fit_state,
+        built_at_et=_wl_fit_built_at,
+        n_holdings=(len(_wl_hold_rows) if _wl_hold_rows is not None else None),
+        n_priced=len(_wl_port_df), unpriced=_wl_fit_unpriced)
+    if _wl_fit_banner is not None:
+        (st.warning if _wl_fit_banner[0] == "warning" else st.info)(_wl_fit_banner[1])
+
+    # surface-proprioception F-260 finding (kept in spirit): a portfolio beta that
+    # couldn't be computed must be disclosed, not read as "beta checked, all clear".
+    # It now reflects the beta actually used (Home's or this page's self-built one),
+    # and the advisor holds a name whose own beta could bind (C2a `beta_unknown`).
+    _wl_beta_note = watchlist_fit_source.beta_note(
+        fit_state=_wl_fit_state, portfolio_beta=_wl_port_beta)
+    if _wl_beta_note is not None:
+        st.warning(_wl_beta_note)
 
     # STALE is a different claim from the OFFLINE banner above, and the two
     # cannot contradict each other — but NOT for the reason first written here.
@@ -30876,6 +30923,8 @@ elif page == "📋 Watchlist":
             "active_high_risk_alerts": _wl_high_alerts,
             "grow_today_sectors":      _wl_grow_sectors,
             "grow_today_sector_tickers": _wl_gt_sector_tickers,
+            # C2b: switches on the C2a abstentions (fit_unknown / beta_unknown).
+            "fit_state":               _wl_fit_state,
         }
         try:
             # Per-ticker headlines: the same curate_news_items derivation Grow
@@ -47093,7 +47142,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **Daily new-position budget (since 2026-10-16).** Each idea is capped on its own (15% of the book, 25% of net capital); this caps the **sum**. One trading day's new buys — what you've logged (adds included), sizes already emailed to you today, and newly sized suggestions — are capped at **40% of net capital**. Grow Today, 📋 Watchlist, 📈 Analysis and the three emails each show a *"New positions today: … of net capital … — budget 40%, … left"* line. Sizes already emailed are locked (*"Reserved by today's email run"*); everything later is sized from what's left, highest composite first — Grow Today, then the Watchlist, then Analysis. A name that gets less says *"Sized from what's left of today's budget — n of m shares"*; once it's used, a pick keeps its BUY call but reads *"not sized"* — never dropped, and it resets the next trading day. Sells don't give budget back, and nothing ever trims a holding. If the budget can't be checked (trade log or today's emailed sizes unreadable, cash figure stale or missing) the call still shows and the size is withheld with the reason. A ticker gets one share count a day: a Grow Today pick reads *"Sized in Grow Today today — see 🏠 Home"* on the Watchlist, and Analysis matches the Watchlist's size once you've opened the Watchlist today (and again after logging a trade) — until then it says it doesn't yet count the Watchlist's Ready-to-Enter names. Logging a BUY in the Trade Journal shows today's total including that buy — a heads-up, never a block. It can't see a buy you didn't log, and for up to 5 minutes after an email or a trade logged elsewhere a page can show a pre-update size. The cash figure behind the budget comes from the last broker sync, so a trade logged after it still counts; if a BUY or SELL has no fill time the app can place against that sync (left blank, or an import), the app can't tell whether the sync already included it, so a BUY is still subtracted and a SELL is not added, and Grow Today, the Watchlist and Analysis say *"Budget basis may be up to $X low until the next broker sync after the trade"* (for an import, the next day's sync; typing Robinhood's fill time when you log avoids it). The three emails use the same tightened basis and carry no such line. The budget's net capital is also the **lower of your journal's figure and Robinhood's own positions** (see 💰 Account → Net capital check): when that makes it lower by 1% or more, the status line adds a note that net capital was taken from Robinhood's positions, with the dollar gap — and, when a sell logged as after Robinhood's last sync is already part of that gap, a pointer to check that trade's fill time. When Robinhood's positions can't be compared, the line says the sizes were not cross-checked and why, and the journal figure is used. The three emails carry the same note.
 
-**Shared new-entry check (since 2026-10-16).** 📋 Watchlist, its morning Ready-to-Enter email and 📈 Analysis now apply the same entry checks Grow Today uses: no new entry on a bear day, ahead of a HIGH-impact macro release in the stock's sector, on negative news, or on stale data (Analysis also holds off with earnings within 7 days). A Watchlist name that would be READY TO ENTER but fails one shows as **⏸ HELD TODAY**, right under Enter Now, with the reason and what would clear it — but no share size and no Log BUY. On a bear day a Protect Mode banner explains it and says where the market read came from. The email never sends or budgets a held name, and its footer states the market tone it used. On Analysis, a held-back Buy keeps its verdict but shows *Not an entry today* and no size; Hold and Sell verdicts never show a share count. If a check couldn't run, the page says so. A name whose sector the app can't map (since 2026-11-04) is held as **Held: sector unknown (macro check)** while a sector-specific release is near, and clears when the release is out or the ticker gets a sector on the app's curated map that the event doesn't affect; an ETF is held on any sector-specific release, the same rule Grow Today uses for ETF picks.
+**Shared new-entry check (since 2026-10-16).** 📋 Watchlist, its morning Ready-to-Enter email and 📈 Analysis now apply the same entry checks Grow Today uses: no new entry on a bear day, ahead of a HIGH-impact macro release in the stock's sector, on negative news, or on stale data (Analysis also holds off with earnings within 7 days). A Watchlist name that would be READY TO ENTER but fails one shows as **⏸ HELD TODAY**, right under Enter Now, with the reason and what would clear it — but no share size and no Log BUY. On a bear day a Protect Mode banner explains it and says where the market read came from. The email never sends or budgets a held name, and its footer states the market tone it used. On Analysis, a held-back Buy keeps its verdict but shows *Not an entry today* and no size; Hold and Sell verdicts never show a share count. If a check couldn't run, the page says so. A name whose sector the app can't map (since 2026-11-04) is held as **Held: sector unknown (macro check)** while a sector-specific release is near, and clears when the release is out or the ticker gets a sector on the app's curated map that the event doesn't affect; an ETF is held on any sector-specific release, the same rule Grow Today uses for ETF picks. Since 2026-11-26 a name is also held when the sector-concentration or portfolio-beta check couldn't run. If 🏠 Home hasn't built your holdings this session (or you've logged a trade since it did), the Watchlist builds them itself from your current holdings at the last loaded prices and says so in a blue line; if that build fails, every Enter Now on the page is held with one warning. If a holding couldn't be priced for that build, an amber line names it: it isn't in the sector weights, so its sector reads low until a later load. When your portfolio's beta couldn't be computed, only a name whose own beta is above the limit or couldn't be read is held.
 
 **What it deliberately does *not* do:** it does **not** scan the entire market. A thin micro-cap up 300% on the day — the kind a broker's *"all stocks > 20% today"* filter shows — won't appear here by design: the app screens *liquid, quality* names and stays a medium-term advisor, not a squeeze-chaser. To check any specific ticker yourself, use **🔍 Research a Stock** on Home or the **📈 Analysis** page — type a company name ("microsoft") instead of a ticker and it resolves the most likely match, disclosing which symbol it picked (and any other close-scoring match, e.g. GOOGL vs GOOG) rather than silently substituting one.
 """

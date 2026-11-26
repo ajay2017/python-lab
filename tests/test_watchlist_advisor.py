@@ -1256,8 +1256,8 @@ def test_hold_off_at_exactly_composite_buy_reads_good_setup():
 
 
 # ─── entry-fail-closed C2a: fit_unknown / beta_unknown hard abstentions ──────
-# Only when the caller passes a `fit_state` in portfolio_ctx (the cron does; the
-# app's Watchlist doesn't until C2b). Placed AFTER the G-05 / G-06 breaches.
+# Only when the caller passes a `fit_state` in portfolio_ctx (the cron and, since
+# C2b, the app's Watchlist do). Placed AFTER the G-05 / G-06 breaches.
 from stock_analyzer.constants import TICKER_BETA_CRITICAL as _TBC  # noqa: E402
 from stock_analyzer.gate_ledger import build_watchlist_suppression_rows  # noqa: E402
 

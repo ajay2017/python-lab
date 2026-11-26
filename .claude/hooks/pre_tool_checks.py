@@ -1338,6 +1338,11 @@ _GATE_FILES = {
     # stays silent on a stop that slides down with the price, or says it is held when
     # it is not.
     "stock_analyzer/stop_basis_notice.py",
+    # Added 2026-11-26 (entry-fail-closed C2b, docs/plans/entry-fail-closed-c2b-spec.md):
+    # where the 📋 Watchlist's sector / beta fit frame comes from (Home's, a page
+    # self-build, or flat) and the banner / beta note that disclose it; a wrong call
+    # reads a frame Home didn't build as fit-checked, or stays silent on a held name.
+    "stock_analyzer/watchlist_fit_source.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

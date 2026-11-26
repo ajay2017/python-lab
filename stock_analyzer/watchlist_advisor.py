@@ -221,8 +221,8 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
         }
 
     # ── Hard abstentions: a fit check that could not run (entry-fail-closed C2a) ──
-    # Only when the caller passes a `fit_state` (the cron does; the app's Watchlist
-    # doesn't until C2b): an absent key is today's behaviour exactly. Placed AFTER
+    # Only when the caller passes a `fit_state` (the cron and, since C2b, the app's
+    # Watchlist do): an absent key is today's behaviour exactly. Placed AFTER
     # the G-05 / G-06 breaches above so a real breach still binds first and is still
     # ledgered. Like `sector_unknown`, deliberately NOT in gate_ledger._WATCHLIST_KIND:
     # a data abstention (we couldn't check), not a policy gate that measured a breach.

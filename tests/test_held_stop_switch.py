@@ -53,7 +53,16 @@ def _func(tree, name):
 def test_app_build_portfolio_df_calls_pass_held_stops_from_held_stops_for():
     tree = parse_file_cached(_APP_PATH)
     calls = _calls(tree, "build_portfolio_df")
-    assert len(calls) == 2, "the two app.py build sites (post-trade refresh and Home)"
+    # entry-fail-closed C2b: the 📋 Watchlist's LOCAL fit frame (never published; its
+    # Stop columns are unused) is the one site allowed to pass held_stops=None, and it
+    # must also pass manual_stops={} (the frame feeds sector weights / beta only).
+    local = [c for c in calls
+             if isinstance(_kw(c, "held_stops"), ast.Constant) and _kw(c, "held_stops").value is None]
+    assert len(local) == 1, "only the Watchlist's local fit frame may pass held_stops=None"
+    _ms = _kw(local[0], "manual_stops")
+    assert isinstance(_ms, ast.Dict) and not _ms.keys, "the local fit frame passes manual_stops={}"
+    calls = [c for c in calls if c not in local]
+    assert len(calls) == 2, "the two published app.py build sites (post-trade refresh and Home)"
     seen = set()
     for c in calls:
         v = _kw(c, "held_stops")
