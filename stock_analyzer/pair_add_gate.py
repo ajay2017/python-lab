@@ -47,7 +47,7 @@ no acknowledge/override; checked before G-25; no new constants.py value
 """
 from __future__ import annotations
 
-from stock_analyzer import portfolio
+from stock_analyzer import corr_window, portfolio
 
 _MAX_REASON_LEN = 300  # matches gate_ledger.py's own free-text reason cap
 
@@ -278,7 +278,8 @@ def split_scan_liftable(cluster_blocks: "dict | None", pair_blocks: "dict | None
 
 
 def unchecked_disclosure(
-    unchecked: "list | None", pair_checked: bool, cluster_checked: bool
+    unchecked: "list | None", pair_checked: bool, cluster_checked: bool,
+    corr_coverage: "dict | None" = None,
 ) -> "str | None":
     """Render-ready disclosure caption for the fail-open correlation blind
     spot shared by G-25 and G-26 (disclosure-only follow-on,
@@ -295,7 +296,12 @@ def unchecked_disclosure(
     remedy: name the gap, suppress nothing.
 
     `unchecked` is `portfolio.correlation_unchecked()`'s output (passed
-    through `grow_today["corr_unchecked"]`). `pair_checked` /
+    through `grow_today["corr_unchecked"]`). `corr_coverage` (optional,
+    CorrYoung C2) gives the reason per name: a holding left out for a short
+    history reads "T has only N daily returns of price history (20 needed), so
+    its pairs couldn't be checked" ("it has only ..." when it is the one name)
+    instead of "price history couldn't be loaded". Three arguments = the old
+    behaviour. `pair_checked` /
     `cluster_checked` are the existing `pair_gate_checked` /
     `cluster_gate_checked` render-layer flags — when NEITHER gate was
     checked this run, the existing 🧬/🔗 "couldn't check" captions already
@@ -307,7 +313,11 @@ def unchecked_disclosure(
     None -- neither gate was checked this run (already disclosed elsewhere),
             OR `unchecked == []` (checked, nothing missing).
     str  -- `unchecked is None` (couldn't confirm, but at least one gate DID
-            run) -> the generic "couldn't confirm" caption; otherwise names
+            run) -> the generic "couldn't confirm" caption, or, when
+            `corr_coverage["left_out"]` names holdings (fewer than 2 were
+            counted, so there is no matrix), a sentence naming them with their
+            reasons that still says the rest couldn't be confirmed (no "other
+            holdings" clause); otherwise names
             up to 5 missing tickers (then "+N more"), singular/plural
             correctly, and never includes a literal `**` or `$`
             (feedback_streamlit_renderer_mismatch — this project has no
@@ -327,10 +337,22 @@ def unchecked_disclosure(
     else:
         _what = "New-cluster add-pause check"
 
+    _items = corr_window.left_out_items(corr_coverage)
     if unchecked is None:
+        if not _items:
+            return (
+                "🔍 (couldn't confirm every holding was included in the "
+                "correlation add-pause checks this run)"
+            )
+        # Fewer than 2 holdings were counted (no matrix, no pairs): name the
+        # left-out holdings AND keep the fact that the rest couldn't be
+        # confirmed. No "checked against your other holdings" clause: nothing was.
+        _lo_names = ", ".join(str(x["ticker"]).strip().upper() for x in _items[:5]) + (
+            f" +{len(_items) - 5} more" if len(_items) > 5 else "")
         return (
-            "🔍 (couldn't confirm every holding was included in the "
-            "correlation add-pause checks this run)"
+            f"🔍 The correlation add-pause checks didn't include {_lo_names} "
+            f"({corr_window.unconfirmed_reasons(_items, need=corr_window.need_of(corr_coverage))}); "
+            f"couldn't confirm every other holding was included this run."
         )
 
     try:
@@ -352,6 +374,34 @@ def unchecked_disclosure(
     _subject = "their" if _plural else "its"
     _object  = "them" if _plural else "it"
     _final   = "they are" if _plural else f"{_names} is"
+
+    _short = {}
+    try:
+        _short = {str(x["ticker"]).strip().upper(): int(x["n_returns"])
+                  for x in _items if x.get("reason") == "short_history"}
+    except Exception:
+        _short = {}
+    _young = [t for t in tickers if t in _short]
+    if _young:
+        _rest = [t for t in tickers if t not in _short]
+        _why = corr_window.short_history_clause(
+            [{"ticker": t, "n_returns": _short[t]} for t in _young],
+            need=corr_window.need_of(corr_coverage), of_history=True,
+            pronoun=not _rest and len(_young) == 1,
+        )
+        if not _rest and len(_young) == 1:
+            _final = "it is"   # the sentence already named it
+        if _rest:
+            _rest_txt = ", ".join(_rest[:5]) + (f" +{len(_rest) - 5} more" if len(_rest) > 5 else "")
+            _why += f" and price history couldn't be loaded this run for {_rest_txt}"
+            _consequence = f"so no correlated pairing involving {_object} could be detected"
+        else:
+            _consequence = f"so {_subject} pairs couldn't be checked"
+        return (
+            f"🔍 {_what} didn't include {_names} — {_why}, {_consequence}. "
+            f"Add suggestions were checked against your other holdings only; "
+            f"this is not a sign {_final} uncorrelated."
+        )
 
     # "price HISTORY couldn't be loaded", NOT "couldn't be priced" (Opus
     # review, 2026-10-09). _close_series_map also drops a ticker whose bundle

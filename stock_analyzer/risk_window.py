@@ -128,13 +128,17 @@ def classify_holdings(
     return counted, left_out
 
 
-def _weight_pct(value) -> float | None:
-    """A Weight (%) cell as a finite float, else None (unknown size)."""
+def weight_pct(value) -> float | None:
+    """A Weight (%) cell as a finite float, else None (unknown size). Public:
+    corr_window reads weights the same way."""
     try:
         w = float(value)
     except (TypeError, ValueError):
         return None
     return w if math.isfinite(w) else None
+
+
+_weight_pct = weight_pct   # the old private name, kept as an alias
 
 
 def _book_weights(port_df) -> dict[str, float | None]:
@@ -321,22 +325,29 @@ def _book_returns(port_df, held_data, min_returns, max_unmeasured_pct, min_days)
 
 
 # ── disclosure text ──────────────────────────────────────────────────────────
-def _names(items: list[dict]) -> str:
+def holdings_phrase(items: list[dict], *, need, with_size: bool = True) -> str:
+    """Plain-text names of left-out holdings, one phrase shared by every screen
+    that discloses them (this module's risk note and corr_window's correlation
+    note), so the names and the day counts always agree. `items` are left_out
+    dicts ({"ticker", "reason", "n_returns", "weight_pct"?}); `need` is the
+    per-holding floor quoted for a young name. A missing or None weight reads
+    "size unknown"; with_size=False leaves the share part out entirely."""
     parts = []
     for x in items:
-        w = x.get("weight_pct")
-        share = f"{w:.1f}% of the book" if w is not None else "size unknown"
         reason = x.get("reason")
         if reason == "short_history":
             n = int(x["n_returns"])
-            need = x["_need"]
             detail = f"{n} trading day{'' if n == 1 else 's'} since its first close, {need} needed"
         elif reason == "no_weight":
             detail = None
         else:
             detail = "no price history"
-        inner = share if detail is None else f"{share}: {detail}"
-        parts.append(f"{x.get('ticker')} ({inner})")
+        share = None
+        if with_size:
+            w = x.get("weight_pct")
+            share = f"{w:.1f}% of the book" if w is not None else "size unknown"
+        inner = ": ".join(t for t in (share, detail) if t is not None)
+        parts.append(f"{x.get('ticker')} ({inner})" if inner else f"{x.get('ticker')}")
     if len(parts) <= 1:
         return "".join(parts)
     return ", ".join(parts[:-1]) + " and " + parts[-1]
@@ -417,17 +428,17 @@ def _coverage_note(coverage: dict) -> str | None:
     need = _number(coverage.get("min_returns", BETA_MIN_RETURNS))
     cap = _number(coverage.get("max_unmeasured_pct", PORTFOLIO_RISK_UNMEASURED_MAX_PCT))
     raw_left = coverage.get("left_out")
-    left_out = [dict(x, _need=need) for x in (raw_left if raw_left is not None else [])]
+    left_out = list(raw_left if raw_left is not None else [])
     raw_late = coverage.get("late_start")
     late = raw_late if raw_late is not None else []
 
     if state == "partial":
         if left_out:
             text = (
-                f"Portfolio risk measured without {_names(left_out)}; "
+                f"Portfolio risk measured without {holdings_phrase(left_out, need=need)}; "
                 "its weight is spread over the other holdings."
                 if len(left_out) == 1 else
-                f"Portfolio risk measured without {_names(left_out)}; "
+                f"Portfolio risk measured without {holdings_phrase(left_out, need=need)}; "
                 "their weight is spread over the other holdings."
             )
             if late:
@@ -458,15 +469,15 @@ def _coverage_note(coverage: dict) -> str | None:
         )
     if left_out and share is not None and share > cap:
         return (
-            f"Portfolio risk can't be measured: {_names(left_out)} "
+            f"Portfolio risk can't be measured: {holdings_phrase(left_out, need=need)} "
             f"leave out {share:.1f}% of the book, more than the {cap:g}% limit."
             if len(left_out) > 1 else
-            f"Portfolio risk can't be measured: {_names(left_out)} "
+            f"Portfolio risk can't be measured: {holdings_phrase(left_out, need=need)} "
             f"leaves out {share:.1f}% of the book, more than the {cap:g}% limit."
         )
     if left_out:
         return (
             f"Portfolio risk can't be measured yet: not enough price history "
-            f"across the book (left out: {_names(left_out)})."
+            f"across the book (left out: {holdings_phrase(left_out, need=need)})."
         )
     return "Portfolio risk can't be measured yet: not enough price history across the book."

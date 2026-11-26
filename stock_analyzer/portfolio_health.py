@@ -16,6 +16,7 @@ import math
 
 import pandas as pd
 
+from stock_analyzer.corr_window import left_out_note
 from stock_analyzer.portfolio import (
     CORR_SAMPLE_THIN, CORR_SAMPLE_TRUSTED, correlation_sample_state,
 )
@@ -209,17 +210,20 @@ def _diversification_score_sub(
         score = round(max(0.0, min(100.0, (1.0 - float(avg_corr)) * 100.0)), 1)
     else:
         score = round(float(div_score_val), 1)
-    return {
-        "score": score,
-        "detail": {
-            "avg_corr": round(avg_corr, 3) if avg_corr is not None else None,
-            # Screens disclose (F-293): holdings missing from the matrix are
-            # named, not withheld. None = couldn't check, [] = all present.
-            "corr_unchecked": (
-                list(corr_unchecked) if isinstance(corr_unchecked, (list, tuple)) else None
-            ),
-        },
+    detail = {
+        "avg_corr": round(avg_corr, 3) if avg_corr is not None else None,
+        # Screens disclose (F-293): holdings missing from the matrix are
+        # named, not withheld. None = couldn't check, [] = all present.
+        "corr_unchecked": (
+            list(corr_unchecked) if isinstance(corr_unchecked, (list, tuple)) else None
+        ),
     }
+    # CorrYoung C2: the score is the REST of the book's; name the young holding
+    # left out of it (a key only when something was left out).
+    _lo_note = left_out_note(corr_coverage)
+    if _lo_note is not None:
+        detail["left_out_note"] = _lo_note
+    return {"score": score, "detail": detail}
 
 
 def _factor_exposure_score(

@@ -1340,12 +1340,12 @@ class TestDiversificationLabelThinSample:
     def test_zero_obs_is_qualified_even_with_nothing_unchecked(self):
         # The exact reproduced defect state.
         out = util.diversification_label_text("Well Diversified", [], {"n_obs": 0})
-        assert out == "Well Diversified · sample too thin"
+        assert out == "Unavailable · sample too thin"
 
     def test_below_floor_is_qualified(self):
         f = self._floor()
         out = util.diversification_label_text("Well Diversified", [], {"n_obs": f - 1})
-        assert out == "Well Diversified · sample too thin"
+        assert out == "Unavailable · sample too thin"
 
     def test_exactly_at_floor_is_not_qualified(self):
         # Control, asserting the REAL unqualified string -- without this the
@@ -1372,31 +1372,26 @@ class TestDiversificationLabelThinSample:
         for bad in ({"n_obs": None}, {"n_obs": "125"}, {}, {"n_obs": float("nan")}):
             assert util.diversification_label_text("Moderate", [], bad) == "Moderate"
 
-    def test_unavailable_label_is_never_qualified(self):
-        assert util.diversification_label_text("Unavailable", [], {"n_obs": 0}) == "Unavailable"
+    def test_unavailable_label_is_never_qualified_on_a_sample_that_is_not_thin(self):
+        assert util.diversification_label_text("Unavailable", [], {"n_obs": 125}) == "Unavailable"
+        assert util.diversification_label_text("Unavailable", [], None) == "Unavailable"
 
-    def test_both_gaps_true_shows_BOTH_facts(self):
-        """Neither gap suppresses the other.
-
-        The first version of this showed only "sample too thin" when both
-        were true. Review flagged the cost: the "N not checked" fact then
-        vanishes entirely from Home's KPI and Summary's card, which — unlike
-        🔗 Risk Analysis — have no caption beneath them to carry it. Hiding
-        one true fact to make room for a more severe one is still hiding it,
-        which is the opposite of what this whole change is for.
-        """
-        assert util.diversification_label_text("Moderate", ["CCC"], {"n_obs": 0}) == (
-            "Moderate · sample too thin · 1 not checked"
-        )
+    def test_thin_sample_reads_unavailable_whatever_the_label_or_unchecked_list(self):
+        """CorrYoung C2: a thin sample has no diversification score, so the label
+        never carries a grade over it, with or without names not checked (the
+        Home producer publishes "Unavailable" too; this keeps a stale label
+        honest). Pre-C2 the label read "Moderate · sample too thin · 1 not
+        checked" here."""
+        for label in ("Moderate", "Well Diversified", "Unavailable", None):
+            for unchecked in ([], ["CCC"], ["C", "D"], None):
+                assert util.diversification_label_text(
+                    label, unchecked, {"n_obs": 0}
+                ) == "Unavailable · sample too thin"
         assert util.diversification_label_text(
             "Moderate", ["C", "D"], {"n_obs": 14}
-        ) == "Moderate · sample too thin · 2 not checked"
+        ) == "Unavailable · sample too thin"
 
-    def test_each_gap_alone_shows_only_its_own_clause(self):
-        # Controls for the above: neither clause leaks into the other's case.
-        assert util.diversification_label_text(
-            "Well Diversified", [], {"n_obs": 0}
-        ) == "Well Diversified · sample too thin"
+    def test_unchecked_alone_still_shows_its_own_clause(self):
         assert util.diversification_label_text(
             "Well Diversified", ["CCC"], {"n_obs": 125}
         ) == "Well Diversified · 1 not checked"
@@ -1406,7 +1401,7 @@ def test_diversification_label_text_accepts_numpy_integer_n_obs():
     import numpy as np
     thin = diversification_label_text("Well Diversified", [], {"n_obs": np.int64(5)})
     ok = diversification_label_text("Well Diversified", [], {"n_obs": np.int64(125)})
-    assert "sample too thin" in thin
+    assert thin == "Unavailable · sample too thin"
     assert "sample too thin" not in ok
 
 

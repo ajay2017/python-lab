@@ -1124,7 +1124,27 @@ def is_duplicate_account_flow(
     return False
 
 
-def correlation_unchecked_note(corr_unchecked: "list | None") -> "str | None":
+def _left_out_reasons(corr_coverage) -> "tuple[dict, list]":
+    """({TICKER: n_returns} for the short_history left-out holdings, [TICKER] of
+    every left-out holding) read from a correlation coverage dict (CorrYoung).
+    ({}, []) for a non-dict or a pre-C1 coverage with no left_out. Never raises."""
+    from stock_analyzer import corr_window as _cw   # function-local, as above
+    try:
+        items = _cw.left_out_items(corr_coverage)
+        names = [str(x["ticker"]).strip().upper() for x in items]
+        short = {
+            str(x["ticker"]).strip().upper(): int(x["n_returns"])
+            for x in items if x.get("reason") == "short_history"
+        }
+        return short, [n for n in names if n]
+    except Exception:
+        return {}, []
+
+
+def correlation_unchecked_note(
+    corr_unchecked: "list | None",
+    corr_coverage: "dict | None" = None,
+) -> "str | None":
     """On-screen disclosure companion to `portfolio.correlation_unchecked()`
     (F-290 follow-on) — screens DISCLOSE here; `portfolio.correlation_claim_verified()`
     is the separate, stricter predicate records use to WITHHOLD.
@@ -1132,8 +1152,18 @@ def correlation_unchecked_note(corr_unchecked: "list | None") -> "str | None":
     Three-state, matching `correlation_unchecked`'s own contract exactly:
       None -- couldn't check this session at all (Home is the only producer).
       []   -- checked, every held ticker entered the matrix -- nothing to say.
-      list -- names which held tickers never entered the matrix because their
-              price history failed to load this run.
+      list -- names which held tickers never entered the matrix.
+
+    `corr_coverage` (optional, CorrYoung C2) gives the REASON per name: a holding
+    in `corr_coverage["left_out"]` with reason short_history reads "T has only N
+    daily returns of price history (20 needed)" ("it has only ..." when it is the
+    one name); every other name keeps "price history couldn't be loaded this run".
+    With `corr_unchecked is None` but a coverage that names left-out holdings
+    (fewer than 2 were counted, so there is no matrix and no classification), a
+    separate sentence names those holdings with their reasons AND says whether
+    every other holding was included couldn't be confirmed; it has no
+    "classification above" clause and no Home remedy. One argument = exactly the
+    old behaviour.
 
     Returns
     -------
@@ -1150,10 +1180,25 @@ def correlation_unchecked_note(corr_unchecked: "list | None") -> "str | None":
     (this project has no automated render-mismatch test coverage, so the
     string itself must stay plain).
     """
+    short, left_names = _left_out_reasons(corr_coverage)
     if corr_unchecked is None:
+        if not left_names:
+            return (
+                "🔍 Whether every holding was included in this correlation "
+                "reading is unknown this session — open 🏠 Home to check."
+            )
+        # Fewer than 2 holdings were counted (no matrix, no classification) and
+        # the producer published no unchecked list: name the left-out holdings
+        # AND keep the fact that the rest couldn't be confirmed. No "classification
+        # above" clause, because there is none.
+        from stock_analyzer import corr_window as _cw
+        _lo = _cw.left_out_items(corr_coverage)
+        _lo_names = ", ".join(left_names[:5]) + (
+            f" +{len(left_names) - 5} more" if len(left_names) > 5 else "")
         return (
-            "🔍 Whether every holding was included in this correlation "
-            "reading is unknown this session — open 🏠 Home to check."
+            f"🔍 {_lo_names} {'were' if len(_lo) > 1 else 'was'} left out of this reading "
+            f"({_cw.unconfirmed_reasons(_lo, need=_cw.need_of(corr_coverage))}); whether "
+            f"every other holding was included couldn't be confirmed this session."
         )
     if not corr_unchecked:
         return None
@@ -1176,6 +1221,23 @@ def correlation_unchecked_note(corr_unchecked: "list | None") -> "str | None":
     _was_were = "were" if _plural else "was"
     _final = "they are" if _plural else f"{_names} is"
 
+    young = [t for t in tickers if t in short]
+    if young:
+        from stock_analyzer import corr_window as _cw
+        rest = [t for t in tickers if t not in short]
+        _need = _cw.need_of(corr_coverage)
+        _why = _cw.short_history_clause(
+            [{"ticker": t, "n_returns": short[t]} for t in young],
+            need=_need, of_history=True, pronoun=not rest and len(young) == 1,
+        )
+        if not rest and len(young) == 1:
+            _final = "it is"   # the sentence already named it
+        if rest:
+            _rest_txt = ", ".join(rest[:5]) + (f" +{len(rest) - 5} more" if len(rest) > 5 else "")
+            _why += f" and price history couldn't be loaded this run for {_rest_txt}"
+    else:
+        _why = f"{_subject} price history couldn't be loaded this run"
+
     # "price HISTORY couldn't be loaded" — matching pair_add_gate's
     # unchecked_disclosure precedent (Opus review, 2026-10-09): a ticker
     # whose bundle loaded but whose history is empty/missing a Close column
@@ -1183,10 +1245,10 @@ def correlation_unchecked_note(corr_unchecked: "list | None") -> "str | None":
     # screen, so "couldn't be priced" would contradict a number already on
     # screen. The correlation matrix needs the history, not the last price.
     return (
-        f"🔍 {_names} {_was_were} left out of this reading — {_subject} price "
-        f"history couldn't be loaded this run, so no correlation involving "
-        f"{_object} could be measured. The classification above describes "
-        f"your other holdings only; this is not a sign {_final} uncorrelated."
+        f"🔍 {_names} {_was_were} left out of this reading — {_why}, so no "
+        f"correlation involving {_object} could be measured. The classification "
+        f"above describes your other holdings only; this is not a sign {_final} "
+        f"uncorrelated."
     )
 
 
@@ -1247,35 +1309,31 @@ def diversification_label_text(
     `correlation_unchecked_note` above, sharing the same inputs so the two
     can never disagree about which gap they're describing.
 
-    TWO independent gaps are disclosed here, and the second is why
-    `corr_coverage` exists as a parameter at all:
+    TWO gaps are disclosed here, and the second is why `corr_coverage` exists as
+    a parameter at all:
 
       1. **A held ticker never entered the matrix** (`corr_unchecked`
          non-empty) → `"Well Diversified · 1 not checked"`.
-      2. **Every ticker entered, but the overlapping SAMPLE is too thin**
-         (`corr_coverage["n_obs"] < portfolio.CORR_MIN_OBS_TRUSTED`) →
-         `"Well Diversified · sample too thin"`.
+      2. **The overlapping SAMPLE is too thin**
+         (`portfolio.correlation_sample_state(corr_coverage)` is thin) → the
+         label is `"Unavailable · sample too thin"` for EVERY input label,
+         including `"Unavailable"` and `None`, with or without names not
+         checked (CorrYoung C2: a thin sample has no diversification score, so a
+         grade is never carried over it; the old "<label> · sample too thin"
+         and "· N not checked" suffix are gone).
 
-    **Gap 2 was a blocking review finding (2026-10-09), not a nicety.** A
-    held ticker with a short or non-overlapping history collapses the
-    listwise intersection, so `correlation_matrix` returns a non-empty but
-    ENTIRELY-NaN matrix and `diversification_score`'s `avg_corr … else 0.0`
-    fallback scores it 50 — clearing `DIVERSIFY_WELL_PCT` and reading
-    "Well Diversified" off `n_obs == 0`. In that state `corr_unchecked` is
-    `[]` (every ticker genuinely IS a column), so gap 1 alone leaves the
-    label unqualified — while 🔗 Risk Analysis's own coverage block shows
-    "⛔ not reliable" from the same matrix. One matrix, two contradictory
-    screens: exactly the double-surface class this shared function exists
-    to prevent.
+    **Gap 2 was a blocking review finding (2026-10-09), not a nicety.** An
+    all-NaN or too-thin matrix leaves `corr_unchecked` empty (every ticker IS a
+    column) while `n_obs` is tiny, so gap 1 alone left the label unqualified
+    next to 🔗 Risk Analysis's own "not reliable" block: one matrix, two
+    contradictory screens, exactly the double-surface class this shared
+    function exists to prevent. The thin check runs first for that reason.
 
-    Returns `div_label` UNCHANGED when there is nothing to qualify:
-      - no missing tickers AND coverage is absent/unknown/sufficient;
-      - `div_label == "Unavailable"` — the withheld-state label already says
-        nothing was computed; appending a footnote to it would be noise.
-
-    `corr_coverage is None` means "couldn't check", and leaves the label
-    alone — the fuller `correlation_unchecked_note` caption is where
-    "couldn't check" gets said, not here.
+    Returns `div_label` UNCHANGED when the sample is not thin and there is
+    nothing to qualify: no missing tickers, coverage absent/unknown/sufficient,
+    or `div_label == "Unavailable"` (the withheld label already says nothing was
+    computed). `corr_coverage is None` means "couldn't check" and leaves the
+    label alone; the fuller `correlation_unchecked_note` caption says that.
 
     Deliberately does not repeat the fuller explanation — that belongs in
     `correlation_unchecked_note`'s caption; this is only the label-level
@@ -1283,9 +1341,6 @@ def diversification_label_text(
     rather than re-deriving anything, so a label qualifier and its
     accompanying caption can never name a different gap.
     """
-    if div_label == "Unavailable":
-        return div_label
-
     # Gap 2 — thin/empty sample. Evaluated FIRST because it can be true while
     # corr_unchecked is empty, which is the exact case that shipped
     # unqualified and got caught in review.
@@ -1294,9 +1349,17 @@ def diversification_label_text(
     from stock_analyzer import portfolio as _portfolio
     _thin = (_portfolio.correlation_sample_state(corr_coverage)
              == _portfolio.CORR_SAMPLE_THIN)
+    if _thin:
+        # CorrYoung C2: a thin sample has no diversification score at all, so the
+        # label never carries a grade over it (the Home producer publishes
+        # "Unavailable" too; this keeps a stale label honest).
+        return "Unavailable · sample too thin"
+
+    if div_label == "Unavailable":
+        return div_label
 
     if not corr_unchecked:
-        return f"{div_label} · sample too thin" if _thin else div_label
+        return div_label
     try:
         n = len({
             str(t).strip().upper() for t in corr_unchecked
@@ -1305,14 +1368,7 @@ def diversification_label_text(
     except Exception:
         return div_label
     if n == 0:
-        return f"{div_label} · sample too thin" if _thin else div_label
-    # Both gaps can be true at once, and both are shown — a thin sample is the
-    # more severe claim, but suppressing the "N not checked" fact to make room
-    # for it would be hiding a true fact on the only two screens that show it
-    # (Home's KPI and Summary's card have no caption beneath them, unlike
-    # Risk Analysis). Review note, 2026-10-09.
-    if _thin:
-        return f"{div_label} · sample too thin · {n} not checked"
+        return div_label
     return f"{div_label} · {n} not checked"
 
 
@@ -1326,10 +1382,11 @@ def correlation_record_withheld_note(corr_unchecked, corr_coverage, *, subject: 
     gap hide the other). `subject` is the sentence's lead-in naming what is
     withheld and how, e.g. "This scan can't be run or saved right now" -- the
     reasons follow a colon. Each reason carries a remedy where one exists:
-    the short-history ticker, but only when it PROVABLY caps a thin sample;
     Home's 🔄 Refresh Signals when the reading couldn't be confirmed (a plain
     Home revisit would re-serve the memoized failure). No dollar signs:
-    Streamlit renders paired ones as LaTeX.
+    Streamlit renders paired ones as LaTeX. A holding left out for a short
+    history is named from `corr_coverage["left_out"]` ("ANT has only 4 daily
+    returns (20 needed)"); a thin sample never names a "cap" (CorrYoung C2).
     """
     # Function-local import: util <-> portfolio import cycle.
     from stock_analyzer import portfolio as _portfolio
@@ -1346,11 +1403,23 @@ def correlation_record_withheld_note(corr_unchecked, corr_coverage, *, subject: 
         except Exception:
             names = []
         if names:
-            shown = ", ".join(names[:5])
-            if len(names) > 5:
-                shown += f" +{len(names) - 5} more"
-            _verb = "holding is" if len(names) == 1 else "holdings are"
-            reasons.append(f"{len(names)} {_verb} missing from the correlation matrix ({shown})")
+            # CorrYoung C2: a young holding is named with its own reason; only the
+            # rest keep the "missing from the correlation matrix" clause.
+            _short, _ = _left_out_reasons(corr_coverage)
+            _young = [n for n in names if n in _short]
+            _rest = [n for n in names if n not in _short]
+            if _young:
+                from stock_analyzer import corr_window as _cw
+                reasons.append(_cw.short_history_clause(
+                    [{"ticker": n, "n_returns": _short[n]} for n in _young],
+                    need=_cw.need_of(corr_coverage), of_history=False,
+                ))
+            if _rest:
+                _rshown = ", ".join(_rest[:5])
+                if len(_rest) > 5:
+                    _rshown += f" +{len(_rest) - 5} more"
+                _verb = "holding is" if len(_rest) == 1 else "holdings are"
+                reasons.append(f"{len(_rest)} {_verb} missing from the correlation matrix ({_rshown})")
         else:
             reasons.append("some holdings are missing from the correlation matrix")
 
@@ -1358,19 +1427,10 @@ def correlation_record_withheld_note(corr_unchecked, corr_coverage, *, subject: 
     if state == _portfolio.CORR_SAMPLE_THIN:
         _thin = (f"only {int(corr_coverage['n_obs'])} shared daily returns "
                  f"(needs {_portfolio.CORR_MIN_OBS_TRUSTED})")
-        # Name a ticker as THE cap only when that is provable: the listwise
-        # intersection can never exceed the shortest history, so the shortest
-        # one is the cap exactly when shortest_len == n_obs + 1. When histories
-        # are merely MISALIGNED (equal lengths, partial overlap) no single
-        # ticker caps it, and naming the shortest one would be a false claim.
-        _short = corr_coverage.get("shortest_ticker")
-        _slen = corr_coverage.get("shortest_len")
-        if (isinstance(_short, str) and _short.strip()
-                and isinstance(_slen, numbers.Integral) and not isinstance(_slen, bool)
-                and int(_slen) == int(corr_coverage["n_obs"]) + 1):
-            _thin += f", capped by {_short.strip().upper()}'s short price history"
-        else:
-            _thin += ", because the holdings' price histories only overlap on those days"
+        # No "capped by X" branch (CorrYoung C2): a young holding is left out of
+        # the matrix, so it can no longer be what caps the sample; and when the
+        # listwise cut is gone, thin always means the histories barely overlap.
+        _thin += ", because the holdings' price histories only overlap on those days"
         reasons.append(_thin)
     elif state == _portfolio.CORR_SAMPLE_UNKNOWN:
         reasons.append("couldn't confirm the sample size")

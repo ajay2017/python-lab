@@ -70,19 +70,15 @@ def test_note_wording_grammar_and_remedies():
     two = correlation_record_withheld_note(["A", "B"], {"n_obs": 125}, subject="S")
     assert "1 holding is missing" in one and "holding(s)" not in one
     assert "2 holdings are missing" in two
-    # Thin: names a ticker as THE cap only when provable (shortest_len == n_obs+1) ...
-    capped = correlation_record_withheld_note(
-        [], {"n_obs": 5, "shortest_ticker": "newco", "shortest_len": 6}, subject="S")
-    assert "capped by NEWCO's short price history" in capped
-    # ... never when the shortest history is LONGER than the overlap (contrast) ...
-    misaligned = correlation_record_withheld_note(
-        [], {"n_obs": 5, "shortest_ticker": "AAA", "shortest_len": 125}, subject="S")
-    assert "capped by" not in misaligned
-    assert "only overlap on those days" in misaligned
-    # ... nor when the length is missing or a bool.
-    for bad in ({"n_obs": 5, "shortest_ticker": "AAA"},
+    # Thin never names a "cap" (CorrYoung C2): a young holding is left out of the
+    # matrix, so it cannot cap the sample, even on a coverage dict that still has
+    # the old cap shape (shortest history = n_obs + 1).
+    for cov in ({"n_obs": 5, "shortest_ticker": "newco", "shortest_len": 6},
+                {"n_obs": 5, "shortest_ticker": "AAA", "shortest_len": 125},
+                {"n_obs": 5, "shortest_ticker": "AAA"},
                 {"n_obs": 5, "shortest_ticker": "AAA", "shortest_len": True}):
-        assert "capped by" not in correlation_record_withheld_note([], bad, subject="S")
+        note = correlation_record_withheld_note([], cov, subject="S")
+        assert "capped by" not in note and "only overlap on those days" in note
     plain = correlation_record_withheld_note([], {"n_obs": 5}, subject="S")
     assert "capped by" not in plain and "only 5 shared daily returns" in plain
     # Remedy for an UNCONFIRMED reading is Refresh Signals (a Home revisit just
@@ -112,9 +108,8 @@ def test_misaligned_histories_from_the_real_coverage_do_not_name_a_cap():
     assert "capped by" not in note and "only overlap on those days" in note
 
     # A 4-bar NEWCO is LEFT OUT since CorrYoung C1 (under CORR_MIN_OBS_TRUSTED
-    # returns): it no longer caps anything, and the real coverage names it. The
-    # note's "capped by" wording stays pinned on a coverage dict that still has
-    # the cap shape (shortest history = n_obs + 1; C2 reworks the clause).
+    # returns): it no longer caps anything, and the real coverage names it (the
+    # record note's "capped by" clause was removed in C2).
     short = dict(hd)
     short["NEWCO"] = _df([10.0, 10.5, 10.2, 10.8], long_dates[-4:])
     cov2 = portfolio.correlation_coverage(short)
@@ -122,7 +117,7 @@ def test_misaligned_histories_from_the_real_coverage_do_not_name_a_cap():
     assert [x["ticker"] for x in cov2["left_out"]] == ["NEWCO"]
     assert cov2["left_out"][0]["reason"] == "short_history"
     cap_cov = {"n_obs": 3, "shortest_ticker": "NEWCO", "shortest_len": 4}
-    assert "capped by NEWCO's short price history" in correlation_record_withheld_note([], cap_cov, subject="S")
+    assert "capped by" not in correlation_record_withheld_note([], cap_cov, subject="S")
     # The subject is the lead-in; reasons follow the colon.
     assert correlation_record_withheld_note([], {"n_obs": 5}, subject="X can't run").startswith("X can't run: ")
 
