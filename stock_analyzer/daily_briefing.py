@@ -407,39 +407,24 @@ def _days_until(date_str: str, today: date) -> int | None:
 # breaches are NOT here — they stay in Act (structural, user-flagged act-worthy).
 _TUNEUP_RISK_TYPES = frozenset({"beta", "sharpe", "volatility", "drawdown", "tail_risk", "single_name_concentration"})
 
-# Of the Tune-up types, only these two name a concrete TRIM target (same scope
-# as `_trim_targets`) — so only these can double-surface against an Act Today
-# risk-off TRIM on the same high-beta name (both rank by β·weight), and the
-# chip filter below keeps that broader "any flagged card" basis. vol/drawdown/
-# tail recommend ADDING diversifiers, a different action, so they are left
-# untouched (2026-08-04 audit). The single-name concentration card DOES restate
-# a trim ("Trim … toward the 15% ceiling"); it is deduped separately, only
-# against a Brief sell that names its own ticker, via `held_trim_owner` (EW C3).
-_TUNEUP_TRIM_DRIVER_TYPES = frozenset({"beta", "sharpe"})
-# Of the trim-drivers, only the beta card's recommendation prose is anchored to
-# a single headline name (`trim_ticker == root_tickers[0]`); sharpe's prose is a
-# generic per-position rule that names no anchor. So a beta card whose PRIMARY
-# name is already acted must be dropped whole (its "Sell 50% of X" would go
-# stale), whereas sharpe just chip-filters and survives on any remaining drag.
-_TUNEUP_PRIMARY_ANCHORED_TYPES = frozenset({"beta"})
 
-
-def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None,
+def _portfolio_tuneup(risk_recs: list | None,
                       sell_cover: dict | None = None, earnings_days: dict | None = None,
                       port_df=None, deferred_out: dict | None = None) -> list[dict]:
     """Slow-moving risk-metric recommendations surfaced as standing 'Portfolio
     Tune-up' items (awareness), not Act Today decisions. HIGH or MEDIUM only —
     OK/LOW aren't improvements to make. Shape is render-ready for app.py.
 
-    acted_tickers (optional): every ticker already carrying an Act Today / Review
-    card this render (same broad basis as the risk-off exclude set — matches the
-    sibling block's 2026-07-29 H6 precedent). For the trim-driver types
-    (beta/sharpe) this suppresses the redundant restatement of a trim already in
-    Act Today (2026-08-04 audit — the beta Tune-up card and a risk-off TRIM both
-    rank the same high-beta names, so a fragile+risk-off render otherwise shows
-    "trim NVDA" in both lanes). A beta card whose primary trim_ticker is acted is
-    dropped whole; a merely SECONDARY overlap is filtered from the chip list only,
-    keeping the card's still-valid primary-anchored prose.
+    BriefSkipSizeBlind B-C3 (docs/plans/brief-skip-size-blind-b3-spec.md): the beta and
+    Sharpe cards are NOT filtered here any more. They used to be dropped (beta, whole) or
+    chip-filtered (Sharpe) against every ticker carrying any non-news Act / Review card,
+    silently, whatever its size, and at build time (a stop breach that later recovered kept
+    the card hidden). Both now pass through intact; `tuneup_cover.reconcile_trim_drivers`
+    settles them on Home against the live Act Today view's sell sizes, with a visible
+    line. The beta card carries `subject` (the name its text sells, risk_advisor's
+    `beta_levers.trim.ticker`, which skips names bought today; not `root_tickers[0]`) and
+    `trim_shares` (the 50% trim in whole shares; None = unknown). The Sharpe card names no
+    subject: its chips are every root ticker.
 
     EW C3 (docs/plans/earnings-week-trim-c3-spec.md): a single_name_concentration
     card whose ticker a Brief sell names AND COVERS is dropped (`sell_cover` =
@@ -453,7 +438,6 @@ def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None,
     The card carries `subject` and `trim_shares` so that reconcile can re-decide it. A
     name in earnings week with no earnings-week decision keeps its card plus an
     `earnings_note` key. Every other case keeps the card exactly as before."""
-    acted = {str(t).upper() for t in (acted_tickers or set())}
     out: list[dict] = []
     for rec in (risk_recs or []):
         if rec.get("type") not in _TUNEUP_RISK_TYPES:
@@ -463,14 +447,6 @@ def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None,
         rtype = rec.get("type")
         rt = rec.get("root_tickers", []) or []
         tickers = [r.get("ticker") for r in rt if r.get("ticker")]
-        if acted and rtype in _TUNEUP_TRIM_DRIVER_TYPES and tickers:
-            # Beta prose is built around root_tickers[0] — if THAT name is being
-            # trimmed today, the whole card duplicates the Act Today call.
-            if rtype in _TUNEUP_PRIMARY_ANCHORED_TYPES and str(tickers[0]).upper() in acted:
-                continue
-            tickers = [t for t in tickers if str(t).upper() not in acted]
-            if not tickers:
-                continue  # every named trim target already acted -> nothing to add
         card = {
             "type":           rtype,
             "priority":       rec.get("priority"),
@@ -479,6 +455,14 @@ def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None,
             "recommendation": rec.get("recommendation", ""),
             "tickers":        tickers,
         }
+        if rtype == "beta":
+            # Q9: the subject is the name the card's text sells (`beta_levers.trim.ticker`),
+            # not `root_tickers[0]`; None when there is no honest trim candidate today.
+            _bl = rec.get("beta_levers")
+            _bt = _bl.get("trim") if isinstance(_bl, dict) else None
+            _bsub = str(_bt.get("ticker") or "").strip().upper() if isinstance(_bt, dict) else ""
+            card["subject"] = _bsub or None
+            card["trim_shares"] = rec.get("trim_shares")
         if rtype == "single_name_concentration" and rt and rt[0].get("ticker"):
             _sn = str(rt[0]["ticker"]).upper()
             _inp = held_trim_owner.book_inputs(port_df, _sn)
@@ -4590,19 +4574,12 @@ def build_daily_briefing(
                          pair_add_blocks=pair_add_blocks,
                          corr_unchecked=corr_unchecked,
                          corr_coverage=corr_coverage)
-    # Tune-up beta/sharpe cards restate a trim; if that name is already carrying
-    # an Act Today card (incl. the risk-off TRIM appended above) or a Review
-    # card, drop the redundant restatement (2026-08-04 audit — same broad
-    # flagged basis as the risk-off exclude set, now that `act` includes risk-off).
-    # News-only cards don't count (D-I): a news WATCH isn't a trim, so it must not
-    # swallow the beta card.
-    _acted_final = decision_bucket.all_flagged_tickers(act, review, ignore_news=True)
     # EW C3: a single-name card on a name the Brief SELLS defers to that sell (with a
     # visible caption via `portfolio_tuneup_deferred`); never raw reduce_call keys.
     # DeferSizeBlind: only to a sell that COVERS the card's own trim (sell_cover).
     _tuneup_deferred: dict = {}
     tuneup = _portfolio_tuneup(
-        risk_recs, acted_tickers=_acted_final,
+        risk_recs,
         sell_cover=act_sell_cover.sell_cover_summary(act, review),
         earnings_days=_trim_sizing.earnings_days_by_ticker(held_data, today),
         port_df=port_df, deferred_out=_tuneup_deferred)

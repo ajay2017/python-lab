@@ -501,6 +501,15 @@ def test_single_name_under_one_share_excess_sizes_no_trim():
     assert rec["recommendation"].count("$") == 1
 
 
+def test_single_name_trim_shares_floors_the_unrounded_excess():
+    # 0.2504pp of the $100k book = $250.40; at $125.10 that is 2.0016 shares -> 2.
+    # Flooring the whole-dollar figure ($250) instead read 1.998 -> 1, one short, so
+    # a 1-share Act sell would have "covered" the card (BriefSkipSizeBlind B-C3 review).
+    rec = _sn_rec(0.2504, 125.10)
+    assert rec["trim_shares"] == 2
+    assert rec["trim_sized"] is True
+
+
 def test_single_name_one_share_or_more_keeps_trim_wording():
     rec = _sn_rec(5.0, 100.0)
     assert rec["trim_sized"] is True
@@ -700,6 +709,81 @@ def test_ok_beta_carries_empty_excluded_recent_key():
     rec = find_rec(recs, "ok_beta")
     assert rec is not None
     assert rec["beta_trim_excluded_recent"] == []
+
+
+# ── beta rec carries the 50% trim in whole shares (BriefSkipSizeBlind B-C3) ────
+
+def _beta_shares_rec(rows, **kw):
+    return find_rec(_recs(rows, beta=1.88, portfolio_value=24_500.0), "beta") if not kw else find_rec(
+        build_risk_advisor_recommendations(
+            *make_risk_advisor_inputs(rows, beta=1.88, portfolio_value=24_500.0), **kw), "beta")
+
+
+def test_beta_rec_trim_shares_is_floor_of_half_the_position_over_price():
+    rec = _beta_shares_rec([{"ticker": "HIGH", "weight": 60.0, "market_value": 14_700.0,
+                             "beta": 4.15, "price": 100.0}])
+    assert rec["trim_shares"] == 73                      # 7,350 / 100
+    assert rec["beta_levers"]["trim"]["ticker"] == "HIGH"
+    rec = _beta_shares_rec([{"ticker": "HIGH", "weight": 60.0, "market_value": 14_700.0,
+                             "beta": 4.15, "price": 200.0}])
+    assert rec["trim_shares"] == 36                      # 36.75 floors, never rounds up
+
+
+def test_beta_rec_trim_shares_sub_share_position_is_zero():
+    rec = _beta_shares_rec([{"ticker": "HIGH", "weight": 60.0, "market_value": 14_700.0,
+                             "beta": 4.15, "price": 20_000.0}])
+    assert rec["trim_shares"] == 0 and isinstance(rec["trim_shares"], int)
+
+
+def test_beta_rec_trim_shares_none_when_price_unusable():
+    for px in (0.0, float("nan"), None, float("inf"), -5.0):
+        rec = _beta_shares_rec([{"ticker": "HIGH", "weight": 60.0, "market_value": 14_700.0,
+                                 "beta": 4.15, "price": px}])
+        assert rec["trim_shares"] is None, px
+
+
+def test_beta_rec_trim_shares_none_with_no_trim_candidate():
+    trades_df = pd.DataFrame([
+        {"ticker": "TOPBETA", "action": "BUY", "traded_at": _et_noon_today_as_utc_iso()},
+        {"ticker": "NEXTBETA", "action": "BUY", "traded_at": _et_noon_today_as_utc_iso()},
+    ])
+    rec = _beta_shares_rec(_TWO_HIGH_BETA_ROWS, trades_df=trades_df)
+    assert rec["trim_shares"] is None and rec["beta_levers"]["trim"] is None
+
+
+def test_beta_rec_trim_shares_follows_the_bought_today_skip():
+    trades_df = pd.DataFrame([
+        {"ticker": "TOPBETA", "action": "BUY", "traded_at": _et_noon_today_as_utc_iso()},
+    ])
+    rec = _beta_shares_rec(_TWO_HIGH_BETA_ROWS, trades_df=trades_df)
+    assert rec["beta_levers"]["trim"]["ticker"] == "NEXTBETA"
+    assert rec["trim_shares"] == 24                      # 2,450 / 100 floors 24.5
+
+
+@pytest.mark.parametrize("shares,price,want", [
+    (2, 271.10, 1),    # round(mv / 2) / price would floor to 0 (Opus review 2026-11-26)
+    (4, 100.20, 2),    # ... 1
+    (10, 50.10, 5),    # ... 4
+    (6, 173.40, 3),    # ... 2
+    (1, 500.00, 0),    # one share: half is under one share -> sizes no trade
+    (2.5, 80.0, 1),    # fractional holding floors
+])
+def test_beta_rec_trim_shares_from_the_share_count_never_one_short(shares, price, want):
+    rec = _beta_shares_rec([{"ticker": "HIGH", "weight": 60.0, "market_value": shares * price,
+                             "beta": 4.15, "price": price, "shares": shares}])
+    assert rec["trim_shares"] == want
+
+
+@pytest.mark.parametrize("shares,price,want", [(2, 271.10, 1), (4, 100.20, 2), (10, 50.10, 5)])
+def test_beta_rec_trim_shares_without_a_share_count_floors_the_unrounded_value(shares, price, want):
+    rec = _beta_shares_rec([{"ticker": "HIGH", "weight": 60.0, "market_value": shares * price,
+                             "beta": 4.15, "price": price}])
+    assert rec["trim_shares"] == want
+
+
+def test_ok_beta_has_no_trim_shares():
+    rec = find_rec(_recs(_ONE_ROW, beta=1.0), "ok_beta")
+    assert rec.get("trim_shares") is None
 
 
 # ── beta rec honest "full trim to target" claim (replaces the false 8-10% add) ─

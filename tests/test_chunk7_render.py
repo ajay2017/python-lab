@@ -50,7 +50,7 @@ def test_grow_shown_lists_both_new_keys():
 
 
 def test_schema_version_bumped_to_23():
-    assert re.search(r"_SYNTH_SCHEMA_VER = 32\b", _SRC)  # 31 -> 32 by BriefSkipSizeBlind
+    assert re.search(r"_SYNTH_SCHEMA_VER = 33\b", _SRC)  # 32 -> 33 by BriefSkipSizeBlind B-C3
 
 
 def test_no_direct_nav_page_assignment_added():

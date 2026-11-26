@@ -97,8 +97,8 @@ def test_corr_cov_is_assigned_on_both_the_memo_hit_and_miss_paths():
 
 def test_synth_schema_version_keeps_the_corryoung_note_in_its_history():
     # CorrYoung C4 bumped 28 -> 29; DeferSizeBlind bumped it again (30) and BriefBreachRestore
-    # again (31), BriefSkipSizeBlind again (32), so the CorrYoung note still sits in the "was 29:" clause.
-    m = re.search(r"_SYNTH_SCHEMA_VER = 32  # bumped: .*?; was 29: (.*?); was 28:", _APP)
+    # again (31), BriefSkipSizeBlind again (32), B-C3 again (33), so the CorrYoung note still sits in the "was 29:" clause.
+    m = re.search(r"_SYNTH_SCHEMA_VER = 33  # bumped: .*?; was 29: (.*?); was 28:", _APP)
     assert m and "CorrYoung" in m.group(1) and "left_out" in m.group(1)
 
 

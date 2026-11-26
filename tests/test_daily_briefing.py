@@ -1705,20 +1705,23 @@ def test_rewrite_macro_affected_keeps_reason_in_sync_with_filtered_why():
     assert act[0]["reason"] == "Hold through the print. Economic release today. Affected: BKNG."+' (1 affected name with its own Act Today call not listed)'
 
 
-# ── _portfolio_tuneup — beta/sharpe trim-driver dedup (2026-08-04 audit) ──────
-# The beta Tune-up card and a risk-off Act Today TRIM both rank the same
-# high-beta names, so a fragile+risk-off render otherwise restates "trim NVDA"
-# in both lanes. _portfolio_tuneup drops the redundant restatement when the
-# name is already acted on today. Beta prose is anchored to root_tickers[0]
-# (trim_ticker), so a beta card whose PRIMARY name is acted is dropped whole;
-# sharpe prose is a generic per-position rule, so it only chip-filters.
+# ── _portfolio_tuneup — beta/sharpe cards are NOT filtered at build ───────────
+# BriefSkipSizeBlind B-C3 (docs/plans/brief-skip-size-blind-b3-spec.md). The beta and
+# Sharpe Tune-up cards used to be dropped / chip-filtered at build against any
+# non-news card on the name (2026-08-04 audit). They now pass intact; Home settles
+# them against the live Act Today view (tests/test_tuneup_cover.py). The beta card
+# carries `subject` (the name its text sells) and `trim_shares`.
 
-def _beta_rec(tickers, priority="HIGH"):
-    return {
+def _beta_rec(tickers, priority="HIGH", trim_ticker=None, trim_shares=None):
+    rec = {
         "type": "beta", "priority": priority, "title": "Portfolio Beta 1.8",
         "problem": "p", "recommendation": "Sell 50% of X",
         "root_tickers": [{"ticker": t} for t in tickers],
+        "trim_shares": trim_shares,
     }
+    if trim_ticker is not None:
+        rec["beta_levers"] = {"target": 1.3, "trim": {"ticker": trim_ticker}}
+    return rec
 
 
 def _sharpe_rec(tickers, priority="HIGH"):
@@ -1729,49 +1732,39 @@ def _sharpe_rec(tickers, priority="HIGH"):
     }
 
 
-def test_tuneup_no_acted_set_is_unfiltered_backcompat():
-    # No acted_tickers passed -> behaves exactly as before (no suppression).
-    out = _portfolio_tuneup([_beta_rec(["NVDA", "AMD"])])
+def test_tuneup_beta_card_is_never_dropped_or_chip_filtered_at_build():
+    out = _portfolio_tuneup([_beta_rec(["NVDA", "AMD"], trim_ticker="NVDA", trim_shares=3)])
     assert len(out) == 1
     assert out[0]["tickers"] == ["NVDA", "AMD"]
 
 
-def test_tuneup_beta_primary_acted_drops_whole_card():
-    # NVDA (root_tickers[0], the name the beta prose is built around) is being
-    # trimmed today -> the entire beta card is redundant.
-    out = _portfolio_tuneup([_beta_rec(["NVDA", "AMD"])], acted_tickers={"NVDA"})
-    assert out == []
+def test_tuneup_has_no_acted_tickers_parameter():
+    import inspect
+    assert "acted_tickers" not in inspect.signature(_portfolio_tuneup).parameters
 
 
-def test_tuneup_beta_secondary_acted_keeps_card_filters_chip():
-    # Only a SECONDARY name (AMD) is acted; the primary NVDA is not -> keep the
-    # card (its NVDA-anchored prose is still valid) but drop AMD from the chips.
-    out = _portfolio_tuneup([_beta_rec(["NVDA", "AMD"])], acted_tickers={"AMD"})
+def test_tuneup_sharpe_card_chips_are_every_root_ticker():
+    out = _portfolio_tuneup([_sharpe_rec(["TSLA", "COIN"])])
     assert len(out) == 1
-    assert out[0]["tickers"] == ["NVDA"]
+    assert out[0]["tickers"] == ["TSLA", "COIN"]
+    assert "subject" not in out[0]
 
 
-def test_tuneup_beta_all_acted_drops_card():
-    out = _portfolio_tuneup([_beta_rec(["NVDA", "AMD"])], acted_tickers={"NVDA", "AMD"})
-    assert out == []
+def test_tuneup_beta_subject_is_the_trim_ticker_not_root_tickers_first():
+    # Q9: root_tickers[0] was bought today and skipped; the text sells AMD
+    out = _portfolio_tuneup([_beta_rec(["NVDA", "amd"], trim_ticker="amd", trim_shares=4)])
+    assert out[0]["subject"] == "AMD"
+    assert out[0]["trim_shares"] == 4
 
 
-def test_tuneup_beta_case_insensitive_match():
-    out = _portfolio_tuneup([_beta_rec(["nvda", "AMD"])], acted_tickers={"NVDA"})
-    assert out == []
-
-
-def test_tuneup_sharpe_primary_acted_only_chip_filters():
-    # Sharpe prose names no single anchor -> a primary-name overlap only filters
-    # the chip; the card survives on the remaining drag name.
-    out = _portfolio_tuneup([_sharpe_rec(["TSLA", "COIN"])], acted_tickers={"TSLA"})
-    assert len(out) == 1
-    assert out[0]["tickers"] == ["COIN"]
-
-
-def test_tuneup_sharpe_all_acted_drops_card():
-    out = _portfolio_tuneup([_sharpe_rec(["TSLA", "COIN"])], acted_tickers={"TSLA", "COIN"})
-    assert out == []
+def test_tuneup_beta_without_a_trim_candidate_has_no_subject():
+    for rec in (_beta_rec(["NVDA"]), _beta_rec(["NVDA"], trim_ticker="")):
+        out = _portfolio_tuneup([rec])
+        assert out[0]["subject"] is None
+        assert out[0]["trim_shares"] is None
+    rec = _beta_rec(["NVDA"])
+    rec["beta_levers"] = {"target": 1.3, "trim": None}
+    assert _portfolio_tuneup([rec])[0]["subject"] is None
 
 
 def test_tuneup_non_trim_driver_types_never_filtered():
@@ -1783,7 +1776,7 @@ def test_tuneup_non_trim_driver_types_never_filtered():
             "recommendation": "add a diversifier",
             "root_tickers": [{"ticker": "NVDA"}],
         }
-        out = _portfolio_tuneup([rec], acted_tickers={"NVDA"})
+        out = _portfolio_tuneup([rec])
         assert len(out) == 1, rtype
         assert out[0]["tickers"] == ["NVDA"], rtype
 
@@ -1814,7 +1807,7 @@ def _sn_run(sells, days=None, w=19.0, n=8, rec=None, port=True):
     from stock_analyzer import act_sell_cover
     deferred = {}
     out = _portfolio_tuneup(
-        [rec or _sn_rec()], acted_tickers=set(),
+        [rec or _sn_rec()],
         sell_cover=(act_sell_cover.sell_cover_summary(*sells) if isinstance(sells, tuple)
                     else sells),
         earnings_days={} if days is None else {"AAA": days},
@@ -1950,14 +1943,13 @@ def test_tuneup_deferred_payload_card_is_the_card_that_would_have_been_shown():
 
 def test_tuneup_single_name_defaults_leave_old_callers_unchanged():
     # no sell_cover / port_df / deferred_out at all (every pre-C3 caller)
-    out = _portfolio_tuneup([_sn_rec()], acted_tickers={"AAA"})
+    out = _portfolio_tuneup([_sn_rec()])
     assert len(out) == 1 and "earnings_note" not in out[0]
 
 
 def test_tuneup_deferral_never_touches_beta_or_other_single_name_cards():
     deferred = {}
     out = _portfolio_tuneup([_beta_rec(["BBB", "CCC"]), _sn_rec("AAA"), _sn_rec("DDD")],
-                            acted_tickers=set(),
                             sell_cover={"AAA": {"exit": True, "shares": None},
                                         "BBB": {"exit": True, "shares": None}},
                             earnings_days={}, port_df=_sn_book(19.0), deferred_out=deferred)

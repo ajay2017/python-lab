@@ -606,9 +606,9 @@ def test_no_dollar_bold_or_share_count_in_any_produced_text(t):
 
 # ------------------------------------------------------------------ 14 pins
 
-def test_synth_schema_version_is_32_and_keeps_the_breach_note_in_its_history():
-    # BriefSkipSizeBlind bumped 31 -> 32; the BriefBreachRestore note sits in "was 31:".
-    assert "_SYNTH_SCHEMA_VER = 32  # bumped: a larger same-name Review trim" in (
+def test_synth_schema_version_keeps_the_breach_note_in_its_history():
+    # BriefSkipSizeBlind bumped 31 -> 32 and B-C3 32 -> 33; the BriefBreachRestore note sits in "was 31:".
+    assert "; was 32: a larger same-name Review trim" in (
         (ROOT / "app.py").read_text(encoding="utf-8"))
     assert "was 31: the Brief result carries breach_alternates" in (
         (ROOT / "app.py").read_text(encoding="utf-8"))

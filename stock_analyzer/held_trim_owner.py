@@ -45,7 +45,8 @@ from stock_analyzer.constants import SINGLE_NAME_CEILING
 from stock_analyzer.decision_bucket import EXIT_KINDS, _ACT_REVIEW_TYPES
 
 # Act Today kinds whose `ticker` IS the name being reduced, beyond EXIT_KINDS.
-# Mirrors daily_briefing._review_list's `_reduce_tickers` plus risk_off_derisk.
+# I.e. the Act reduce kinds whose ticker is the name sold (`decision_bucket.EXIT_KINDS`
+# + deterioration_trim + risk_off_derisk).
 _EXTRA_SELL_KINDS = frozenset({"deterioration_trim", "risk_off_derisk"})
 
 

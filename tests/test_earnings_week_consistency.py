@@ -474,8 +474,11 @@ def test_home_tuneup_settles_the_deferral_against_the_act_view_and_escapes_the_n
     # so the Tune-up count and the render agree
     recon = src.index("held_trim_owner.reconcile_tuneup(")
     assert src.index("_act_view = act_today_view(") < recon
+    # B-C3: the cover is computed once from the view and reused by both Tune-up settles
+    cov = src.index("_db_view_cover = act_sell_cover.view_sell_cover(_act_view)")
+    assert src.index("_act_view = act_today_view(") < cov < recon
     seg0 = src[recon:recon + 600]
-    assert "act_sell_cover.view_sell_cover(_act_view)" in seg0
+    assert "_db_view_cover" in seg0
     assert '_db_tuneup = _db_tuneup_rec["cards"]' in src[recon:recon + 600]
     assert recon < src.index("_tuneup_n   = len(_db_tuneup)")
     start = src.index("if _db_tuneup:")

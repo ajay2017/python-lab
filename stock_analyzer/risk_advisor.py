@@ -7,11 +7,14 @@ statement, root-cause tickers, a specific actionable step, a quantified
 expected outcome, and a Institutional Lens teaching moment.
 """
 
+import math
+
 import numpy as np
 import pandas as pd
 
 from collections import defaultdict
 
+from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer.beta_repair import dollars_to_target_trim, expected_beta_after_trim
 from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer.constants import (
@@ -176,6 +179,9 @@ def build_risk_advisor_recommendations(
             "weight":       _f(row.get("Weight (%)")),
             "market_value": _f(row.get("Market Value")),
             "price":        _f(row.get("Price")),
+            # Held share count for whole-share trim sizing (fractional-aware), the
+            # same reader the Brief's trims use (trim_sizing.exact_shares).
+            "shares":       _trim_sizing.exact_shares(row),
             "pnl_pct":      _f(row.get("P&L (%)")),
             "score":        _f(row.get("Score")),
             # None-preserving composite (never coerced to 0.0) — a priced name
@@ -276,6 +282,23 @@ def build_risk_advisor_recommendations(
                 _new_beta    = round(max(float(_new_beta), 0.3), 2)
                 _beta_drop   = round(beta - _new_beta, 2)
                 _trim_dollar = round(trim_row["market_value"] * _tf)
+                # BriefSkipSizeBlind B-C3: the 50% trim the card's text names, in whole
+                # shares (floor, never round up); None = unknown (no usable price).
+                # 0 = a sub-share position: the card sizes no trade. Sized from the
+                # SHARE COUNT, never from the dollar figure above: that is rounded to
+                # whole dollars first, so floor(round(mv / 2) / price) can come out one
+                # share short (2 sh @ $271.10 -> 0), and a 0 / short need would read as
+                # covered by a smaller Act sell (Opus review 2026-11-26). Same floor as
+                # the Act sells it is compared with (trim_sizing.fraction_trim_shares).
+                _beta_px     = tr_map[trim_ticker]["price"]
+                _beta_sh     = tr_map[trim_ticker].get("shares") or 0.0
+                if not (_beta_px is not None and np.isfinite(_beta_px) and _beta_px > 0):
+                    _beta_trim_shares = None
+                elif _beta_sh > 0:
+                    _beta_trim_shares = _trim_sizing.fraction_trim_shares(_beta_sh, _tf * 100)
+                else:
+                    _beta_trim_shares = int(math.floor(
+                        trim_row["market_value"] * _tf / _beta_px + 1e-9))
                 _saved_10    = round(_beta_drop * pv * 0.10)
                 _saved_20    = round(_beta_drop * pv * 0.20)
 
@@ -315,6 +338,7 @@ def build_risk_advisor_recommendations(
                 _new_beta = round(beta * 0.85, 2)
                 _beta_drop = round(beta - _new_beta, 2)
                 _trim_dollar = _saved_10 = _saved_20 = 0
+                _beta_trim_shares = None
                 _full_trim_dollar = None
                 _full_trim_within_position = False
                 _full_trim_pct = None
@@ -341,6 +365,8 @@ def build_risk_advisor_recommendations(
                 ),
                 "root_tickers": top_beta,
                 "beta_trim_excluded_recent": beta_trim_excluded_recent,
+                # Whole shares of the 50% trim named in `recommendation` (None = unknown).
+                "trim_shares": _beta_trim_shares,
                 # Structured lever data for the render layer's leverage-side-
                 # effect disclosure (beta_repair.leverage_side_effect). "trim"
                 # is None when there's no honest trim candidate today (no
@@ -913,11 +939,15 @@ def build_risk_advisor_recommendations(
             # Unknown / non-positive price keeps the trim wording (fail toward
             # the current behaviour).
             _px = tr["price"]
-            _trim_sized = not (_px and _px > 0 and int(excess_dollar / _px) == 0)
             # DeferSizeBlind: the card's own whole-share size, so a surface can compare it
             # with an Act Today sell. 0 exactly when `_trim_sized` is False; None = unknown
             # (no usable price): an unknown size never fully defers to an Act sell.
-            _trim_shares = (int(excess_dollar / _px) if (_px and _px > 0) else None)
+            # Floored from the UNROUNDED excess (BriefSkipSizeBlind B-C3 review): the
+            # whole-dollar `excess_dollar` above is for display only; flooring it could
+            # read one share short and let a smaller Act sell "cover" the card.
+            _trim_shares = (int(math.floor(excess_pp / 100.0 * _gd / _px + 1e-9))
+                            if (_px and _px > 0) else None)
+            _trim_sized = not (_px and _px > 0 and _trim_shares == 0)
             _conviction_clause = (
                 "Conviction is unmeasured (fundamentals unavailable — a data "
                 "outage or an ETF with no cost data); this is still a SIZE limit."

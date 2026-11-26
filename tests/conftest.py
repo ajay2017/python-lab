@@ -201,7 +201,7 @@ def make_risk_advisor_inputs(
     branches. Defaults for the top-level port_risk metrics (beta/sharpe/vol/
     drawdown) are likewise all "safe" (no rec expected) unless overridden.
 
-    Per-row fields: ticker, weight (%), market_value ($), price, pnl_pct,
+    Per-row fields: ticker, weight (%), market_value ($), price, pnl_pct, shares (optional),
     score, sector, signal, beta, sharpe, sortino, max_drawdown, var_95, ret_6mo.
     """
     defaults = dict(
@@ -224,6 +224,8 @@ def make_risk_advisor_inputs(
             "Score": r["score"],
             "Signal": r["signal"],
             "Sector": r["sector"],
+            # Optional (BriefSkipSizeBlind B-C3): a row may give its share count.
+            **({"Shares": r["shares"]} if "shares" in r else {}),
         }
         for r in filled
     ])

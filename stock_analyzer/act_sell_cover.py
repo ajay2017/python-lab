@@ -227,12 +227,14 @@ _NEW_BOOK = ("once it is logged this {noun} is re-sized from your new book, "
              "so it is not a second sale on top of it.")
 
 
-def cover_note(state, ticker, noun) -> str | None:
+def cover_note(state, ticker, noun, tail=None) -> str | None:
     """The line a kept card / row shows beside an Act Today sell that does not fully
-    cover it. `noun` = "ceiling trim" (Tune-up / Risk Analysis) or "row" (Rebalancer).
-    None for any other state. No `$`, `**` or share count."""
+    cover it. `noun` = "ceiling trim" (Tune-up / Risk Analysis), "row" (Rebalancer) or
+    "beta trim" (Tune-up beta card). `tail` replaces the default "re-sized from your
+    new book" ending (the beta card is a fixed "Sell 50%", not a trim to a ceiling, so
+    it passes its own). None for any other state. No `$`, `**` or share count."""
     t = _norm(ticker) or "that name"
-    tail = _NEW_BOOK.format(noun=noun)
+    tail = _NEW_BOOK.format(noun=noun) if tail is None else str(tail)
     if state == STATE_PARTIAL:
         return (f"🏠 Today's Act Today call also sells {t}, but fewer shares than this "
                 f"{noun}. Do that sale first (🏠 Home); {tail}")

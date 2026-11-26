@@ -144,10 +144,12 @@ def test_tuneup_beta_card_kept_with_only_news_watch(monkeypatch):
     assert [t["tickers"] for t in brief["portfolio_tuneup"]] == [["EEE"]]
 
 
-def test_tuneup_beta_card_dropped_with_real_trim(monkeypatch):
+def test_tuneup_beta_card_kept_at_build_with_real_trim(monkeypatch):
+    # BriefSkipSizeBlind B-C3: no build-time drop; Home settles the beta card against the
+    # Act Today view's sell sizes (tuneup_cover.reconcile_trim_drivers).
     trim = {"ticker": "EEE", "action": {"type": "TRIM_TO_TARGET"}, "headline": "h"}
     brief = _build(monkeypatch, [], [trim], risk_recs=[_beta_rec("EEE")])
-    assert brief["portfolio_tuneup"] == []
+    assert [t["tickers"] for t in brief["portfolio_tuneup"]] == [["EEE"]]
 
 
 # -- brief_news_flags ---------------------------------------------------------

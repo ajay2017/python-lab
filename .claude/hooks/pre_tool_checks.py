@@ -1360,6 +1360,11 @@ _GATE_FILES = {
     # deterioration floor under a Sell) into the Act Today card's min_trim; a wrong call
     # sells less than a rule asked, or shows two sells on one name.
     "stock_analyzer/act_trim_fold.py",
+    # Added 2026-11-26 (BriefSkipSizeBlind B-C3, docs/plans/brief-skip-size-blind-b3-spec.md):
+    # settles the Tune-up beta / Sharpe trim cards against the live Act Today sell sizes;
+    # a wrong call hides a beta trim behind a smaller sell or shows a second sale beside
+    # a covering one.
+    "stock_analyzer/tuneup_cover.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

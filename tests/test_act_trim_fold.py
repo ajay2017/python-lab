@@ -693,9 +693,11 @@ def _app_src():
     return (ROOT / "app.py").read_text(encoding="utf-8")
 
 
-def test_synth_schema_version_is_32():
-    assert "_SYNTH_SCHEMA_VER = 32  # bumped: a larger same-name Review trim" in _app_src()
+def test_synth_schema_version_keeps_the_fold_note_in_its_history():
+    # B-C3 bumped 32 -> 33; the fold note sits in the "was 32:" clause.
+    assert "; was 32: a larger same-name Review trim" in _app_src()
     assert "reason_key (BriefSkipSizeBlind)" in _app_src()
+    assert "_SYNTH_SCHEMA_VER = 33  # bumped:" in _app_src()
 
 
 def test_min_trim_is_not_written_by_the_exit_signals_capture():
