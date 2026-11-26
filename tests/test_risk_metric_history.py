@@ -16,8 +16,22 @@ import pytest
 from stock_analyzer import risk_metric_history as rmh
 
 
-def _hist(n, start=100.0, step=1.0):
-    return {"df": pd.DataFrame({"Close": [start + step * i for i in range(n)]})}
+def _hist(n, start=100.0, step=1.0, first="2026-01-05"):
+    """n daily bars on business days from `first`, date-indexed like every real
+    provider frame (a bare RangeIndex reads as ONE session to the session-dated
+    correlation builder, CorrYoung C1)."""
+    return {"df": pd.DataFrame(
+        {"Close": [start + step * i for i in range(n)]},
+        index=pd.bdate_range(first, periods=n),
+    )}
+
+
+def _hist_ending(n, end, start=100.0, step=1.0):
+    """n daily bars on business days, the last one on `end`."""
+    return {"df": pd.DataFrame(
+        {"Close": [start + step * i for i in range(n)]},
+        index=pd.bdate_range(end=end, periods=n),
+    )}
 
 
 def _held_data():
@@ -301,26 +315,29 @@ def test_h3_empty_held_tickers_list_withholds_correlation():
 
 def test_h4_all_nan_matrix_from_disjoint_thin_history_is_withheld():
     """The hazard correlation_claim_verified's own docstring names: AAA/BBB
-    at 60 overlapping bars + CCC at a single, disjoint bar produces a
-    NON-EMPTY 3x3 corr_df that is entirely NaN (every held ticker IS a
-    column, so correlation_unchecked returns [] -- 'checked, clean' by that
-    measure alone). diversification_score's `avg_corr ... else 0.0` fallback
-    would score this 50.0 ("Well Diversified", clearing DIVERSIFY_WELL_PCT
-    (42.0)) off ZERO real observations if nothing gated on n_obs too."""
+    at 60 overlapping bars + CCC, a COUNTED 25-bar name sharing exactly ONE
+    session with them (rewritten for CorrYoung C1: a 1-bar CCC is now left out
+    and named by correlation_unchecked), produces a 3x3 corr_df whose CCC pairs
+    are all NaN (every held ticker IS a column, so correlation_unchecked
+    returns [] -- 'checked, clean' by that measure alone). Its pairs have ZERO
+    shared returns, so n_obs (the fewest behind any pair) is 0 and only the
+    floor can withhold the row."""
     from stock_analyzer import portfolio as _portfolio
 
     held = dict(_held_data())   # AAA, BBB: 60 overlapping bars each
-    held["CCC"] = _hist(1, start=75.0)   # single, disjoint bar
+    held["CCC"] = _hist_ending(25, held["AAA"]["df"].index[0], start=75.0)
 
-    # The raw building blocks produce a non-empty, fully-NaN matrix. Until
-    # 2026-10-13 that scored a fabricated 50.0; it is now closed at the
-    # source (no finite pair -> no score). The n_obs floor is pinned
+    # The raw building blocks produce a non-empty matrix whose CCC pairs are NaN
+    # (skipped by the score, never read as 0). The n_obs floor is pinned
     # independently by test_h4b below, on a thin matrix whose correlations
     # ARE finite -- the case where only the floor can withhold.
     raw_corr_df = _portfolio.correlation_matrix(held)
     assert not raw_corr_df.empty
+    assert raw_corr_df.loc["CCC", ["AAA", "BBB"]].isna().all()
     raw_div = _portfolio.diversification_score(raw_corr_df)
-    assert raw_div["score"] is None
+    assert raw_div["score"] == _portfolio.diversification_score(
+        _portfolio.correlation_matrix({"AAA": held["AAA"], "BBB": held["BBB"]}))["score"]
+    assert _portfolio.correlation_coverage(held)["n_obs"] == 0
 
     row = rmh.build_portfolio_risk_snapshot(
         "2026-09-15", _port_df(), {"beta": 1.0}, held,
@@ -341,13 +358,16 @@ def test_h4_all_nan_matrix_from_disjoint_thin_history_is_withheld():
 
 
 def test_h4b_thin_but_finite_matrix_is_still_withheld_by_the_floor():
-    """Pins the n_obs floor ON ITS OWN. Two overlapping 11-bar histories give
-    REAL, finite correlations (so diversification_score returns a number --
-    the no-finite-pair rule cannot be what withholds) on only 10 shared
-    returns, below CORR_MIN_OBS_TRUSTED. Only correlation_claim_verified's
+    """Pins the n_obs floor ON ITS OWN. Two COUNTED 30-bar histories that share
+    only 11 sessions (rewritten for CorrYoung C1: two 11-bar names are now left
+    out) give REAL, finite correlations (so diversification_score returns a
+    number -- the no-finite-pair rule cannot be what withholds) on only 10
+    shared returns, below CORR_MIN_OBS_TRUSTED. Only correlation_claim_verified's
     floor stands between that number and a persisted history row."""
     from stock_analyzer import portfolio as _portfolio
-    held = {"AAA": _hist(11, start=100.0, step=1.0), "BBB": _hist(11, start=50.0, step=-0.3)}
+    aaa = _hist(30, start=100.0, step=1.0)
+    held = {"AAA": aaa,
+            "BBB": _hist(30, start=50.0, step=-0.3, first=aaa["df"].index[19])}
     corr_df = _portfolio.correlation_matrix(held)
     assert _portfolio.diversification_score(corr_df)["score"] is not None
     assert _portfolio.correlation_coverage(held)["n_obs"] == 10

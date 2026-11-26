@@ -305,9 +305,36 @@ def test_g25_defect_regression_msft_unpriced_fails_open_and_is_disclosed():
 # None (couldn't check) instead of a fabricated {} -- an EMPTY map only.
 # A map that FIRED is always returned untouched.
 
-def _hist(n, start=100.0, step=1.0):
+def _hist(n, start=100.0, step=1.0, first="2026-01-05"):
+    """n daily bars on business days from `first`. Date-indexed like every real
+    provider frame: a bare RangeIndex reads as ONE session to the session-dated
+    correlation builder (corr_window, CorrYoung C1)."""
     import pandas as pd
-    return pd.DataFrame({"Close": [start + step * i for i in range(n)]})
+    return pd.DataFrame(
+        {"Close": [start + step * i for i in range(n)]},
+        index=pd.bdate_range(first, periods=n),
+    )
+
+
+def _hist_ending(n, end, start=100.0, step=1.0):
+    """n daily bars on business days, the last one on `end`."""
+    import pandas as pd
+    return pd.DataFrame(
+        {"Close": [start + step * i for i in range(n)]},
+        index=pd.bdate_range(end=end, periods=n),
+    )
+
+
+def _zero_overlap_book():
+    """Three COUNTED 60-bar names whose windows only touch at the ends, so every
+    pair shares at most one session (zero shared returns): a non-empty,
+    all-NaN matrix with n_obs 0. Replaces the old '2 names + a 1-bar name' shape:
+    since CorrYoung C1 a 1-bar name is left out and each pair of the others is
+    measured on its own days, so the all-NaN hazard needs no pair to overlap."""
+    aaa = _hist(60)
+    bbb = _hist_ending(60, aaa.index[0])
+    ccc = _hist(60, first=aaa.index[-1])
+    return {"AAA": {"df": aaa}, "BBB": {"df": bbb}, "CCC": {"df": ccc}}
 
 
 def test_corr_coverage_omitted_is_byte_identical_to_before():
@@ -442,12 +469,12 @@ def test_corr_coverage_malformed_never_disables_the_gate(bad_coverage):
 def test_corr_coverage_end_to_end_all_nan_matrix_degrades_to_none():
     """Reproduces the real hazard in the venv through the REAL
     correlation_matrix/correlation_coverage/diversification_score chain (not
-    a hand-built corr_df): AAA/BBB at 60 bars, CCC at 1 bar. The listwise
-    intersection collapses to zero shared observations, yet the matrix is
+    a hand-built corr_df): three 60-bar names whose windows share no returns
+    (rewritten for CorrYoung C1, see _zero_overlap_book). Zero shared observations, yet the matrix is
     non-empty -- a real production render could still feed it into
     resolve_new_clusters/add_block_map built from zero data.
     """
-    held = {"AAA": {"df": _hist(60)}, "BBB": {"df": _hist(60)}, "CCC": {"df": _hist(1)}}
+    held = _zero_overlap_book()
     held_tickers = ["AAA", "BBB", "CCC"]
     corr = correlation_matrix(held)
     cov = correlation_coverage(held)
@@ -547,7 +574,7 @@ def test_resolver_no_baseline_stays_empty_even_on_a_thin_sample():
 
 
 def test_banner_and_gate_agree_on_a_thin_all_nan_matrix():
-    held = {"AAA": {"df": _hist(60)}, "BBB": {"df": _hist(60)}, "CCC": {"df": _hist(1)}}
+    held = _zero_overlap_book()
     corr = correlation_matrix(held)
     cov = correlation_coverage(held)
     clusters = _resolve_new_clusters(corr, {"AAA": 10.0, "BBB": 10.0, "CCC": 10.0},

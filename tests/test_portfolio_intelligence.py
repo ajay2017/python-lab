@@ -636,8 +636,23 @@ def test_factor_tilt_all_positions_dropped_returns_empty_shape():
 # short history silently governs the whole book, and nothing surfaced it. These
 # pin the diagnostic that makes the sample size visible.
 
-def _hist(n, start=100.0, step=1.0):
-    return pd.DataFrame({"Close": [start + step * i for i in range(n)]})
+def _hist(n, start=100.0, step=1.0, first="2026-01-05"):
+    """n daily bars on business days from `first`. Date-indexed like every real
+    provider frame: a bare RangeIndex reads as ONE session (every stamp is
+    1970-01-01 plus a few nanoseconds), which the session-dated correlation
+    builder (corr_window, CorrYoung C1) rightly treats as one close."""
+    return pd.DataFrame(
+        {"Close": [start + step * i for i in range(n)]},
+        index=pd.bdate_range(first, periods=n),
+    )
+
+
+def _hist_ending(n, end, start=100.0, step=1.0):
+    """n daily bars on business days, the last one on `end`."""
+    return pd.DataFrame(
+        {"Close": [start + step * i for i in range(n)]},
+        index=pd.bdate_range(end=end, periods=n),
+    )
 
 
 def test_correlation_coverage_reports_the_listwise_intersection():
@@ -650,15 +665,23 @@ def test_correlation_coverage_reports_the_listwise_intersection():
 
 
 def test_correlation_coverage_names_the_ticker_pinning_the_sample():
-    """One short history governs every pair — the whole point of the diagnostic."""
-    held = {"AAA": {"df": _hist(120)}, "BBB": {"df": _hist(120)}, "ZZZ": {"df": _hist(8)}}
+    """The holding that shares the fewest days with the others sets n_obs — the
+    whole point of the diagnostic. Since CorrYoung C1 a holding under 20 returns
+    is left out (see test_corr_window.py), so the pinning name here is a COUNTED
+    one (30 bars) that overlaps the others on only 8 sessions (rewritten from an
+    8-bar name that used to pin every pair)."""
+    aaa, bbb = _hist(120), _hist(120)
+    zzz = _hist_ending(30, aaa.index[7], start=100.0, step=1.0)   # shares AAA's first 8 sessions
+    held = {"AAA": {"df": aaa}, "BBB": {"df": bbb}, "ZZZ": {"df": zzz}}
     cov = portfolio.correlation_coverage(held)
     assert cov["shortest_ticker"] == "ZZZ"
-    assert cov["shortest_len"] == 8
+    assert cov["shortest_len"] == 30
     assert cov["longest_len"] == 120
-    # The intersection — NOT the longest history — is what every pair gets.
+    # The pair with the fewest shared days — NOT the longest history — is what n_obs reports.
     assert cov["n_obs"] == 7
     assert cov["n_obs"] < portfolio.CORR_MIN_OBS_TRUSTED
+    # ...while the pair of long histories keeps its whole window (no listwise cut).
+    assert cov["n_obs_max"] == 119
 
 
 def test_correlation_coverage_matches_the_matrix_it_describes():
@@ -706,7 +729,7 @@ def test_correlation_coverage_interior_nan_costs_exactly_one_row():
     """
     a = _hist(30)
     b = _hist(30, start=70.0, step=0.5)
-    b.loc[10, "Close"] = float("nan")      # interior gap in one ticker only
+    b.iloc[10, 0] = float("nan")           # interior gap in one ticker only
     held = {"AAA": {"df": a}, "BBB": {"df": b}}
     cov = portfolio.correlation_coverage(held)
     # 30 rows, one dropped listwise for the NaN, one more for pct_change.
@@ -882,14 +905,17 @@ def test_correlation_claim_verified_p7_end_to_end_thin_partner_hazard():
     """Reproduces the real hazard in the venv, through the REAL
     correlation_matrix/correlation_coverage/diversification_score/
     correlation_unchecked chain (not a hand-built corr_df): AAA/BBB at 60
-    bars, CCC at 1 bar. `_close_series_map` doesn't drop CCC (it has a real,
-    non-empty Close column), so correlation_unchecked reports [] (nothing
-    MISSING) even though the LISTWISE-intersected sample is zero observations
-    -- a coverage-only guard would NOT catch this; the sample floor is
-    required. Pins that the hazard is real (score clears the "well
-    diversified" bar from zero shared observations) before pinning that the
-    predicate correctly refuses it."""
-    held = {"AAA": {"df": _hist(60)}, "BBB": {"df": _hist(60)}, "CCC": {"df": _hist(1)}}
+    bars, CCC a COUNTED 25-bar name that shares exactly one session with them
+    (rewritten for CorrYoung C1: a 1-bar CCC is now left out and named by
+    correlation_unchecked, so the hazard shape is a counted partner with no
+    shared returns). CCC is a matrix column, so correlation_unchecked reports []
+    (nothing MISSING) even though its pairs have ZERO shared returns -- a
+    coverage-only guard would NOT catch this; the sample floor (n_obs = the
+    fewest shared returns behind any pair) is required. Pins that the predicate
+    refuses it and that CCC's NaN pairs are skipped, never scored as 0."""
+    aaa = _hist(60)
+    held = {"AAA": {"df": aaa}, "BBB": {"df": _hist(60)},
+            "CCC": {"df": _hist_ending(25, aaa.index[0], start=75.0)}}
     held_tickers = ["AAA", "BBB", "CCC"]
     corr = portfolio.correlation_matrix(held)
     cov = portfolio.correlation_coverage(held)
@@ -897,10 +923,15 @@ def test_correlation_claim_verified_p7_end_to_end_thin_partner_hazard():
     unchecked = portfolio.correlation_unchecked(corr, held_tickers)
 
     assert not corr.empty
-    # The fabricated score is now closed at the SOURCE (2026-10-13: no finite
-    # pair -> no score, where this used to read 50.0 >= DIVERSIFY_WELL_PCT).
+    # The fabricated score is closed at the SOURCE (2026-10-13: no finite pair ->
+    # no score, where this used to read 50.0 >= DIVERSIFY_WELL_PCT). Pairwise
+    # (CorrYoung C1) AAA x BBB is a real pair, so the score exists but is built
+    # from that pair ALONE: CCC's NaN pairs add nothing.
+    assert np.isnan(corr.loc["CCC", "AAA"]) and np.isnan(corr.loc["CCC", "BBB"])
+    assert div["score"] == portfolio.diversification_score(
+        portfolio.correlation_matrix({"AAA": held["AAA"], "BBB": held["BBB"]}))["score"]
+    assert cov["n_obs"] == 0
     # The n_obs floor below still refuses on its own -- defense in depth.
-    assert div["score"] is None
     assert unchecked == []
     assert portfolio.correlation_claim_verified(unchecked, cov) is False
 

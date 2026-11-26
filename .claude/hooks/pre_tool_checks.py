@@ -1332,6 +1332,12 @@ _GATE_FILES = {
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window
     # to a new holding's few days.
     "stock_analyzer/risk_window.py",
+    # Added 2026-11-25 (CorrYoung C1, docs/plans/corr-young-holding.md): which
+    # holdings the correlation matrix measures (>= CORR_MIN_OBS_TRUSTED returns,
+    # each pair on its own shared days) and the sample size every correlation gate
+    # compares to the floor; a wrong call reads chance pairs as "moving together"
+    # or hides a real one.
+    "stock_analyzer/corr_window.py",
     # Added 2026-11-25 (RiskListwiseYoung C4, docs/plans/risk-off-unchecked-c4-spec.md):
     # decides when the risk-off de-risk check "couldn't run" (portfolio beta unmeasured
     # while the market regime is armed) and words the Home / pre-market disclosure; a

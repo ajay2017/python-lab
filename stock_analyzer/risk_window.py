@@ -81,6 +81,53 @@ def session_closes(frame) -> pd.Series | None:
     return _closes_by_session({"df": frame})
 
 
+def classify_holdings(
+    held_data,
+    tickers,
+    *,
+    min_returns: int = BETA_MIN_RETURNS,
+) -> tuple[dict[str, pd.Series], list[dict]]:
+    """The ONE definition of a young / unpriced holding, shared by the book
+    return series (this module) and the correlation matrix (corr_window).
+
+    For each ticker (de-duplicated, given order) read its session-dated closes
+    (`_closes_by_session`). Returns (counted, left_out):
+      counted  -- {ticker: session-dated closes Series} for every holding with
+                  >= min_returns real daily returns (a gap is not a return);
+      left_out -- [{"ticker", "reason": "short_history" | "no_prices",
+                    "n_returns"}] for the rest ("no_prices" = no usable Close,
+                    n_returns 0). No weight here: callers add their own.
+    A non-dict held_data reads as "no_prices" for everything. A frame that
+    `_closes_by_session` itself cannot read (e.g. a non-date index) still raises,
+    exactly as before the extraction: book_returns turns that into its
+    "unmeasured" offline contract and corr_window into an empty reading."""
+    counted: dict[str, pd.Series] = {}
+    left_out: list[dict] = []
+    held = held_data if isinstance(held_data, dict) else {}
+    try:
+        names = list(tickers) if tickers is not None else []
+    except Exception:
+        names = []
+    seen: set = set()
+    for t in names:
+        try:
+            if t in seen:
+                continue
+            seen.add(t)
+        except TypeError:   # unhashable ticker: not a ticker
+            continue
+        closes = _closes_by_session(held.get(t))
+        if closes is None:
+            left_out.append({"ticker": t, "reason": "no_prices", "n_returns": 0})
+            continue
+        n_ret = max(len(closes) - 1, 0)   # real closes only; gaps are not returns
+        if n_ret < min_returns:
+            left_out.append({"ticker": t, "reason": "short_history", "n_returns": n_ret})
+        else:
+            counted[t] = closes
+    return counted, left_out
+
+
 def _weight_pct(value) -> float | None:
     """A Weight (%) cell as a finite float, else None (unknown size)."""
     try:
@@ -197,22 +244,25 @@ def _book_returns(port_df, held_data, min_returns, max_unmeasured_pct, min_days)
 
     weights = _book_weights(port_df)
 
+    # The ONE definition of "young" / "no prices" is classify_holdings; the
+    # weight decision (no_weight) stays here. left_out keeps the book's row order.
+    classified, dropped = classify_holdings(held, list(weights), min_returns=min_returns)
+    dropped_by_ticker = {x["ticker"]: x for x in dropped}
     counted: dict[str, pd.Series] = {}   # ticker -> closes (session-dated)
     left_out: list[dict] = []
     for t, w in weights.items():
-        closes = _closes_by_session(held.get(t))
-        if closes is None:
-            left_out.append({"ticker": t, "reason": "no_prices", "n_returns": 0, "weight_pct": w})
-            continue
-        n_ret = max(len(closes) - 1, 0)   # real closes only; gaps are not returns
-        if n_ret < min_returns:
-            left_out.append({"ticker": t, "reason": "short_history", "n_returns": n_ret, "weight_pct": w})
+        if t in dropped_by_ticker:
+            d = dropped_by_ticker[t]
+            left_out.append(
+                {"ticker": t, "reason": d["reason"], "n_returns": d["n_returns"], "weight_pct": w}
+            )
         elif w is None:
             # Priced, long enough, but its size is unknown: it cannot be weighted
             # into the series. Listed (size unknown), left out of the share.
+            n_ret = max(len(classified[t]) - 1, 0)   # real closes only; gaps are not returns
             left_out.append({"ticker": t, "reason": "no_weight", "n_returns": n_ret, "weight_pct": None})
         else:
-            counted[t] = closes
+            counted[t] = classified[t]
 
     static_pct = sum(x["weight_pct"] for x in left_out if x["weight_pct"] is not None)
 

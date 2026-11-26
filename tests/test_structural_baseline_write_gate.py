@@ -111,11 +111,18 @@ def test_misaligned_histories_from_the_real_coverage_do_not_name_a_cap():
     note = correlation_record_withheld_note([], cov, subject="S")
     assert "capped by" not in note and "only overlap on those days" in note
 
+    # A 4-bar NEWCO is LEFT OUT since CorrYoung C1 (under CORR_MIN_OBS_TRUSTED
+    # returns): it no longer caps anything, and the real coverage names it. The
+    # note's "capped by" wording stays pinned on a coverage dict that still has
+    # the cap shape (shortest history = n_obs + 1; C2 reworks the clause).
     short = dict(hd)
     short["NEWCO"] = _df([10.0, 10.5, 10.2, 10.8], long_dates[-4:])
     cov2 = portfolio.correlation_coverage(short)
-    assert cov2["shortest_ticker"] == "NEWCO" and cov2["shortest_len"] == cov2["n_obs"] + 1
-    assert "capped by NEWCO's short price history" in correlation_record_withheld_note([], cov2, subject="S")
+    assert cov2["n_obs"] == cov["n_obs"]
+    assert [x["ticker"] for x in cov2["left_out"]] == ["NEWCO"]
+    assert cov2["left_out"][0]["reason"] == "short_history"
+    cap_cov = {"n_obs": 3, "shortest_ticker": "NEWCO", "shortest_len": 4}
+    assert "capped by NEWCO's short price history" in correlation_record_withheld_note([], cap_cov, subject="S")
     # The subject is the lead-in; reasons follow the colon.
     assert correlation_record_withheld_note([], {"n_obs": 5}, subject="X can't run").startswith("X can't run: ")
 
@@ -133,9 +140,13 @@ def _bundle(thin):
     c = np.cumprod(1 + rng.normal(0, 0.01, 130)) * 50
     hd = {"AAA": _df(a, dates), "BBB": _df(b, dates), "CCC": _df(c, dates)}
     if thin:
-        # 3-bar histories -> a 2-return shared window; same direction -> corr 1.0
-        hd["AAA"] = _df([100.0, 110.0, 115.5], dates[-3:])
-        hd["BBB"] = _df([50.0, 60.0, 61.0], dates[-3:])
+        # Two COUNTED 25-bar histories that overlap on only 3 sessions -> a
+        # 2-return shared window; same direction -> corr 1.0 (rewritten for
+        # CorrYoung C1: 3-bar names are now left out instead of governing every pair).
+        hd["AAA"] = _df(np.r_[np.linspace(80.0, 95.0, 22), [100.0, 110.0, 115.5]],
+                        pd.bdate_range(end=dates[-1], periods=25))
+        hd["BBB"] = _df(np.r_[[50.0, 60.0, 61.0], np.linspace(62.0, 80.0, 22)],
+                        pd.bdate_range(dates[-3], periods=25))
     return hd
 
 

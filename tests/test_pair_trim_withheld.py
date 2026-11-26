@@ -141,11 +141,21 @@ def _walk(n, seed, drift=0.0):
 
 
 def _held(n):
-    a = _walk(n, 1)
+    """AAA / BBB in lockstep on `n` shared daily returns, CCC unrelated.
+
+    Date-indexed, with every name COUNTED (130 bars): BBB's window is shifted so
+    it shares exactly n + 1 sessions with AAA (and with CCC), so the fewest
+    shared returns behind any pair is n. Rewritten for CorrYoung C1: the old
+    `n`-bar frames on a bare RangeIndex are now one session (or, under 20
+    returns, left out) instead of a thin shared sample."""
+    L = 130
+    dates = pd.bdate_range("2026-01-05", periods=2 * L - (n + 1))
+    a = _walk(len(dates), 1)
+    lo = L - (n + 1)                              # BBB starts here: shares dates[lo:L] with AAA
     held = {
-        "AAA": {"df": pd.DataFrame({"Close": a})},
-        "BBB": {"df": pd.DataFrame({"Close": a * 1.5})},        # lockstep with AAA
-        "CCC": {"df": pd.DataFrame({"Close": _walk(n, 99)})},   # unrelated
+        "AAA": {"df": pd.DataFrame({"Close": a[:L]}, index=dates[:L])},
+        "BBB": {"df": pd.DataFrame({"Close": a[lo:lo + L] * 1.5}, index=dates[lo:lo + L])},  # lockstep on the overlap
+        "CCC": {"df": pd.DataFrame({"Close": _walk(L, 99)}, index=dates[:L])},   # unrelated
     }
     return held
 

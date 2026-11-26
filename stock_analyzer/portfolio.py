@@ -9,6 +9,7 @@ from stock_analyzer import asset_type
 from stock_analyzer import revision_flag as _revision_flag
 from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import risk_window as _risk_window
+from stock_analyzer import corr_window
 from stock_analyzer.pillar_availability import unmeasured_pillars, verdict_basis
 from stock_analyzer.sector_vocab import to_curated as _to_curated_sector
 
@@ -1559,10 +1560,9 @@ def correlation_sample_state(corr_coverage) -> str:
 def _close_series_map(held_data: dict) -> dict:
     """{ticker: Close series} — the inputs the correlation matrix is built from.
 
-    Shared by `correlation_matrix` and `correlation_coverage` so the coverage
-    figure always describes the SAME inputs the matrix used. Never duplicate
-    this extraction: a coverage number computed off a different set would be
-    worse than no coverage number at all.
+    No longer feeds the matrix: since CorrYoung C1 `correlation_matrix` and
+    `correlation_coverage` both read held_data through `corr_window`, which
+    classifies the same inputs once for both. Kept as the plain raw-Close view.
     """
     series = {}
     for ticker, data in held_data.items():
@@ -1575,38 +1575,31 @@ def _close_series_map(held_data: dict) -> dict:
 def correlation_matrix(held_data: dict) -> pd.DataFrame:
     """Build a daily-return correlation matrix from held_data price histories.
 
-    NOTE the `.dropna()` below is LISTWISE across every ticker at once, so the
-    matrix is computed on the INTERSECTION of all histories — one short or
-    degraded fetch shortens the sample for every pair in the book. That is why
-    `correlation_coverage()` exists: the sample size must be visible, because a
-    thin intersection produces near-zero correlations that read as genuine
-    diversification. Changing the deletion strategy is a behaviour change to a
-    shared decision input (diversification score, clusters, F-230, F-245) — not
-    a cleanup.
+    Delegates to `corr_window.corr_matrix` (CorrYoung C1). A holding with fewer
+    than `CORR_MIN_OBS_TRUSTED` daily returns is LEFT OUT (it is not a matrix
+    column, so `correlation_unchecked` names it) and each pair of the others is
+    measured on its own shared dates, instead of the old listwise cut that
+    shrank every pair to the youngest holding's few days. An aligned book gives
+    the same matrix as before. Empty DataFrame when fewer than 2 holdings are
+    usable or counted.
     """
-    series = _close_series_map(held_data)
-    if len(series) < 2:
-        return pd.DataFrame()
-    prices = pd.DataFrame(series).dropna()
-    returns = prices.pct_change().dropna()
-    return returns.corr().round(3)
+    return corr_window.corr_matrix(held_data, min_returns=CORR_MIN_OBS_TRUSTED)
 
 
 def correlation_coverage(held_data: dict) -> dict | None:
     """How much data `correlation_matrix()` actually had to work with.
 
-    Awareness/diagnostic only — computes no correlation, gates nothing, and is
-    read by no decision path. Returns None on the PRIMARY empty-matrix condition
-    (fewer than 2 usable histories). Note that is not the only way
-    `correlation_matrix` ends up empty: two histories with disjoint date indexes
-    yield a coverage dict (with `n_obs == 0`) but an empty matrix, so
-    empty-matrix is a strict superset of `None` here.
+    Delegates to `corr_window.corr_coverage`: awareness/diagnostic, computes no
+    correlation. Returns None on the PRIMARY empty-matrix condition (fewer than 2
+    usable histories). Two counted histories with disjoint date indexes, or fewer
+    than 2 counted holdings, yield a coverage dict (with `n_obs == 0`) but an
+    empty or all-NaN matrix, so empty-matrix is a strict superset of `None`.
 
-    `n_obs` is the number of daily returns behind EVERY pair (the listwise
-    intersection, minus one bar for `pct_change`). `shortest_ticker` names the
-    holding with the shortest history — usually, but not provably, the one
-    capping the sample: with disjoint indexes every history can be the same
-    length while the intersection is still empty.
+    `n_obs` is the FEWEST daily returns shared by any measured pair of counted
+    holdings (equal to the old listwise count on an aligned book);
+    `n_obs_max` the most; `left_out` names the holdings not measured (young or
+    unpriced); `n_tickers` / `shortest_*` / `longest_len` / `lengths` still
+    describe every holding with usable prices.
 
     See also `correlation_unchecked()` below, a DIFFERENT diagnostic: this
     function describes the INPUTS (`held_data`) and is structurally blind to a
@@ -1614,20 +1607,7 @@ def correlation_coverage(held_data: dict) -> dict | None:
     in the first place); `correlation_unchecked` instead names which held
     tickers are actually missing from the MATRIX itself.
     """
-    series = _close_series_map(held_data)
-    if len(series) < 2:
-        return None
-    lengths = {t: int(s.dropna().shape[0]) for t, s in series.items()}
-    prices = pd.DataFrame(series).dropna()
-    shortest = min(lengths, key=lambda t: lengths[t])
-    return {
-        "n_tickers": len(series),
-        "n_obs": max(0, len(prices) - 1),   # pct_change() drops the first bar
-        "shortest_ticker": shortest,
-        "shortest_len": lengths[shortest],
-        "longest_len": max(lengths.values()),
-        "lengths": lengths,
-    }
+    return corr_window.corr_coverage(held_data, min_returns=CORR_MIN_OBS_TRUSTED)
 
 
 def correlation_unchecked(corr_df, held_tickers) -> "list[str] | None":
@@ -1642,11 +1622,12 @@ def correlation_unchecked(corr_df, held_tickers) -> "list[str] | None":
     docstring for the full defect shape). This function never suppresses
     anything itself; it only names the gap.
 
-    `_close_series_map` (feeding `correlation_matrix`) silently drops any
-    held ticker whose price history is `None`, empty, or lacks a `Close`
-    column — that ticker simply never becomes a `corr_df` column. A missing
-    held ticker here means its correlation to every other holding is
-    completely unknown this run, not merely under-sampled.
+    `corr_window` (feeding `correlation_matrix`) drops any held ticker whose
+    price history is `None`, empty, or lacks a `Close` column, and LEAVES OUT
+    a holding with fewer than `CORR_MIN_OBS_TRUSTED` daily returns — that
+    ticker simply never becomes a `corr_df` column, so it is listed here. A
+    missing held ticker here means its correlation to every other holding is
+    unmeasured this run (`corr_coverage["left_out"]` says why).
 
     Returns
     -------

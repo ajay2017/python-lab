@@ -25,8 +25,14 @@ ROOT = Path(__file__).resolve().parent.parent
 APP_PY = ROOT / "app.py"
 
 
-def _hist(n, start=100.0, step=1.0):
-    return {"df": pd.DataFrame({"Close": [start + step * i for i in range(n)]})}
+def _hist(n, start=100.0, step=1.0, first="2026-01-05"):
+    """n daily bars on business days from `first`, date-indexed like every real
+    provider frame (a bare RangeIndex reads as ONE session to the session-dated
+    correlation builder, CorrYoung C1)."""
+    return {"df": pd.DataFrame(
+        {"Close": [start + step * i for i in range(n)]},
+        index=pd.bdate_range(first, periods=n),
+    )}
 
 
 def _held_data():
