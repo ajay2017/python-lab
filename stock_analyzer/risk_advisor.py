@@ -851,9 +851,18 @@ def build_risk_advisor_recommendations(
                 if h["ticker"].upper() in _bought_today
             ]
 
+            # Additive (brief-consolidation C1): EVERY holding in the sector (not just
+            # the top 3 / the trim-eligible), so the Act card can tell which of them
+            # today's Act Today call already sells. Sorted by ticker (stable order).
+            sector_members = [
+                {"ticker": h["ticker"], "market_value": h["market_value"]}
+                for h in sorted(sector_holdings[top_sec], key=lambda h: str(h["ticker"]))
+            ]
+
             recs.append({
                 "priority": sec_priority,
                 "type":     "sector_concentration",
+                "sector_members": sector_members,
                 # Additive (SecTrig 2026-11-03): the sector this rec is about, so
                 # the Signals REDUCE card can defer to it without parsing `title`.
                 "sector":   top_sec,

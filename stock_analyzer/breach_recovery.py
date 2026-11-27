@@ -3,8 +3,7 @@ docs/plans/brief-breach-restore-and-fold.md section 2, spec
 docs/plans/brief-breach-restore-batch1-spec.md).
 
 THE BUG: a stop breach on T makes the Brief build skip every other per-name call on T
-(Act lane: sell_signal, deterioration EXIT / TRIM, critical news, the T-attributed risk
-card; Review lane: earnings-week trim, weak-large trim, deterioration Watch, news Watch).
+(Act lane: sell_signal, deterioration EXIT / TRIM, critical news; Review lane: earnings-week trim, weak-large trim, deterioration Watch, news Watch).
 When the live price recovers, `act_today_view` demotes the breach to "Resolved", and the
 memoized Brief has nothing else on T, so a name with a deterioration EXIT or a composite
 Sell would show no sell at all.
@@ -47,9 +46,12 @@ ALTERNATES_KEY = "breach_alternates"
 RESTORED_KEY = "_restored_after_recovery"
 
 # Act kinds that are NOT per-name calls hidden behind the breach: the breach itself, a
-# pass-through personal commitment, the cross-name macro card and the risk-off de-risk.
+# pass-through personal commitment, the cross-name macro card, the risk-off de-risk and
+# the `risk` card (the sector Hard Cap card, whose ticker is an attribution: since
+# brief-consolidation C1 it is no longer hidden behind a same-name breach, so it is
+# already in the Act list and restoring it would show a duplicate).
 _EXCLUDED_ACT_KINDS = frozenset(
-    {"stop_breach", "premortem_triggered", "macro", "risk_off_derisk"})
+    {"stop_breach", "premortem_triggered", "macro", "risk_off_derisk", "risk"})
 
 _PLAIN_LINE = "Monitor the position; re-evaluate if price returns to or below the stop."
 

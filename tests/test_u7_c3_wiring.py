@@ -272,7 +272,7 @@ def test_synth_sig_carries_both_stamps_and_the_schema_is_22():
     body = m.group(1)
     assert 'str(_f255_nc["cash_as_of"])' in body
     assert 'str(_f255_nc["captured_at"])' in body
-    assert re.search(r"_SYNTH_SCHEMA_VER = 39\b", _APP)  # 38 -> 39 by sell-check-unread C6
+    assert re.search(r"_SYNTH_SCHEMA_VER = 40\b", _APP)  # 39 -> 40 by brief-consolidation C1
 
 
 def test_sizing_versions_are_6():

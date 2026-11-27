@@ -3227,10 +3227,11 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
       weight, pnl_pct
 
     After building the flat list, items are CONSOLIDATED per-ticker so a ticker
-    never appears in more than one card. Rule (user-chosen): a mechanical exit
-    (stop breach / Sell signal) WINS — it suppresses any risk-advisor trim on
-    the same ticker, because if you're exiting, a "trim 50% for beta" rec is
-    moot. Multiple risk flags on one non-exiting ticker merge into one card.
+    has at most one non-risk card: a mechanical exit (stop breach / Sell signal)
+    WINS over the softer news / deterioration cards on that name. The `risk` card
+    is NOT one of them (brief-consolidation C1, owner 2026-11-27, reversing F-22a):
+    its ticker is the sector's largest holding, an attribution, so it stays beside
+    a same-name exit. Multiple risk flags on one ticker merge into one risk card.
 
     skip_breach (BriefBreachRestore): an optional set of upper-cased tickers whose
     section-1 stop-breach row is NOT built, so sections 2 / 2.5 / 3 and the
@@ -3527,10 +3528,15 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         }
         # Rebalance-plan payload rides ON THE FLAG (not the item top-level) so it
         # survives _consolidate_act_today, which keeps only the primary item's
-        # keys but gathers ALL flags across a merged ticker group. The render
-        # (app.py _render_act_card) keys off flag["rec_type"].
+        # keys but gathers ALL flags across a merged ticker group of risk items.
+        # The render (app.py _render_act_card) keys off flag["rec_type"].
         if rec.get("type") == "sector_concentration":
             _flag["rec_type"]           = "sector_concentration"
+            # Additive (brief-consolidation C1): the sector name + every member
+            # holding, so the card can name which members Act Today already sells.
+            _flag["sector"]             = rec.get("sector")
+            _sm_raw = rec.get("sector_members")
+            _flag["sector_members"]     = _sm_raw if isinstance(_sm_raw, list) else []
             _flag["trim_candidates"]    = rec.get("trim_candidates", []) or []
             _flag["redeploy_sectors"]   = rec.get("redeploy_sectors", []) or []
             _flag["trim_target_pp"]     = rec.get("trim_target_pp")
@@ -3551,7 +3557,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
 
 
 # Kinds that represent a mechanical exit decision — these suppress softer
-# advisories (risk trims, news monitors) on the same ticker. Deterioration
+# advisories (news monitors) on the same ticker; NOT the `risk` card (the sector
+# Hard Cap card's ticker is an attribution, brief-consolidation C1). Deterioration
 # signals are deliberately NOT here: they are the gentler/earlier tripwire and
 # get suppressed BY stop_breach/sell_signal (deduped at build time), never the
 # other way round.
@@ -3581,27 +3588,55 @@ def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
       that same ticker, and the merge logic below would otherwise silently
       drop it (picked or not as the ticker's single "primary" card) — the
       exact double-surface bug this exemption exists to prevent.
-    - For each remaining ticker: if a mechanical-exit item exists, emit only
-      the highest-priority mechanical one (drop risk + news — moot if
-      exiting).
-    - Otherwise merge: the highest-priority item becomes the card; all
-      risk_flags across the group are gathered onto it so a ticker with
-      two risk recs (e.g. beta + volatility) renders as one card.
+    - A `kind == "risk"` item with a ticker is grouped ONLY with other `risk`
+      items on that ticker (brief-consolidation C1, owner 2026-11-27 Q1; reverses
+      F-22a "a mechanical exit suppresses the risk card"). Its flags merge into one
+      "RISK — N flags on T" card, emitted beside whatever non-risk card the same
+      ticker has. Why: the only HIGH risk rec that reaches Act Today is the sector
+      Hard Cap card, and its ticker is an ATTRIBUTION (the sector's largest holding),
+      not a decision on that name, so "you don't trim what you're exiting" doesn't
+      apply: exiting one member doesn't clear the sector breach.
+    - For each remaining (non-risk) ticker: if a mechanical-exit item exists, emit
+      only the highest-priority mechanical one (drop news — moot if exiting).
+    - Otherwise the highest-priority item becomes the card. A non-risk card never
+      carries `risk_flags` (they stay on the risk card).
     """
     passthrough = [
         it for it in items
         if not it.get("ticker") or it.get("kind") == "premortem_triggered"
     ]
     by_ticker: dict[str, list[dict]] = {}
+    risk_by_ticker: dict[str, list[dict]] = {}
     for it in items:
         if it.get("kind") == "premortem_triggered":
             continue  # exempted above — never merged with same-ticker items
         t = it.get("ticker")
-        if t:
+        if not t:
+            continue
+        if it.get("kind") == "risk":
+            risk_by_ticker.setdefault(str(t).upper(), []).append(it)
+        else:
             by_ticker.setdefault(str(t).upper(), []).append(it)
 
     _pri_rank = {"critical": 0, "high": 1}
     consolidated: list[dict] = []
+    # Risk cards: same-ticker risk items merge with each other only.
+    for ticker, group in risk_by_ticker.items():
+        pm = _port_rows(port_df, ticker)
+        w  = _f(pm["Weight (%)"].iloc[0]) if pm is not None and not pm.empty else None
+        p  = _f(pm["P&L (%)"].iloc[0]) if pm is not None and not pm.empty else None
+        group.sort(key=lambda x: _pri_rank.get(x["priority"], 9))
+        primary = dict(group[0])
+        all_flags: list[dict] = []
+        for it in group:
+            all_flags.extend(it.get("risk_flags", []) or [])
+        if all_flags:
+            primary["risk_flags"] = all_flags
+            if len(all_flags) > 1:
+                primary["action"] = f"RISK — {len(all_flags)} flags on {ticker}"
+        primary["weight"]  = w if w is not None else primary.get("weight")
+        primary["pnl_pct"] = p if p is not None else primary.get("pnl_pct")
+        consolidated.append(primary)
     for ticker, group in by_ticker.items():
         # Pull weight/pnl from port_df so merged cards always have them.
         pm = _port_rows(port_df, ticker)
@@ -3622,18 +3657,9 @@ def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
             consolidated.append(primary)
             continue
 
-        # No mechanical exit — merge softer advisories into one card.
+        # No mechanical exit — the highest-priority softer item is the card.
         group.sort(key=lambda x: _pri_rank.get(x["priority"], 9))
         primary = dict(group[0])
-        # Gather all risk flags across the group (could be multiple recs).
-        all_flags: list[dict] = []
-        for it in group:
-            all_flags.extend(it.get("risk_flags", []) or [])
-        if all_flags:
-            primary["risk_flags"] = all_flags
-            # If the primary is a risk card, reflect the flag count in the header.
-            if primary.get("kind") == "risk" and len(all_flags) > 1:
-                primary["action"] = f"RISK — {len(all_flags)} flags on {ticker}"
         primary["weight"]  = w if w is not None else primary.get("weight")
         primary["pnl_pct"] = p if p is not None else primary.get("pnl_pct")
         consolidated.append(primary)

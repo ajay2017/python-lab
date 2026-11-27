@@ -131,8 +131,17 @@ def _reconcile_act(items: list[dict]) -> list[dict]:
     news card but NO reduce card are untouched (a winner with a single headline
     keeps its monitor card). Genuinely distinct, compatible cards are preserved —
     only the hold↔reduce contradiction is collapsed.
+
+    A `kind == "risk"` card is NOT a reduce call for this fold (brief-consolidation
+    C1, 2026-11-27): the sector Hard Cap card's ticker is an attribution (the
+    sector's largest holding), so it sells nothing on that name and a same-name
+    "Hold for now" news card is not contradicted by it. It neither makes its ticker
+    a reduce ticker nor receives the "also flagged on headlines" note.
     """
-    reduce_tickers = {_ticker(it) for it in items if _is_reduce(it) and _ticker(it)}
+    def _sells(it: dict) -> bool:
+        return _is_reduce(it) and str(it.get("kind", "")) != "risk"
+
+    reduce_tickers = {_ticker(it) for it in items if _sells(it) and _ticker(it)}
     out: list[dict] = []
     folded: set = set()
     converted: list[dict] = []     # news cards kept as risk cards (their flags matter)
@@ -152,7 +161,7 @@ def _reconcile_act(items: list[dict]) -> list[dict]:
                  "into this reduce; it isn't a separate 'hold'.")
         for it in out:
             t = _ticker(it)
-            if (t in folded and _is_reduce(it)
+            if (t in folded and _sells(it)
                     and not any(it is c for c in converted)):
                 it["why"] = f"{it.get('why', '').strip()}  {_note}".strip()
                 folded.discard(t)

@@ -458,6 +458,35 @@ def test_same_day_sell_does_not_exclude_from_trim():
     assert rec["trim_excluded_recent"] == []
 
 
+def test_sector_members_cover_every_holding_in_the_top_sector():
+    # brief-consolidation C1: `sector_members` is EVERY holding of the top sector (not
+    # just the top 3 by weight, and not only the trim-eligible), sorted by ticker, so
+    # the Act card can tell which of them today's call already sells.
+    rows = [
+        {"ticker": "DDD", "weight": 12.0, "market_value": 12_000.0, "sector": "Tech", "score": 50},
+        {"ticker": "AAA", "weight": 11.0, "market_value": 11_000.0, "sector": "Tech", "score": 60},
+        {"ticker": "CCC", "weight": 10.0, "market_value": 10_000.0, "sector": "Tech", "score": float("nan")},
+        {"ticker": "BBB", "weight": 9.0, "market_value": 9_000.0, "sector": "Tech", "score": 70},
+        {"ticker": "EEE", "weight": 5.0, "market_value": 5_000.0, "sector": "Energy", "score": 70},
+    ]
+    port_df, held_data, port_risk, h_rets, pv, gd = make_risk_advisor_inputs(rows)
+    trades_df = pd.DataFrame([
+        {"ticker": "BBB", "action": "BUY", "traded_at": _et_noon_today_as_utc_iso()},
+    ])
+    rec = find_rec(build_risk_advisor_recommendations(
+        port_df, held_data, port_risk, h_rets, pv, gd, trades_df=trades_df),
+        "sector_concentration")
+    assert rec["sector"] == "Tech"
+    assert rec["sector_members"] == [
+        {"ticker": "AAA", "market_value": 11_000.0},
+        {"ticker": "BBB", "market_value": 9_000.0},      # 4th by weight AND a same-day buy
+        {"ticker": "CCC", "market_value": 10_000.0},     # no composite: not trim-eligible
+        {"ticker": "DDD", "market_value": 12_000.0},
+    ]
+    assert len(rec["root_tickers"]) == 3                 # root_tickers stays the top 3
+    assert {m["ticker"] for m in rec["sector_members"]} == {"AAA", "BBB", "CCC", "DDD"}
+
+
 def test_no_trades_df_is_backward_compatible():
     recs = _recs(_SECTOR_BREACH_ROWS)  # trades_df omitted entirely
     rec = find_rec(recs, "sector_concentration")

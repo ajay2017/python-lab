@@ -351,7 +351,9 @@ def test_alternates_for_selects_subject_items_and_every_breach_is_present():
                {**_review(None), "ticker": "AAA", "action": {"type": "WATCH", "trim_ticker": "ZZZ"}}]
     out = br.alternates_for({"AAA", "CCC"}, act_alt, rev_alt)
     assert set(out) == {"AAA", "CCC"}
-    assert [i["kind"] for i in out["AAA"]["act"]] == ["deterioration_exit", "risk"]
+    # F-22a reversed by owner 2026-11-27 (brief-consolidation Q1): the `risk` card is no
+    # longer hidden behind a breach, so it is not an alternate to restore (no duplicate).
+    assert [i["kind"] for i in out["AAA"]["act"]] == ["deterioration_exit"]
     assert len(out["AAA"]["review"]) == 1 and out["AAA"]["review"][0]["action"]["type"] == "TRIM_TO_TARGET"
     assert out["CCC"] == {"act": [], "review": []}
 

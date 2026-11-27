@@ -1392,6 +1392,11 @@ _GATE_FILES = {
     # line); a wrong call reads "couldn't read the calendar" as "no event due" and
     # calls a buy into a CPI / jobs / Fed release, or holds every buy on a good day.
     "stock_analyzer/macro_read.py",
+    # Added 2026-11-27 (brief-consolidation C1, docs/plans/brief-consolidation-spec.md
+    # Q9): what counts as a reduce call on a name (Act-lane reduce kinds + Review trim
+    # types), which cards the news fold drops and annotates, and the Act / Aware bucket
+    # split; a wrong call hides a real sell behind a "hold" card or drops a risk flag.
+    "stock_analyzer/decision_bucket.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

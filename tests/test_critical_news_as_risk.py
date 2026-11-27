@@ -93,8 +93,16 @@ def test_helper_is_none_without_a_news_kind_or_flags(item):
 # -- (a) consolidated news+risk, earnings trim on the same ticker ------------------------
 
 def _consolidated():
+    # F-22a reversed by owner 2026-11-27 (brief-consolidation Q1): a `risk` item is never
+    # merged onto a same-ticker news / mechanical card, so the build now emits TWO cards
+    # (the flag-less news card + the sector risk card). `critical_news_as_risk` stays for
+    # legacy memoized Briefs that carry the old merged shape (the helper tests above and
+    # the risk-off fold test below use that shape).
     out = db._consolidate_act_today([_news(), _risk()], _port())
-    assert len(out) == 1 and out[0]["kind"] == "critical_news" and out[0]["risk_flags"]
+    assert len(out) == 2
+    news = next(i for i in out if i["kind"] == "critical_news")
+    risk = next(i for i in out if i["kind"] == "risk")
+    assert "risk_flags" not in news and risk["risk_flags"]
     return out
 
 
@@ -155,6 +163,9 @@ def _brief(monkeypatch, act):
 
 
 def test_risk_off_fold_keeps_the_sector_flag(monkeypatch):
+    # Hand-built pre-C1 shape (flag merged onto the news card): unreachable from a fresh
+    # build since brief-consolidation C1 (_act_today no longer merges a risk card); the
+    # fold branch is kept until C2 rewrites the risk-off exclusion.
     brief = _brief(monkeypatch, [_news(flags=[dict(_FLAG)])])
     aaa = [i for i in brief["act_today"] if i.get("ticker") == "AAA"]
     assert sorted(i["kind"] for i in aaa) == ["risk", "risk_off_derisk"]
