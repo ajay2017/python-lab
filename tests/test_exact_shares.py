@@ -221,3 +221,17 @@ def test_deterioration_sub_one_branch_not_fired_for_noisy_one_share():
                           deterioration=[_det("TRIM", shares)])[0]["directive"]
     assert "whole position is under one share" not in trim_dir
     assert "smallest real trim is 1 share" in trim_dir
+
+
+# ── FracNew: the Trade Journal confirm flow keeps a fractional lot ────────────
+
+def test_trade_journal_new_position_keeps_fractional_shares():
+    # app.py can't be imported; pin the source text. A new position used to store
+    # int(_pb_shares), so a 0.5-share buy became 0 and save_holdings dropped it.
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    assert '"Shares":       int(_pb_shares),' not in src
+    assert "int(_pb_shares) if _pb_shares == int(_pb_shares)" in src
+    assert "else float(_pb_shares))" in src
+    # a full sell with float noise closes the position (no dust row)
+    assert "if _ps_new <= 1e-6:" in src

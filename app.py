@@ -33028,7 +33028,10 @@ elif page == "📒 Trade Journal":
                     _ps_h_idx = _ps_h_df[_ps_h_mask].index[0]
                     _ps_cur   = float(_ps_h_df.at[_ps_h_idx, "Shares"])
                     _ps_new   = _ps_cur - _ps_shares
-                    if _ps_new <= 0:
+                    # FracNew sibling: float noise (0.1 + 0.2 stored as
+                    # 0.30000000000000004) must not leave a dust row after a full
+                    # sell; same 1e-6 floor as db.recalculate_from_trades.
+                    if _ps_new <= 1e-6:
                         _ps_h_df = _ps_h_df.drop(_ps_h_idx).reset_index(drop=True)
                         _ps_msg = f"✅ **{_ps_ticker}** fully exited — position removed from portfolio."
                     else:
@@ -33038,9 +33041,9 @@ elif page == "📒 Trade Journal":
                         _ps_pnl_str = f"{_signed_usd(_ps_pnl, 2)}" if _ps_pnl is not None else "—"
                         _ps_pnl_pct = ((_ps_price - _ps_cb) / _ps_cb * 100 if _ps_cb else 0)
                         _ps_msg = (
-                            f"✅ Sold **{_ps_shares:.0f} {_share_word(_ps_shares)} of {_ps_ticker}** "
+                            f"✅ Sold **{_ps_shares:g} {_share_word(_ps_shares)} of {_ps_ticker}** "
                             f"@ ${_ps_price:.2f}  ·  "
-                            f"Holdings: {_ps_cur:.0f} → {_ps_new:.0f} {_share_word(_ps_new)}  ·  "
+                            f"Holdings: {_ps_cur:g} → {_ps_new:g} {_share_word(_ps_new)}  ·  "
                             f"Realized P&L: **{_ps_pnl_str}** ({_ps_pnl_pct:+.1f}%)"
                         )
                     # D2: only claim success, and only update the app's own view,
@@ -33234,19 +33237,23 @@ elif page == "📒 Trade Journal":
                     )
                     _pb_h_df.at[_pb_h_idx, "Avg Cost ($)"] = _pb_new_avg
                     _pb_msg = (
-                        f"✅ Added **{_pb_shares:.0f} {_share_word(_pb_shares)} of {_pb_ticker}** @ ${_pb_price:.2f}  ·  "
-                        f"Holdings: {_pb_old_shares:.0f} → {_pb_new_shares:.0f} {_share_word(_pb_new_shares)}  ·  "
+                        f"✅ Added **{_pb_shares:g} {_share_word(_pb_shares)} of {_pb_ticker}** @ ${_pb_price:.2f}  ·  "
+                        f"Holdings: {_pb_old_shares:g} → {_pb_new_shares:g} {_share_word(_pb_new_shares)}  ·  "
                         f"New avg cost: **${_pb_new_avg:.2f}**"
                     )
                 else:
                     _pb_new_h_row = pd.DataFrame([{
                         "Ticker":       _pb_ticker,
-                        "Shares":       int(_pb_shares),
+                        # FracNew: keep a fractional lot (same rule as the add
+                        # branch above); int() turned a 0.5-share buy into 0 and
+                        # save_holdings' `shares > 0` filter then dropped it.
+                        "Shares":       (int(_pb_shares) if _pb_shares == int(_pb_shares)
+                                         else float(_pb_shares)),
                         "Avg Cost ($)": round(_pb_price, 4),
                     }])
                     _pb_h_df = pd.concat([_pb_h_df, _pb_new_h_row], ignore_index=True)
                     _pb_msg = (
-                        f"✅ New position opened: **{_pb_shares:.0f} × {_pb_ticker}** @ ${_pb_price:.2f}"
+                        f"✅ New position opened: **{_pb_shares:g} × {_pb_ticker}** @ ${_pb_price:.2f}"
                     )
                 # D2: only claim success, and only propagate the new book to
                 # this session's own view/caches, once db.save_holdings()
