@@ -402,7 +402,9 @@ def _run_intraday(monkeypatch, picks, *, allocations, save=_ok_save, trades="emp
     monkeypatch.setattr(cr, "is_trading_day", lambda _d: True)
     monkeypatch.setattr(cr.db, "load_scanner_cache",
                         lambda: {"df": pd.DataFrame({"Ticker": ["AAA"]}),
-                                 "scan_date": "2026-10-16"})
+                                 "scan_date": "2026-10-16",
+                                 # 09:47 ET (EDT) on the run day: a post-open scan (beta-gate C3)
+                                 "scanned_at": "2026-10-16T13:47:00+00:00"})
     payload = {"picks": picks, "errors": [], "built_at": "x", "book_drift": None,
                "macro_coverage": None, "budget_inputs": BUDGET_INPUTS}
     monkeypatch.setattr(cr, "compute_morning_picks", lambda **_k: payload)

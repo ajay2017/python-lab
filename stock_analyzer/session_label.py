@@ -11,7 +11,7 @@ from datetime import date, datetime, time, timedelta
 
 from stock_analyzer.data import is_trading_day
 
-_OPEN = time(9, 30)
+SESSION_OPEN = time(9, 30)
 _WALKBACK_DAYS = 10   # bounded so a broken calendar can never loop forever
 
 
@@ -20,7 +20,7 @@ def price_move_session(now_et: datetime) -> tuple[bool, date | None]:
     recent trading day strictly before today), or (False, None) if none found
     within the bounded walk-back."""
     today = now_et.date()
-    if is_trading_day(today) and now_et.time() >= _OPEN:
+    if is_trading_day(today) and now_et.time() >= SESSION_OPEN:
         return True, today
     d = today
     for _ in range(_WALKBACK_DAYS):

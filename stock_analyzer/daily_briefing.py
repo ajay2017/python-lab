@@ -111,6 +111,7 @@ from stock_analyzer import brief_trim_merge
 from stock_analyzer import act_trim_fold
 from stock_analyzer import breach_recovery
 from stock_analyzer import beta_fit_gate
+from stock_analyzer import scan_freshness
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.text_fmt import share_word
 from stock_analyzer import g32_shadow
@@ -872,7 +873,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 pair_add_blocks: dict | None = None,
                 corr_unchecked: list | None = None,
                 corr_coverage: dict | None = None,
-                beta_fit: dict | None = None) -> dict:
+                beta_fit: dict | None = None,
+                scan_state: dict | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -991,6 +993,18 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  `None` (the default: not wired, tests only) skips every beta
                  check and leaves every pre-existing key byte-identical. A
                  non-dict reads as {} (fit unknown -> hold).
+    scan_state : optional (beta-gate C3, ScanCacheAnyAge) -- a
+                 scan_freshness.decide result for the saved scan that feeds
+                 `scanner_results`. Anything but "fresh" (stale, unknown, or a
+                 non-dict) HOLDS the scan: the curated and mover pools are not
+                 evaluated, so no pick, overflow / flat-day pick or new_pick
+                 budget use comes from a scan that isn't today's post-open one;
+                 every qualifying scan name is listed unsized in
+                 `unevaluated_leads` and `scan_hold` carries the banner text.
+                 The ETF lane and the add lanes don't use the scan and are
+                 untouched. `None` (the default: not wired, tests only) leaves
+                 every pre-existing key byte-identical; `scan_hold` is always
+                 present (None when not wired or fresh).
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -1311,6 +1325,32 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         out.sort(key=lambda x: (-x["momentum_score"], x["ticker"]))
         return out
 
+    # Beta-gate C3 (ScanCacheAnyAge): the saved scan sizes picks only when
+    # scan_freshness says it is today's post-open scan. A non-dict reads as held.
+    _scan_held = scan_state is not None and (
+        not isinstance(scan_state, dict)
+        or scan_state.get("state") != scan_freshness.STATE_FRESH
+    )
+
+    def _scan_hold_out() -> dict | None:
+        """The `scan_hold` return value: None unless the scan is held; strings
+        only, so the memoised / locked Brief stays JSON-safe."""
+        if not _scan_held:
+            return None
+        _sd = scan_state if isinstance(scan_state, dict) else {}
+
+        def _iso(v):
+            return v.isoformat() if hasattr(v, "isoformat") else None
+
+        return {
+            "state":         _sd.get("state"),
+            "why":           _sd.get("why"),
+            "scanned_at_et": _iso(_sd.get("scanned_at_et")),
+            "scan_session":  _iso(_sd.get("scan_session")),
+            "next_session":  _iso(_sd.get("next_session")),
+            "banner":        scan_freshness.hold_banner(_sd),
+        }
+
     # On bear days — no new entries, return protection message
     if tone == "bear":
         # macro_coverage_expired is built AFTER all suppression decisions so it
@@ -1350,6 +1390,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "beta_blocked_picks":         [],
             "beta_unknown_picks":         [],
             "beta_blocked_adds":          [],
+            # Beta-gate C3: always present (None when not wired or fresh).
+            "scan_hold":                  _scan_hold_out(),
             # Grow Today owns every buy (2026-10-15): on a bear day nothing is
             # picked, so nothing can be pacing-held or flat-day-held; the
             # scanner names are ALL unevaluated and the would-qualify adds are
@@ -1443,7 +1485,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # Curated pool — momentum-gated, ranked by momentum + sector bonus, then
     # truncated to a working set for sector-diversity selection.
     curated_rows: list[dict] = []
-    if scanner_results is not None and not scanner_results.empty:
+    # Beta-gate C3: a held scan (not today's post-open one) is not evaluated at
+    # all, so curated_rows / mover_rows stay empty and every qualifying scan
+    # name falls through to unevaluated_leads below.
+    if (not _scan_held and scanner_results is not None
+            and not scanner_results.empty):
         _curated = scanner_results[
             (scanner_results["Score"] >= min_score) &
             (~scanner_results["Ticker"].isin(held_tickers))
@@ -1468,7 +1514,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # flat-day verdict gate. Ranked by composite (their quality signal).
     mover_rows: list[dict] = []
     _seen_ct = {str(d.get("Ticker", "")).upper() for d in curated_rows}
-    for m in (movers or []):
+    for m in ([] if _scan_held else (movers or [])):
         mt = str(m.get("ticker", "")).upper()
         if not mt or mt in held_tickers or mt in _seen_ct:
             continue
@@ -2978,6 +3024,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "beta_blocked_picks":         beta_blocked_picks,
         "beta_unknown_picks":         beta_unknown_picks,
         "beta_blocked_adds":          beta_blocked_adds,
+        # Beta-gate C3: always present (None when not wired or fresh).
+        "scan_hold":                  _scan_hold_out(),
         # Grow Today owns every buy (2026-10-15, OP-07 "gate the call, never
         # the candidate"). None of these four is a gate: overflow_picks are
         # pacing-held (no size), flat_day_held names the flat-day holds,
@@ -4528,6 +4576,7 @@ def build_daily_briefing(
     risk_coverage: dict | None = None,
     corr_coverage: dict | None = None,
     beta_fit: dict | None = None,
+    scan_state: dict | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -4587,6 +4636,12 @@ def build_daily_briefing(
                      {"portfolio_beta": float | None, "fit_state": dict}, passed
                      straight through to _grow_today (see its docstring). None
                      (the default: not wired, tests only) skips every beta check.
+    scan_state:      optional (beta-gate C3, ScanCacheAnyAge) a
+                     `scan_freshness.decide` result, passed straight through to
+                     _grow_today (see its docstring): anything but "fresh" holds
+                     the saved scan's picks and movers (listed unsized as leads,
+                     `scan_hold` carries the banner). None (the default: not
+                     wired, tests only) changes nothing.
 
     Returns dict with: act_today, review_list, grow_today, portfolio_tuneup.
     Grow Today owns every new-position and add-to-winner suggestion (the
@@ -4737,7 +4792,8 @@ def build_daily_briefing(
                          pair_add_blocks=pair_add_blocks,
                          corr_unchecked=corr_unchecked,
                          corr_coverage=corr_coverage,
-                         beta_fit=beta_fit)
+                         beta_fit=beta_fit,
+                         scan_state=scan_state)
     # EW C3: a single-name card on a name the Brief SELLS defers to that sell (with a
     # visible caption via `portfolio_tuneup_deferred`); never raw reduce_call keys.
     # DeferSizeBlind: only to a sell that COVERS the card's own trim (sell_cover).

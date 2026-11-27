@@ -102,6 +102,7 @@ from stock_analyzer import stop_basis_notice as _stop_basis_notice
 from stock_analyzer import llm
 from stock_analyzer import news_feed
 from stock_analyzer import risk_window
+from stock_analyzer import scan_freshness as _scan_freshness
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
     render_daily_action_email, render_intraday_entry_email, send_email_resend,
@@ -2733,15 +2734,18 @@ def _run_intraday(now_et, force: bool) -> int:
         _log("intraday: no scanner_cache available — run scan first.")
         return 0
     scanner_df = cache.get("df")
-    scan_date  = cache.get("scan_date")
     if scanner_df is None or (hasattr(scanner_df, "empty") and scanner_df.empty):
         _log("intraday: scanner_cache is empty — skip.")
         return 0
-    # Sanity: only use today's cache (stale data from yesterday → wrong picks).
-    # None scan_date means the row was written by an older code path with no date —
-    # treat as stale rather than assume it's fresh.
-    if (scan_date is None or scan_date != today_str) and not force:
-        _log(f"intraday: scanner_cache is from {scan_date!r}, not today ({today_str}) — skip.")
+    # Sanity: only use a scan taken at or after today's 09:30 ET open (an earlier
+    # session's prices size the wrong picks). The one rule is scan_freshness.decide
+    # (beta-gate C3, ScanCacheAnyAge); an unreadable or date-only scanned_at reads
+    # as not usable, never as fresh. `force` still bypasses.
+    _scan_dec = _scan_freshness.decide(cache, now_et)
+    if _scan_dec["state"] != _scan_freshness.STATE_FRESH and not force:
+        _scan_at = _scan_dec["scanned_at_et"]
+        _log(f"intraday: scanner_cache not usable ({_scan_dec['why']}; scanned "
+             f"{_scan_freshness.fmt_dt(_scan_at) if _scan_at else repr(cache.get('scanned_at'))}) — skip.")
         return 0
 
     # Re-derive go-verdict picks from the cached scan (mirrors what _run_scan does).

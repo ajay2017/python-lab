@@ -128,6 +128,7 @@ from stock_analyzer import playbook_trend_view
 from stock_analyzer import brief_chips
 from stock_analyzer import act_trim_fold   # BriefSkipSizeBlind: the journal-context gate for a folded min_trim
 from stock_analyzer import buy_check_state   # entry-fail-closed C2b: Watchlist fit_state / beta_or_none
+from stock_analyzer import scan_freshness    # beta-gate C3: the one rule for whether the saved scan may size picks
 from stock_analyzer import watchlist_fit_source   # entry-fail-closed C2b: which frame the Watchlist's sector / beta checks read
 from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.valuation_target import pt_label as _pt_label
@@ -3475,6 +3476,28 @@ _check_password()
 # ── Session state — load from DB once per session ────────────────────────────
 if "scanner_results" not in st.session_state:
     st.session_state.scanner_results = None
+
+
+def _set_scanner_results(df, meta: dict) -> None:
+    """The ONE place `scanner_results` is assigned (beta-gate C3): sets the
+    results, the meta that says when and where they came from (`scanned_at` a
+    real timestamp, `from_cache` True only for a row read from scanner_cache) and
+    bumps `_scanner_ver` so the Home synthesis memo rebuilds against them."""
+    st.session_state.scanner_results = df
+    st.session_state["_scanner_results_meta"] = meta
+    st.session_state["_scanner_ver"] = st.session_state.get("_scanner_ver", 0) + 1
+
+
+# Short-TTL read of the saved scan so a session that hydrated a stale scan before
+# the morning scan ran can pick up the newer one (4b). Cache plumbing, not policy.
+_SCAN_REHYDRATE_TTL_S = 120
+
+
+@st.cache_data(ttl=_SCAN_REHYDRATE_TTL_S, show_spinner=False)
+def _load_scan_cache_rehydrate():
+    return db.load_scanner_cache()
+
+
 # One-time hydrate: pull the latest persisted scan (written by the headless cron
 # post-open each trading day, or a prior manual full scan) into scanner_results so
 # the Home buy-candidate / Grow-Today new-pick lists populate on a COLD load
@@ -3490,15 +3513,36 @@ if (st.session_state.scanner_results is None
         _persisted_scan = None
     if (_persisted_scan and _persisted_scan.get("df") is not None
             and not _persisted_scan["df"].empty):
-        st.session_state.scanner_results = _persisted_scan["df"]
-        st.session_state["_scanner_results_meta"] = {
+        # _set_scanner_results also bumps _scanner_ver, so the Home synthesis
+        # cache rebuilds against the hydrated scanner results.
+        _set_scanner_results(_persisted_scan["df"], {
             "scan_date":  _persisted_scan.get("scan_date"),
             "source":     _persisted_scan.get("source"),
             "scanned_at": _persisted_scan.get("scanned_at"),
-        }
-        # Invalidate the Home synthesis cache so the Brief rebuilds against the
-        # hydrated scanner results (same signal a manual scan raises).
-        st.session_state["_scanner_ver"] = st.session_state.get("_scanner_ver", 0) + 1
+            "from_cache": True,
+        })
+# Beta-gate C3 (4b): whenever the session's scan (any source, or none) isn't today's
+# post-open scan, the saved scan is re-read (short-TTL wrapper) and replaces it only
+# when strictly newer (should_replace). A fresh scan is never touched, and a scan the
+# user just saved is never replaced by its own (older or equal) cache row. A failed
+# read keeps the current scan.
+_rh_meta = st.session_state.get("_scanner_results_meta")
+if (scan_freshness.decide(_rh_meta, _now_et())["state"]
+        != scan_freshness.STATE_FRESH):
+    try:
+        _rh_scan = _load_scan_cache_rehydrate()
+        if (_rh_scan and _rh_scan.get("df") is not None
+                and not _rh_scan["df"].empty):
+            _rh_new_meta = {
+                "scan_date":  _rh_scan.get("scan_date"),
+                "source":     _rh_scan.get("source"),
+                "scanned_at": _rh_scan.get("scanned_at"),
+                "from_cache": True,
+            }
+            if scan_freshness.should_replace(_rh_meta, _rh_new_meta):
+                _set_scanner_results(_rh_scan["df"], _rh_new_meta)
+    except Exception:
+        pass
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = _now_et()
 if "nav_page" not in st.session_state:
@@ -7492,6 +7536,10 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
+    # Beta-gate C3 (ScanCacheAnyAge): whether the saved scan may size today's picks,
+    # decided once per run and passed to BOTH build_daily_briefing calls below.
+    _scan_decision = scan_freshness.decide(
+        st.session_state.get("_scanner_results_meta"), _now_et())
     def _brief_beta_fit(_pr) -> dict:
         """Beta-gate C2 (G-06 on Grow Today): {"portfolio_beta", "fit_state"} for
         build_daily_briefing, from the SAME `_port_risk` the Brief is memoised with
@@ -7506,7 +7554,7 @@ if page == "🏠 Home":
     # price history this signature already covers (the risk build is memoised WITH the
     # Brief), so they are not added to it; the schema version below invalidates a Brief
     # memoised before the G-06 holds existed.
-    _SYNTH_SCHEMA_VER = 34  # bumped: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 35  # bumped: Grow Today carries scan_hold and sizes no pick off a saved scan that isn't today's post-open scan (ScanCacheAnyAge, beta-gate C3); was 34: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -7523,6 +7571,9 @@ if page == "🏠 Home":
         st.session_state.get("_brief_auto_refresh_nonce", 0),
         _cluster_baseline_sig,
         _SYNTH_SCHEMA_VER,
+        # Whether the saved scan is fresh can change at 09:30 or at midnight ET with
+        # no new scan (which _scanner_ver would not see): beta-gate C3.
+        (_scan_decision["state"], _scan_decision["why"]),
         # Every holding's stop (to the cent) and its basis: a new stop, or a
         # basis change, rebuilds the Brief (finding #26 C3).
         _held_stop_wiring.held_sig(port_df),
@@ -7696,6 +7747,8 @@ if page == "🏠 Home":
                         risk_coverage   = _risk_coverage,
                         # G-06 on Grow Today (beta-gate C2): the memoised risk build's beta.
                         beta_fit        = _brief_beta_fit(_port_risk),
+                        # ScanCacheAnyAge (beta-gate C3): the saved scan sizes picks only when fresh.
+                        scan_state      = _scan_decision,
                     )
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
@@ -8151,6 +8204,8 @@ if page == "🏠 Home":
                     risk_coverage   = _risk_coverage,
                     # G-06 on Grow Today (beta-gate C2): this build's own risk beta.
                     beta_fit        = _brief_beta_fit(_port_risk),
+                    # ScanCacheAnyAge (beta-gate C3): the saved scan sizes picks only when fresh.
+                    scan_state      = _scan_decision,
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -9678,11 +9733,12 @@ if page == "🏠 Home":
                     _rs_help = f"Signals refreshed {_sig_age // 60}m ago. Click to pull latest."
                 else:
                     _rs_help = f"Signals last refreshed {_sig_age // 3600}h ago — stale, refresh recommended."
-            elif _ssm.get("scan_date") == _today_et().isoformat():
-                _src_phrase = "auto-scan (~10 AM ET)" if _ssm.get("source") == "cron" else "scan"
-                _rs_help = f"Signals from today's {_src_phrase}. Click to re-score on live prices intraday."
-            elif _ssm.get("scan_date"):
-                _rs_help = f"Signals from {_ssm['scan_date']} scan — click to score today's price action."
+            elif scan_freshness.signals_tooltip(
+                    scan_freshness.decide(_ssm, _now_et()), _ssm.get("source")):
+                # Beta-gate C3: the same freshness decision that sizes picks (a
+                # scan_date-only test read a pre-open scan as today's).
+                _rs_help = scan_freshness.signals_tooltip(
+                    scan_freshness.decide(_ssm, _now_et()), _ssm.get("source"))
             else:
                 _rs_help = "Re-fetches live prices and re-runs the market scanner. Best used ~15 min after market open."
         _do_refresh = st.button(
@@ -9757,20 +9813,19 @@ if page == "🏠 Home":
                 universe=_ru_sector_universe,
             )
         if not _fresh_results.empty:
-            st.session_state.scanner_results = _fresh_results
-            # New scan → invalidate the Home synthesis cache so the Brief
-            # rebuilds against the fresh scanner results.
-            st.session_state["_scanner_ver"] = \
-                st.session_state.get("_scanner_ver", 0) + 1
             # Persist (full-universe scan) so the next cold load / session
             # shows candidates without re-scanning. Mirrors what the cron writes.
             # (_today_et() already returns a date — no .date().)
             _today_d = _today_et()
             db.save_scanner_cache(_fresh_results, _today_d, source="app")
-            st.session_state["_scanner_results_meta"] = {
+            # New scan → _set_scanner_results bumps _scanner_ver so the Brief
+            # rebuilds against the fresh scanner results. `scanned_at` is the real
+            # timestamp (it used to be a bare date, which hid a pre-open scan).
+            _set_scanner_results(_fresh_results, {
                 "scan_date": _today_d.isoformat(), "source": "app",
-                "scanned_at": _today_d.isoformat(),
-            }
+                "scanned_at": pd.Timestamp.now(tz="UTC").isoformat(),
+                "from_cache": False,
+            })
             # Pre-fetch full composite analysis for top GROW_CANDIDATE_POOL
             # (= 12) non-held scanner picks. Pool size matches _grow_today's
             # candidate window (max_picks_bull × over-fetch) so every candidate
@@ -10668,11 +10723,17 @@ if page == "🏠 Home":
             _leads = [_l for _l in _leads
                       if str(_l.get("ticker", "")).upper() not in _grow_shown]
         if isinstance(_leads, list) and _leads:
+            # Beta-gate C3: under a scan hold the leads come from a saved scan that
+            # can't size a pick today; the heading and caption name that scan.
+            _leads_hold = grow.get("scan_hold")
+            _leads_held = isinstance(_leads_hold, dict)
             with st.expander(
-                f"Momentum leads — not checked today ({len(_leads)})",
+                (scan_freshness.leads_heading(_leads_hold, len(_leads)) if _leads_held
+                 else f"Momentum leads — not checked today ({len(_leads)})"),
                 expanded=False, key="_gt_leads_exp",
             ):
-                st.caption(_hold_reasons.leads_note(tone))
+                st.caption(scan_freshness.leads_note(_leads_hold) if _leads_held
+                           else _hold_reasons.leads_note(tone))
                 for _ld in _leads:
                     _ld_tk = str(_ld.get("ticker", "")).strip()
                     if not _ld_tk:
@@ -10914,7 +10975,11 @@ if page == "🏠 Home":
             if _movers_ran:
                 _reach_parts.append(f"{_disc_extra_n} discovery")
             _reach_src = " + ".join(_reach_parts)
-            if _finalists_n:
+            # Under a scan hold Grow Today scored nothing (the banner says why), so the
+            # "reached full composite scoring" line would be false: not shown.
+            if isinstance(grow.get("scan_hold"), dict):
+                pass
+            elif _finalists_n:
                 st.caption(
                     f"🔭 Screened {_reach_src} names → "
                     f"{_finalists_n} reached full composite scoring."
@@ -10938,7 +11003,8 @@ if page == "🏠 Home":
             _fn_universe = _tracked_n + _wl_extra_n + (_disc_extra_n if _movers_ran else 0)
             _fn_scored   = _finalists_n
             _fn_picks    = len(new_picks)
-            if _fn_scored > 0 and _fn_universe >= _fn_scored >= _fn_picks:
+            if (_fn_scored > 0 and _fn_universe >= _fn_scored >= _fn_picks
+                    and not isinstance(grow.get("scan_hold"), dict)):
                 with st.expander("🔎 How today's screen funnelled down to picks", expanded=False):
                     _fn_notscored = _fn_universe - _fn_scored
                     _fn_belowbar  = min(len(comp_skipped), _fn_scored - _fn_picks)
@@ -11092,7 +11158,15 @@ if page == "🏠 Home":
                 unsafe_allow_html=True,
             )
 
-        if not new_picks and not add_pos:
+        # Beta-gate C3 (ScanCacheAnyAge): a saved scan that isn't today's post-open scan
+        # sizes nothing; say so here. The empty-state caption below ("none of the scored
+        # candidates cleared ...") must not render then: nothing was scored.
+        _scan_hold_ui = grow.get("scan_hold")
+        if isinstance(_scan_hold_ui, dict):
+            _scan_hold_txt = _scan_hold_ui.get("banner")
+            if isinstance(_scan_hold_txt, str) and _scan_hold_txt:
+                st.info(_scan_hold_txt.replace("$", "\\$"))
+        if not new_picks and not add_pos and not isinstance(_scan_hold_ui, dict):
             # No actionable setups — show the empty-state message, but
             # DON'T early-return. Filtered-out / macro-blocked candidates
             # are still rendered below so the user understands WHY there
@@ -11218,6 +11292,11 @@ if page == "🏠 Home":
                 f"today's new-position budget below limits the total."
             )
             _budget_status_captions()
+            # One freshness per number (beta-gate C3): holdings are live, but a pick's
+            # size comes from the scan's prices; say which scan.
+            _priced_at = scan_freshness.priced_at_label(_scan_decision)
+            if _priced_at:
+                st.caption(_priced_at)
             # Pre-open note (panel-level, single line, NOT per-card).
             # Shows only in Pre-Market — prices are provisional until the
             # 9:30 ET open. On weekends/holidays/after-hours/closed we omit
@@ -26291,11 +26370,15 @@ elif page == "🔍 Market Scanner":
                 universe=_ms_universe,
             )
         if not results_df.empty:
-            st.session_state.scanner_results = results_df
-            # New scan → invalidate the Home synthesis cache (the Brief consumes
-            # scanner_results) so it rebuilds when the user returns to Home.
-            st.session_state["_scanner_ver"] = \
-                st.session_state.get("_scanner_ver", 0) + 1
+            # New scan → _set_scanner_results bumps _scanner_ver (the Brief consumes
+            # scanner_results) so it rebuilds when the user returns to Home. It also
+            # sets the meta (this page used to leave a stale hydrated meta beside
+            # the subset results).
+            _set_scanner_results(results_df, {
+                "scan_date": _today_et().isoformat(), "source": "app_subset",
+                "scanned_at": pd.Timestamp.now(tz="UTC").isoformat(),
+                "from_cache": False,
+            })
             # NOTE: this Market Scanner page scans a user-chosen sector SUBSET
             # (+ watchlist), so it is intentionally NOT persisted to scanner_cache
             # — only the full-universe Home scan + the cron seed the cache, so the

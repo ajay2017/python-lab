@@ -1072,6 +1072,12 @@ _APP_ONLY_BRIEF_KWARGS = {
     # for the Home banner; read by no gate. The cron alerts on an outage itself
     # via news_feed.outage_failure.
     "news_feed",
+    # Beta-gate C3 (ScanCacheAnyAge): the app's saved scan can be an older session's,
+    # so Home passes scan_freshness.decide. The cron needs no copy: the 09:45 scan
+    # lane scans fresh after its post-open guard (_run_scan), and the intraday lane
+    # refuses a cache that scan_freshness.decide does not call fresh before it
+    # builds anything (_run_intraday; `force` is the manual bypass).
+    "scan_state",
 }
 
 

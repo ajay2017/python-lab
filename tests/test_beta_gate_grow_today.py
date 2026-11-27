@@ -501,7 +501,7 @@ def test_app_beta_fit_helper_reads_the_memoised_risk_through_get_or_offline():
     body = src[src.index("def _brief_beta_fit("):][:900]
     assert "_get_or_offline(_pr, \"beta\")" in body
     assert "buy_check_state.fit_state(" in body
-    assert "_SYNTH_SCHEMA_VER = 34" in src
+    assert "_SYNTH_SCHEMA_VER = 35" in src
 
 
 def test_app_grow_shown_and_dropoff_buckets_include_the_new_keys():

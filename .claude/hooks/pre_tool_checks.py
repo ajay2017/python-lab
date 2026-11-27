@@ -1370,6 +1370,11 @@ _GATE_FILES = {
     # and (from C2) Grow Today and the cron emails; a wrong call lets a high-beta buy
     # onto a high-beta book, or holds one that fits.
     "stock_analyzer/beta_fit_gate.py",
+    # Added 2026-11-26 (beta gate C3, docs/plans/beta-gate-c3-spec.md): the one rule
+    # for whether the saved market scan may size today's new picks (only a scan taken
+    # at or after today's 09:30 ET open); a wrong call sizes picks off another
+    # session's prices, or hides fresh ones.
+    "stock_analyzer/scan_freshness.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window
