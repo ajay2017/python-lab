@@ -1,5 +1,7 @@
 # Measuring whether Rebalancer / Diversification-ADD / Tax-Harvest calls actually worked
 
+**Population event 2026-11-26 (beta gate C2 `4bdb27a0` + C3 `5dbbb810`; criteria unchanged, precedent D10):** from these deploys 🏠 Grow Today / the 09:45 and 11:30 emails no longer issue a `new_pick` for a high-beta name on a high-beta book (G-06, ledgered lane `new_pick` / `add_winner`) or one whose beta couldn't be checked (no row), and no app `new_pick` row is written from a scan that isn't today's post-open scan (pre-09:45 visits used to log stale-priced picks that won the first-writer upsert). Calls before and after this date come from different populations; split a readout at 2026-11-26 if a difference appears. C4 (11:30 email skips a pick below its stop) shifts the intraday population the same way once shipped.
+
 **Status: BOTH PHASES SHIPPED. Phase 1a 2026-09-15 (commit `a7498b3`); Phase 1b/2
 2026-09-17 (F-273b).** §10 is the original Opus `planner` design (Opus 4.8); §11 records
 Phase 1a's ratified decisions. Phase 1a built exactly as specified — two independent Opus

@@ -2,6 +2,8 @@
 
 **STATUS CORRECTED 2026-10-30: SHIPPED 2026-08-05 as F-229** (`b2d40c4`, engine BUY-call alpha on 🧾 Summary; `8d13014` added the 🛡️ Defense facet). The "PLANNING — not built" line below is stale; `docs/requirements.md` F-229 is authoritative.
 
+**Population event 2026-11-26 (beta gate C2 `4bdb27a0` + C3 `5dbbb810`; criteria unchanged, precedent D10):** from these deploys 🏠 Grow Today / the 09:45 and 11:30 emails no longer issue a `new_pick` for a high-beta name on a high-beta book (G-06, ledgered lane `new_pick` / `add_winner`) or one whose beta couldn't be checked (no row), and no app `new_pick` row is written from a scan that isn't today's post-open scan (pre-09:45 visits used to log stale-priced picks that won the first-writer upsert). Calls before and after this date come from different populations; split a readout at 2026-11-26 if a difference appears. C4 (11:30 email skips a pick below its stop) shifts the intraday population the same way once shipped.
+
 **Status:** PLANNING — 2026-08-05. Not built. **Awaiting user review of this plan + the mockup at [docs/mockups/engine-track-record-meter.html](../mockups/engine-track-record-meter.html) before any code.**
 
 **Origin:** First zoom-in from [next-evolution-2026-08-05.md](next-evolution-2026-08-05.md) (Brainstorm Pass #2), Lens 2/3 — "the app's own track record as a standing surface."

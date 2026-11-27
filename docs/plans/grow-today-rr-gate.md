@@ -1,5 +1,7 @@
 # Grow Today R:R gate (G-32): entry reward:risk ≥ 2:1 on new picks AND adds
 
+**Population event 2026-11-26 (beta gate C2 `4bdb27a0` + C3 `5dbbb810`; criteria unchanged, precedent D10):** from these deploys 🏠 Grow Today / the 09:45 and 11:30 emails no longer issue a `new_pick` for a high-beta name on a high-beta book (G-06, ledgered lane `new_pick` / `add_winner`) or one whose beta couldn't be checked (no row), and no app `new_pick` row is written from a scan that isn't today's post-open scan (pre-09:45 visits used to log stale-priced picks that won the first-writer upsert). Calls before and after this date come from different populations; split a readout at 2026-11-26 if a difference appears. C4 (11:30 email skips a pick below its stop) shifts the intraday population the same way once shipped.
+
 **Status:** **C4 SHIPPED 2026-10-28** (standalone, ahead of C3): the Watchlist G-13, the Home Rebalancer and 📡 Signals Diversification "genuine entry" headlines, the 📈 Analysis gate tile / F-43b caveat now use `entry_rr.measure` (unrounded), and every R:R that can sit below 2:1 is printed with `rr_readout.fmt_ratio_vs`; `targets.risk_reward` has no production caller left (only `scripts/grow_rr_dryrun.py`). Opus SHIP, 0 blocking. Enforcement (C3 + C5) still waits on the shadow readout.
 
 Earlier: C1 BUILT 2026-10-23 (`stock_analyzer/entry_rr.py`, `scripts/grow_rr_dryrun.py`; Opus FIX-FIRST/2 → SHIP/0).
