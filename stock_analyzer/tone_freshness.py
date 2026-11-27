@@ -16,10 +16,11 @@ app.py.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from stock_analyzer import session_label
+from stock_analyzer.data import is_trading_day
 from stock_analyzer.constants import TONE_HOME_READ_MAX_AGE_MINUTES
 
 _ET = ZoneInfo("America/New_York")
@@ -147,8 +148,8 @@ def unread_detail(ts) -> str:
     if why == WHY_HOME_UNREADABLE:
         return f"{home} has no readable time and a fresh S&P 500 read failed."
     if why == WHY_HOME_FAILED:
-        return ("🏠 Home's Brief couldn't read the S&P 500 this run and a fresh "
-                "S&P 500 read failed.")
+        return ("🏠 Home's Brief couldn't read the S&P 500 this run, so its new "
+                "picks are held too.")
     if why == WHY_HOME_NOT_TODAY:
         return "🏠 Home's Brief isn't built today and the S&P 500 read failed."
     return "The S&P 500 read failed."
@@ -169,3 +170,242 @@ def session_phrase(ts) -> "str | None":
         return session_label.move_when_phrase(d)
     except Exception:
         return None
+
+
+# ── Grow Today's own hold (buy-check C4b) ────────────────────────────────────
+# `grow_entry_hold` is the ONE decision "Grow Today may not make a new-position,
+# ETF or add call right now".  It reads the market context Home / the cron built
+# and the date the Brief is for; it reads no clock.
+CHECK_UNREAD = "tone_unread"
+CHECK_NOT_TODAY = "tone_not_today"
+
+_NEXT_SESSION_WALK_DAYS = 10   # bounded so a broken calendar can never loop forever
+
+
+def _open_text() -> str:
+    t = session_label.SESSION_OPEN
+    return f"{t.hour % 12 or 12}:{t.minute:02d} {'AM' if t.hour < 12 else 'PM'} ET"
+
+
+def _day_text(d) -> str:
+    """"Wed Nov 25" (no %-d: Windows-safe)."""
+    return f"{d.strftime('%a %b')} {d.day}"
+
+
+def _next_session_after(today: date) -> "date | None":
+    """The first trading day strictly after `today`, or None inside the bounded walk."""
+    d = today
+    for _ in range(_NEXT_SESSION_WALK_DAYS):
+        d = d + timedelta(days=1)
+        if is_trading_day(d):
+            return d
+    return None
+
+
+def tone_unread(market_context) -> bool:
+    """True when the context says the S&P 500 read didn't happen: not a dict,
+    ``tone_available`` False, or True with a % that isn't a finite number, or a
+    ``tone_read_at`` key that is present but not an aware datetime.  A context
+    with no ``tone_available`` key at all (legacy / tests) is NOT unread."""
+    if not isinstance(market_context, dict):
+        return True
+    avail = market_context.get("tone_available")
+    if avail is False:
+        return True
+    if avail is True and not _finite(market_context.get("sp500_pct")):
+        return True
+    if "tone_read_at" in market_context and not _aware(market_context.get("tone_read_at")):
+        return True
+    return False
+
+
+def _unread_hold() -> dict:
+    reason = unread_reason()
+    clears = "once the S&P 500 read succeeds"
+    return {
+        "check": CHECK_UNREAD,
+        "reason": reason,
+        "clears_when": clears,
+        "banner": (f"⏸ New picks, ETF picks and adds are held: {reason}, so Grow "
+                   f"Today can't tell a flat day from a falling one. They return {clears}."),
+        "session": None,
+    }
+
+
+CLEARS_READ_AGAIN = "when the market move is read again"
+
+
+def _not_today_hold(read_et, today_d) -> "dict | None":
+    """The `tone_not_today` hold for a read taken at `read_et` (an aware ET
+    datetime) when the Brief is for `today_d`, or None when the read is from
+    today's own session.  ONE wording helper for Grow Today's hold and the
+    redeploy headline's deferral (`redeploy_grow_hold`)."""
+    is_today, sess = session_label.price_move_session(read_et)
+    if is_today and sess == today_d:
+        return None
+    sess_text = _day_text(sess) if isinstance(sess, date) else "an earlier session"
+    read_day = read_et.date()
+    if read_day != today_d:
+        # A read dated before (or, across a midnight-straddling build, after)
+        # `today`: its move is another day's, whatever the clock says now.
+        which = "an earlier" if read_day < today_d else "a different"
+        reason = (f"the market read is from {which} day — the latest move it "
+                  f"carries is {sess_text}'s")
+        clears = CLEARS_READ_AGAIN
+    elif is_trading_day(today_d):
+        reason = f"today's session hasn't opened yet — the latest move is {sess_text}'s"
+        clears = f"after the {_open_text()} open"
+    else:
+        nxt = _next_session_after(today_d)
+        reason = f"the market is closed today — the latest move is {sess_text}'s"
+        clears = (f"on {_day_text(nxt)} after the open" if nxt is not None
+                  else "at the next session's open")
+    return {
+        "check": CHECK_NOT_TODAY,
+        "reason": reason,
+        "clears_when": clears,
+        "banner": f"⏸ No new picks, ETF picks or adds yet: {reason}. They return {clears}.",
+        "session": sess.isoformat() if isinstance(sess, date) else None,
+    }
+
+
+def redeploy_grow_hold(home_grow_hold, tone_state, today) -> "dict | None":
+    """The Grow Today hold the redeploy headline defers to (owner rule #14: the
+    headline defers to Grow Today).  `home_grow_hold` (🏠 Home's Brief
+    `grow_today["entry_hold"]`) when it is a dict; else, when `tone_state` is an
+    available tone read whose `as_of` (an aware datetime) is not today's session,
+    the same `tone_not_today` hold Grow Today would make from that read; else None
+    (an unavailable tone has its own "couldn't be read" wording).
+
+    A STALE Home hold is dropped: a `tone_not_today` hold from a pre-open /
+    closed-day Home build is ignored when the page's own tone read is a post-open
+    read of today's session (`price_move_session(as_of) == (True, today)`), because
+    its "returns after the open" is no longer true (📡 Signals reads a cached Home
+    Brief).  A Home `tone_unread` hold always passes through.  On 🏠 Home itself the
+    hold and `tone_state` come from the same build, so a not-today hold never meets
+    a post-open read and behaviour there is unchanged.  No clock; never raises."""
+    try:
+        today_d = today.date() if isinstance(today, datetime) else today
+        as_of = tone_state.get("as_of") if isinstance(tone_state, dict) else None
+        page_read = (
+            as_of.astimezone(_ET)
+            if isinstance(tone_state, dict) and tone_state.get("available") is True
+            and _aware(as_of) else None
+        )
+        if isinstance(home_grow_hold, dict):
+            if (home_grow_hold.get("check") == CHECK_NOT_TODAY and page_read is not None
+                    and session_label.price_move_session(page_read) == (True, today_d)):
+                return None
+            return home_grow_hold
+        if page_read is None:
+            return None
+        return _not_today_hold(page_read, today_d)
+    except Exception:
+        return None
+
+
+def grow_entry_hold(market_context, today) -> "dict | None":
+    """``None`` when Grow Today may call new entries, else a JSON-safe dict of
+    strings ``{"check", "reason", "clears_when", "banner", "session"}``.
+
+    ``tone_unread``: the S&P 500 read failed (or is unusable): never a flat day.
+    ``tone_not_today`` (owner U2, 2026-11-27): the read's price-move session is
+    not today's, i.e. a pre-open build, a weekend / holiday, or a read from an
+    earlier day: the move it carries is another session's, so ETF picks and adds
+    (the scan's picks are held by the scan-freshness gate) wait for today's open.
+    A context with no ``tone_available`` and no ``tone_read_at`` key (legacy /
+    tests) is not held.  ``today`` is a date; no clock is read here.  Never raises
+    and fails CLOSED: a context it can't judge is an unread one."""
+    try:
+        today_d = today.date() if isinstance(today, datetime) else today
+        if tone_unread(market_context):
+            return _unread_hold()
+        if "tone_read_at" not in market_context:
+            return None            # legacy context: no read time to judge
+        return _not_today_hold(market_context["tone_read_at"].astimezone(_ET), today_d)
+    except Exception:
+        return _unread_hold()
+
+
+# ── Pure view builders (app.py renders what they return) ─────────────────────
+def _count_setups(grow) -> int:
+    n = 0
+    if isinstance(grow, dict):
+        for k in ("new_picks", "add_positions"):
+            v = grow.get(k)
+            n += len(v) if isinstance(v, (list, tuple)) else 0
+    return n
+
+
+def grow_count_text(grow) -> str:
+    """The Today's Actions card's Grow Today line (no emoji): "Grow Today held"
+    when Grow Today is holding every entry (never "0 Grow Today"), else
+    "<n> Grow Today" over picks + adds."""
+    if isinstance(grow, dict) and isinstance(grow.get("entry_hold"), dict):
+        return "Grow Today held"
+    return f"{_count_setups(grow)} Grow Today"
+
+
+def grow_header_view(grow, tone) -> dict:
+    """``{"held", "count", "subtitle", "show_cleared"}`` for the Grow Today header.
+
+    ``count`` is the header suffix (" (held)", " (3 setups)" or ""); ``subtitle``
+    the tone line (a hold names itself instead of any tone line);
+    ``show_cleared`` whether "Cleared all 5 portfolio checks" may print (a bull
+    tone only, never on a held day)."""
+    g = grow if isinstance(grow, dict) else {}
+    hold = g.get("entry_hold")
+    if isinstance(hold, dict):
+        why = hold.get("reason") or "the market move isn't usable"
+        return {"held": True, "count": " (held)",
+                "subtitle": f"New picks and adds are held: {why}.",
+                "show_cleared": False}
+    n = _count_setups(g)
+    count = f" ({n} setup{'' if n == 1 else 's'})" if n else ""
+    subtitle = ("Defer new entries — protect capital, reduce exposure." if tone == "bear" else
+                "High-conviction only — elevated caution in effect." if tone == "flat" else "")
+    return {"held": False, "count": count, "subtitle": subtitle,
+            "show_cleared": tone == "bull"}
+
+
+def tone_card_view(market_context, now_et) -> dict:
+    """What the Home market-tone card shows, from the Brief's market context.
+
+    ``{"tone_key", "label", "sp_line", "nq_line", "date_text", "is_stale",
+    "last_close_text", "note"}``.  ``tone_key`` is "bull" / "bear" / "flat", or
+    "unread" when the S&P read failed (then the label never says "Hold Steady —
+    Mixed Market", the S&P line has no %, ``nq_line`` is None and ``note`` says the
+    picks are held).  ``is_stale`` / ``last_close_text`` come from
+    ``session_label.price_move_session`` (it knows holidays): True and the last
+    completed session ("Wed Nov 25") before the open and on a closed day.
+    ``date_text`` is today's date plus " · data as of ..." when stale.  Never raises."""
+    ctx = market_context if isinstance(market_context, dict) else {}
+    try:
+        is_today, last = session_label.price_move_session(now_et)
+    except Exception:
+        is_today, last = True, None
+    stale = not is_today
+    last_text = last.strftime("%a %b %d") if stale and isinstance(last, date) else None
+    try:
+        date_text = now_et.strftime("%A, %B %d %Y")
+    except Exception:
+        date_text = ""
+    if stale and last_text:
+        date_text += f" · data as of {last_text}"
+    base = {"is_stale": stale, "last_close_text": last_text, "date_text": date_text}
+    if tone_unread(market_context):
+        return {**base, "tone_key": "unread", "label": "⚠️ Market Move Not Read",
+                "sp_line": "S&P 500 — not read", "nq_line": None,
+                "note": ("Market move couldn't be read this run — new picks, ETF picks "
+                         "and adds are held until it can be.")}
+    tone = ctx.get("tone", "flat")
+    tone = tone if tone in ("bull", "bear") else "flat"
+    label = ("📈 Growth Mode — Markets Up" if tone == "bull" else
+             "🛡️ Protect Mode — Markets Down" if tone == "bear" else
+             "📊 Hold Steady — Mixed Market")
+    sp = ctx.get("sp500_pct", 0.0)
+    nq = ctx.get("nasdaq_pct", 0.0)
+    return {**base, "tone_key": tone, "label": label,
+            "sp_line": f"S&P 500 {float(sp):+.2f}%" if _finite(sp) else "S&P 500 — not read",
+            "nq_line": f"Nasdaq {float(nq):+.2f}%" if _finite(nq) else None,
+            "note": None}

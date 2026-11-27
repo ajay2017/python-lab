@@ -103,6 +103,7 @@ from stock_analyzer import llm
 from stock_analyzer import news_feed
 from stock_analyzer import risk_window
 from stock_analyzer import scan_freshness as _scan_freshness
+from stock_analyzer import tone_freshness as _tone_freshness
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
     render_daily_action_email, render_intraday_entry_email, send_email_resend,
@@ -466,6 +467,30 @@ def _news_feed_check(*feeds) -> "str | None":
     if line:
         _log(f"NEWS FEED OUTAGE — {line}")
     return line
+
+
+def _entry_hold_text(hold) -> str:
+    """Log wording for the Grow Today `diag["entry_hold"]` check name (buy-check
+    C4b): why the run's new picks were held."""
+    if hold == _tone_freshness.CHECK_UNREAD:
+        return "market move couldn't be read — new picks held (G-34)"
+    return "the market read isn't today's session — new picks held (G-34)"
+
+
+def _tone_unread_failure(payload) -> "str | None":
+    """The lane-failure line (owner U3, 2026-11-27) when this run's S&P 500 read
+    failed: `payload["diag"]["entry_hold"] == "tone_unread"`, else None. A
+    `tone_not_today` hold (only a forced pre-open / closed-day run) is not a
+    failed read and raises nothing. Pure; never raises."""
+    try:
+        d = payload.get("diag") if isinstance(payload, dict) else None
+        hold = d.get("entry_hold") if isinstance(d, dict) else None
+        if hold == _tone_freshness.CHECK_UNREAD:
+            return ("tone_unread: the S&P 500 read failed — no buy-list or Watchlist "
+                    "Enter Now this run")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _log_watchlist_earnings_read(payload) -> None:
@@ -2555,7 +2580,11 @@ def _run_scan(now_et, force: bool) -> int:
         _tone = d.get("tone", "?")
         _sp = d.get("sp500_pct")
         _spr = f"{_sp:+.2f}%" if isinstance(_sp, (int, float)) else "n/a"
-        if _tone == "bear":
+        if d.get("entry_hold"):
+            # Buy-check C4b: checked before the tone wording (a failed read's
+            # tone is "flat", never a reading).
+            _why = _entry_hold_text(d.get("entry_hold"))
+        elif _tone == "bear":
             _why = f"tone=bear (S&P {_spr}) — new entries suppressed on a risk-off tape"
         elif d.get("bar") is not None:
             _why = (f"tone={_tone} (S&P {_spr}) · new-pick bar={d['bar']}"
@@ -2619,6 +2648,14 @@ def _run_scan(now_et, force: bool) -> int:
                 _log(f"action state saved (row={_BUY_ROW}, date={today_str}, fp={fp}).")
             elif not sent:
                 _log("action email not sent (inert/failed) — state NOT saved (later slot may retry).")
+
+    # U3 (buy-check C4b): a run whose S&P 500 read failed held every buy; that is a
+    # failed lane, not a quiet one (red heartbeat + failure email, the news-outage
+    # precedent below).
+    _tone_fail = _tone_unread_failure(payload)
+    if _tone_fail:
+        _log(f"TONE UNREAD — {_tone_fail}")
+        failures.append(_tone_fail)
 
     # ── Watchlist "Ready to Enter" proactive email ──────────────────────────
     # ENTER_NOW verdicts are otherwise only discoverable by opening 📋 Watchlist
@@ -2756,6 +2793,15 @@ def _run_intraday(now_et, force: bool) -> int:
     _news_line = _news_feed_check(payload.get("news_feed"))
     if _news_line:
         _id_failures.append(_news_line)
+    # U3 (buy-check C4b): a held day (the S&P 500 read failed) says so instead of
+    # reading like "none pulled back enough", and a failed read reddens the lane.
+    _id_diag = payload.get("diag")
+    _id_hold = _id_diag.get("entry_hold") if isinstance(_id_diag, dict) else None
+    if _id_hold:
+        _log(f"intraday: {_entry_hold_text(_id_hold)}")
+        _id_tone_fail = _tone_unread_failure(payload)
+        if _id_tone_fail:
+            _id_failures.append(_id_tone_fail)
     picks = payload.get("picks", [])
     go_picks = [
         p for p in picks

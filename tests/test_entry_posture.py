@@ -475,7 +475,9 @@ def test_grow_today_carries_tone_available_on_both_paths():
                 ctx["tone_available"] = ta
             gt = _real_gt(ctx)
             assert gt["tone_available"] is ta
-            assert gt["sp500_pct"] == ctx["sp500_pct"]
+            # C4b: a failed read holds every entry and carries NO made-up %.
+            assert gt["sp500_pct"] == (None if ta is False else ctx["sp500_pct"])
+            assert (gt["entry_hold"] is not None) is (ta is False)
 
 
 def test_failed_read_lock_withholds_but_missing_key_keeps_behaviour():

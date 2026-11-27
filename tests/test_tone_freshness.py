@@ -219,7 +219,7 @@ def test_unread_reason_and_details_per_why():
                                                   "home_read_at": read})
     assert "no readable time" in tf.unread_detail({"why": "home_unreadable"})
     assert tf.unread_detail({"why": "home_failed"}) == (
-        "🏠 Home's Brief couldn't read the S&P 500 this run and a fresh S&P 500 read failed.")
+        "🏠 Home's Brief couldn't read the S&P 500 this run, so its new picks are held too.")
     assert "isn't built today" in tf.unread_detail({"why": "home_not_today"})
     for ts in ({"why": "live_failed"}, {}, None, "junk"):
         assert tf.unread_detail(ts) == "The S&P 500 read failed."
@@ -325,8 +325,8 @@ def test_live_source_line_names_why_home_was_not_used():
         "minutes old).")
     failed = ee.resolve_tone_state({"tone_available": False}, True, None, 0.3, True,
                                    now_et=_et(*WED, 14, 14), live_read_at=live_at)
-    assert ("its Grow Today runs the day as flat" in ee.tone_source_line(failed))
-    assert "its new picks are held" not in ee.tone_source_line(failed)
+    assert "its new picks are held until it can." in ee.tone_source_line(failed)
+    assert "runs the day as flat" not in ee.tone_source_line(failed)
     assert ee.tone_source_line(
         ee.resolve_tone_state(None, False, None, 0.3, True, now_et=NOW)
     ) == "Market read live (🏠 Home's Brief isn't built today)."
@@ -398,8 +398,8 @@ def test_redeploy_unknown_text_stays_true_to_todays_grow_today():
     p = ep.new_entry_posture({"available": False})
     out = ep.redeploy_call({"state": "entry", "ticker": "AAA", "score": 70.0, "rr": 2.5},
                            p)
-    assert "Grow Today treats an unread market as a flat day." in out["text"]
-    assert "holds new picks" not in out["text"]
+    assert "Grow Today holds new picks until the market move can be read." in out["text"]
+    assert "flat day" not in out["text"]
 
 
 def test_redeploy_source_line_carries_why_and_home_read_at():

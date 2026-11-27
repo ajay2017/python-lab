@@ -113,6 +113,13 @@ def build_suppression_rows(
         rec_date.isoformat() if hasattr(rec_date, "isoformat") else str(rec_date)[:10]
     )
 
+    # Buy-check C4b: a day Grow Today HELD every entry (the market move couldn't
+    # be read, or isn't today's session) made no gate decision at all, so there is
+    # nothing to ledger -- not even a G-23 row, whatever `tone` the caller passes
+    # (a failed read is not a bear read).
+    if isinstance(grow.get("entry_hold"), dict):
+        return []
+
     # Bear day: the add + pick lane early-returns before any bucket is built,
     # so all buckets are absent (not just empty). Emit exactly ONE synthetic row
     # for the tone gate — the binding suppression that day.

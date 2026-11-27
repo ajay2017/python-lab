@@ -130,6 +130,8 @@ from stock_analyzer import brief_chips
 from stock_analyzer import act_trim_fold   # BriefSkipSizeBlind: the journal-context gate for a folded min_trim
 from stock_analyzer import buy_check_state   # entry-fail-closed C2b: Watchlist fit_state / beta_or_none
 from stock_analyzer import scan_freshness    # beta-gate C3: the one rule for whether the saved scan may size picks
+from stock_analyzer import session_label     # buy-check C4b: which session "now" belongs to (the Brief memo signature)
+from stock_analyzer import tone_freshness    # buy-check C4b: Grow Today's hold + the pure tone / header views
 from stock_analyzer import watchlist_fit_source   # entry-fail-closed C2b: which frame the Watchlist's sector / beta checks read
 from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.valuation_target import pt_label as _pt_label
@@ -7571,7 +7573,7 @@ if page == "🏠 Home":
     # price history this signature already covers (the risk build is memoised WITH the
     # Brief), so they are not added to it; the schema version below invalidates a Brief
     # memoised before the G-06 holds existed.
-    _SYNTH_SCHEMA_VER = 36  # bumped: new Grow Today picks carry atr, the ATR their stop was built from (IntradayBelowStop, beta-gate C4); was 35: Grow Today carries scan_hold and sizes no pick off a saved scan that isn't today's post-open scan (ScanCacheAnyAge, beta-gate C3); was 34: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 37  # bumped: Grow Today carries entry_hold (None, or the strings of a hold) and holds every pick, ETF pick and add when the market move can't be read or isn't today's session; a bear message names the session (buy-check C4b, G-34 / G-23); was 36: new Grow Today picks carry atr, the ATR their stop was built from (IntradayBelowStop, beta-gate C4); was 35: Grow Today carries scan_hold and sizes no pick off a saved scan that isn't today's post-open scan (ScanCacheAnyAge, beta-gate C3); was 34: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -7591,6 +7593,10 @@ if page == "🏠 Home":
         # Whether the saved scan is fresh can change at 09:30 or at midnight ET with
         # no new scan (which _scanner_ver would not see): beta-gate C3.
         (_scan_decision["state"], _scan_decision["why"]),
+        # Which price-move session "now" belongs to: it flips at 09:30 ET (and at a
+        # holiday / weekend boundary) with no other input changing, and Grow Today's
+        # `tone_not_today` hold depends on it (buy-check C4b).
+        session_label.price_move_session(_now_et()),
         # Every holding's stop (to the cent) and its basis: a new stop, or a
         # basis change, rebuilds the Brief (finding #26 C3).
         _held_stop_wiring.held_sig(port_df),
@@ -10185,20 +10191,27 @@ if page == "🏠 Home":
     _db_tone   = _market_context.get("tone", "flat")
     # F-5: publish market tone so the Trade Journal thesis-draft can add regime
     # context (best-effort; degrades to no regime if Home hasn't rendered yet).
-    st.session_state["_market_tone_cache"] = _db_tone
-    _db_sp_pct = _market_context.get("sp500_pct", 0.0)
-    _db_nq_pct = _market_context.get("nasdaq_pct", 0.0)
+    # Buy-check C4b: None (never a made-up "flat") when the market read failed, so
+    # a consumer reads "no regime" instead of saving a failed read as a flat one
+    # (coordination-caches.md: `_market_tone_cache` None = couldn't read).
+    st.session_state["_market_tone_cache"] = (
+        None if tone_freshness.tone_unread(_market_context) else _db_tone)
 
     # ── Briefing header — tone-aware ──────────────────────────────────────
-    _tone_label = (
-        "📈 Growth Mode — Markets Up"   if _db_tone == "bull" else
-        "🛡️ Protect Mode — Markets Down" if _db_tone == "bear" else
-        "📊 Hold Steady — Mixed Market"
-    )
-    _tone_color = "#14532d" if _db_tone == "bull" else "#7f1d1d" if _db_tone == "bear" else "#1c1917"
-    _tone_bdr   = "#22c55e" if _db_tone == "bull" else "#ef4444" if _db_tone == "bear" else "#4b5563"
-    _sp_str     = f"S&P 500 {_db_sp_pct:+.2f}%"
-    _nq_str     = f"Nasdaq {_db_nq_pct:+.2f}%"
+    # The card's label / S&P line / "data as of" date come from one pure view
+    # (`tone_freshness.tone_card_view`): an unread read never says "Hold Steady —
+    # Mixed Market" or "+0.00%", and the last session comes from the NYSE calendar
+    # (holidays), not weekday arithmetic.
+    _db_now_et  = _now_et()
+    _tone_view  = tone_freshness.tone_card_view(_market_context, _db_now_et)
+    _tone_label = _tone_view["label"]
+    _tone_key   = _tone_view["tone_key"]
+    _tone_color = ("#14532d" if _tone_key == "bull" else "#7f1d1d" if _tone_key == "bear"
+                   else "#451a03" if _tone_key == "unread" else "#1c1917")
+    _tone_bdr   = ("#22c55e" if _tone_key == "bull" else "#ef4444" if _tone_key == "bear"
+                   else "#f59e0b" if _tone_key == "unread" else "#4b5563")
+    _sp_str     = _tone_view["sp_line"]
+    _nq_str     = _tone_view["nq_line"]
     _lead_str   = (
         " · Leading: " + ", ".join(
             f"{ls['sector']} ({ls['return_1w']:+.1f}% 1W)"
@@ -10209,23 +10222,8 @@ if page == "🏠 Home":
     # `.get(..., True)` -- an older bundle without the key reads as checked.
     if not _market_context.get("leading_checked", True):
         _lead_str = " · Leading sectors not checked (sector prices unavailable; the Brief's next refresh retries)"
-    # Compute last trading day for the date label when market is closed
-    from datetime import timedelta as _dbtd
-    _db_now_et  = _dt.now(_pytz.timezone("America/New_York"))
-    _db_weekday = _db_now_et.weekday()
-    _db_hour_et = _db_now_et.hour + _db_now_et.minute / 60
-    if _db_weekday >= 5:
-        _db_last_close = _today_et() - _dbtd(days=_db_weekday - 4)
-    elif _db_hour_et < 9.5:
-        _db_lc = _today_et() - _dbtd(days=1)
-        while _db_lc.weekday() >= 5:
-            _db_lc -= _dbtd(days=1)
-        _db_last_close = _db_lc
-    else:
-        _db_last_close = _today_et()
-    _db_date_str = _today_et().strftime("%A, %B %d %Y")
-    if not mkt["is_open"] and _db_last_close != _today_et():
-        _db_date_str += f" · data as of {_db_last_close.strftime('%a %b %d')}"
+    # The date label and the last completed session come from the same view.
+    _db_date_str = _tone_view["date_text"]
 
     # Tone-staleness reconciliation (annotate, NEVER flip): pre-market, the tone
     # reflects the LAST close while futures are live and can disagree. A red
@@ -10234,14 +10232,14 @@ if page == "🏠 Home":
     # gates / recommendations. Material direction mismatch only (reuses
     # futures_tone's own bull/bear classification — no new threshold).
     _tone_reconcile = ""
-    _tone_is_stale = (not mkt["is_open"]) and (_db_last_close != _today_et())
+    _tone_is_stale = _tone_view["is_stale"]
     if _tone_is_stale and _pm_futures_tone in ("bull", "bear"):
         if (_db_tone == "bear" and _pm_futures_tone == "bull") or \
            (_db_tone == "bull" and _pm_futures_tone == "bear"):
             _rec_dir = "higher" if _pm_futures_tone == "bull" else "lower"
             _rec_es  = f" (ES {_pm_es_pct:+.2f}%)" if _pm_es_pct is not None else ""
             _tone_reconcile = (
-                f"Reflects {_db_last_close.strftime('%a %b %d')} close — live futures "
+                f"Reflects {_tone_view['last_close_text'] or 'the last'} close — live futures "
                 f"currently {_rec_dir}{_rec_es}; refresh after the open for today's read."
             )
 
@@ -10254,10 +10252,9 @@ if page == "🏠 Home":
     st.html(brief_chips.chips_css())
     with st.container(key=brief_chips.CHIPS_KEY):
         _tone_col, _act_col, _frag_col = st.columns([4, 3, 5])
-    # D1: a failed index read is recorded as "flat" (Grow Today still treats
-    # it so); say so. `.get(...) is False` -- an old context shows nothing.
-    # It is the last line INSIDE the tone card, so the card stays one element.
-    _tone_unread = _market_context.get("tone_available") is False
+    # A failed index read: the card says so (`_tone_view["note"]`) and Grow Today
+    # holds its picks (buy-check C4b). The note is the last line INSIDE the tone
+    # card, so the card stays one element.
     with _tone_col:
         st.markdown(
             "<div class='brief-card' "
@@ -10270,14 +10267,13 @@ if page == "🏠 Home":
             f"{_db_date_str}</span>"
             f"</div>"
             f"<div style='color:#d1d5db;font-size:0.82em;margin-top:6px'>"
-            f"{_sp_str} · {_nq_str}{_lead_str}</div>"
+            f"{_sp_str}{' · ' + _nq_str if _nq_str else ''}{_lead_str}</div>"
             + (f"<div style='color:#fbbf24;font-size:0.76em;margin-top:6px;"
                f"border-top:1px solid rgba(255,255,255,0.08);padding-top:5px'>"
                f"⚠️ {_tone_reconcile}</div>" if _tone_reconcile else "")
             + ("<div style='color:#fbbf24;font-size:0.76em;margin-top:6px;"
                "border-top:1px solid rgba(255,255,255,0.08);padding-top:5px'>"
-               "⚠️ Market tone couldn't be read this run — treated as a flat day; "
-               "the bear-day check didn't run.</div>" if _tone_unread else "")
+               f"⚠️ {_safe_html(_tone_view['note'])}</div>" if _tone_view["note"] else "")
             + f"</div>",
             unsafe_allow_html=True,
         )
@@ -10304,7 +10300,7 @@ if page == "🏠 Home":
             # the defensive column below — never the raw act_today/review_list lists —
             # so the card can't contradict the section headers.
             _act_n      = _act_view["n_active"]
-            _grow_n     = len(_db_grow.get("new_picks", [])) + len(_db_grow.get("add_positions", []))
+            _grow_txt   = tone_freshness.grow_count_text(_db_grow)
             _aware_n    = len(_act_view["aware"])
             _resolved_n = len(_resolved_breaches)
             _tuneup_n   = len(_db_tuneup)
@@ -10318,7 +10314,7 @@ if page == "🏠 Home":
                 f"text-transform:uppercase;color:#9ca3af;margin-bottom:8px'>Today's Actions</div>"
                 f"<div style='color:#f9fafb;font-size:0.95em;font-weight:600;line-height:1.7'>"
                 f"{'🔴' if _act_n > 0 else '⚪'} {_act_n} Act Today<br>"
-                f"📈 {_grow_n} Grow Today<br>"
+                f"📈 {_grow_txt}<br>"
                 f"🟡 {_aware_n} monitoring · {_resolved_n} resolved breaches<br>"
                 f"🔧 {_tuneup_n} Portfolio Tune-up"
                 f"</div>"
@@ -10742,15 +10738,19 @@ if page == "🏠 Home":
         if isinstance(_leads, list) and _leads:
             # Beta-gate C3: under a scan hold the leads come from a saved scan that
             # can't size a pick today; the heading and caption name that scan.
+            # C4b: a Grow Today entry hold (market move unread / not today's
+            # session) is the one reason shown; the scan hold's heading yields.
+            _leads_entry_hold = grow.get("entry_hold")
             _leads_hold = grow.get("scan_hold")
-            _leads_held = isinstance(_leads_hold, dict)
+            _leads_held = (isinstance(_leads_hold, dict)
+                           and not isinstance(_leads_entry_hold, dict))
             with st.expander(
                 (scan_freshness.leads_heading(_leads_hold, len(_leads)) if _leads_held
                  else f"Momentum leads — not checked today ({len(_leads)})"),
                 expanded=False, key="_gt_leads_exp",
             ):
                 st.caption(scan_freshness.leads_note(_leads_hold) if _leads_held
-                           else _hold_reasons.leads_note(tone))
+                           else _hold_reasons.leads_note(tone, _leads_entry_hold))
                 for _ld in _leads:
                     _ld_tk = str(_ld.get("ticker", "")).strip()
                     if not _ld_tk:
@@ -10770,11 +10770,12 @@ if page == "🏠 Home":
             _pz_names = [str(_p.get("ticker", "")).strip() for _p in _paused
                          if str(_p.get("ticker", "")).strip()]
             if _pz_names:
+                _pz_hold = grow.get("entry_hold")
                 with st.expander(
-                    _hold_reasons.adds_paused_label(tone, len(_pz_names)),
+                    _hold_reasons.adds_paused_label(tone, len(_pz_names), _pz_hold),
                     expanded=False, key="_gt_adds_paused_exp",
                 ):
-                    st.caption(_hold_reasons.adds_paused_note(_pz_names))
+                    st.caption(_hold_reasons.adds_paused_note(_pz_names, _pz_hold))
 
     def _render_grow_overflow(grow: dict):
         """'Also cleared every check' line: names that passed EVERY Grow Today
@@ -10932,14 +10933,16 @@ if page == "🏠 Home":
         # Do NOT collapse with "or []" — that destroys the sentinel contract.
         _macro_coverage_expired = grow.get("macro_coverage_expired")
 
-        _g_bg    = "#052e16" if tone == "bull" else "#1c1917"
-        _g_bdr   = "#22c55e" if tone == "bull" else "#ef4444" if tone == "bear" else "#4b5563"
-        _g_count = f" ({len(new_picks) + len(add_pos)} setup{'' if len(new_picks) + len(add_pos) == 1 else 's'})" if (new_picks or add_pos) else ""
-        _g_subtitle = (
-            "Defer new entries — protect capital, reduce exposure."   if tone == "bear" else
-            "High-conviction only — elevated caution in effect."       if tone == "flat" else
-            ""
-        )
+        # Buy-check C4b: the header text and the "cleared all checks" line come from
+        # one pure view; a held day (market move unread / not today's session)
+        # never reads as a bull / flat / bear call.
+        _g_view  = tone_freshness.grow_header_view(grow, tone)
+        _g_held  = _g_view["held"]
+        _g_bg    = "#052e16" if tone == "bull" and not _g_held else "#1c1917"
+        _g_bdr   = ("#f59e0b" if _g_held else "#22c55e" if tone == "bull"
+                    else "#ef4444" if tone == "bear" else "#4b5563")
+        _g_count = _g_view["count"]
+        _g_subtitle = _g_view["subtitle"]
 
         st.markdown(
             f"<div style='background:{_g_bg};border-left:4px solid {_g_bdr};"
@@ -10947,15 +10950,34 @@ if page == "🏠 Home":
             f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>📈 Grow Today{_g_count}</span>"
             + (f"<span style='color:#86efac;font-size:0.82em;margin-left:8px'>"
                f"Sector leaders: {', '.join(ls['sector'] for ls in lead_secs_ui[:2])}</span>"
-               if lead_secs_ui and tone == "bull" else "")
-            + (f"<div style='color:#fca5a5;font-size:0.78em;margin-top:4px'>{_g_subtitle}</div>"
+               if lead_secs_ui and tone == "bull" and not _g_held else "")
+            + (f"<div style='color:#fca5a5;font-size:0.78em;margin-top:4px'>{_safe_html(_g_subtitle)}</div>"
                if _g_subtitle else "")
             + (f"<div style='color:#86efac;font-size:0.78em;margin-top:4px'>"
                f"Cleared all 5 portfolio checks — vetted for entry.</div>"
-               if tone == "bull" else "")
+               if _g_view["show_cleared"] else "")
             + f"</div>",
             unsafe_allow_html=True,
         )
+
+        # Buy-check C4b: Grow Today held every pick, ETF pick and add (the market move
+        # couldn't be read, or isn't today's session). One banner (it replaces the
+        # scan-hold banner, which sits below this return), then the held-wording
+        # disclosures. Checked BEFORE bear_msg: a held day has no message and its
+        # tone ("flat") is not a reading.
+        _entry_hold_ui = grow.get("entry_hold")
+        if isinstance(_entry_hold_ui, dict):
+            _eh_banner = _entry_hold_ui.get("banner")
+            st.info((_eh_banner if isinstance(_eh_banner, str) and _eh_banner
+                     else "⏸ New picks and adds are held: the market move isn't usable.")
+                    .replace("$", "\\$"))
+            if _entry_hold_ui.get("check") == tone_freshness.CHECK_UNREAD:
+                st.caption(
+                    "🔄 Refresh Signals re-reads the market; the Brief also retries on "
+                    f"its own every {BRIEF_AUTO_REFRESH_MINUTES} minutes in pre-market "
+                    "and market hours.")
+            _render_grow_pacing_disclosures(grow, tone)
+            return
 
         if bear_msg:
             st.caption(f"🛡️ {bear_msg}")
@@ -13420,8 +13442,13 @@ if page == "🏠 Home":
                         _hl_bundle = next(
                             (_c.get("_bundle") for _c in _display
                              if _c.get("ticker") == _hl.get("ticker")), None)
+                        # C4b (owner rule #14): defer to Grow Today's own hold too (the
+                        # Brief's `entry_hold`, else a read that isn't today's session).
                         _call = _entry_posture.redeploy_call(
-                            _hl, _entry_posture.new_entry_posture(_hm_tone), bundle=_hl_bundle)
+                            _hl, _entry_posture.new_entry_posture(_hm_tone), bundle=_hl_bundle,
+                            grow_hold=tone_freshness.redeploy_grow_hold(
+                                _db_grow.get("entry_hold") if isinstance(_db_grow, dict) else None,
+                                _hm_tone, _today_et()))
                         _own_pick = " or pick your own name" if _call["invite_own_pick"] else ""
                         if _call["text"] is not None:
                             {"success": st.success, "info": st.info}.get(
@@ -18696,7 +18723,13 @@ elif page == "📡 Signals & Advice":
                             {**_hl, "sector": _hl.get("sector") or rec["sector"]},
                             _entry_posture.new_entry_posture(_sg_tone),
                             bundle=_div_bundles.get(_hl.get("ticker")), site="signals",
-                            home_state=_sg_home_state)
+                            home_state=_sg_home_state,
+                            # C4b (owner rule #14): defer to Grow Today's hold (Home's
+                            # Brief when built today, else this page's own read that
+                            # isn't today's session).
+                            grow_hold=tone_freshness.redeploy_grow_hold(
+                                _entry_posture.home_grow_hold(_sg_syn, _today_et().isoformat()),
+                                _sg_tone, _today_et()))
                         _own_pick = f" or pick your own {rec['sector']} name" if _call["invite_own_pick"] else ""
                         if _call["text"] is not None and not _call["entry_called"]:
                             {"success": st.success, "info": st.info}.get(
@@ -47396,17 +47429,19 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **Only today's scan sizes a new pick (since 2026-11-26).** A new pick's stop, entry zone and share count come from the scan's price, so Grow Today sizes new picks only from a scan taken at or after today's 9:30 AM ET open (the ~9:45 AM ET auto-scan, or a 🔄 Refresh Signals once the market is open); that scan counts until midnight, and a "Sizes priced at the 9:47 AM ET scan" line says which one. Before the open, on a weekend or holiday, or when the saved scan is from an earlier session, you see a **"⏸ No new-position sizes …"** banner instead, and the scan's names are listed under the momentum leads with no verdict and no size. Home picks up the 9:45 scan on its own within a couple of minutes, even in a tab you opened earlier. Adds to names you hold and ETF picks don't use the scan, so they still show.
 
+**When the market move can't be read, or the market hasn't opened (since 2026-11-27).** If the S&P 500 read failed, Grow Today holds **every** new pick, ETF pick and add: the header reads *(held)*, a banner says why, and the Today's Actions card reads *Grow Today held* instead of a count; the market card says the move couldn't be read instead of showing a flat day. Nothing is called and nothing is sized until a read succeeds: **🔄 Refresh Signals** re-reads the market, and the Brief also re-reads it on its own every 30 minutes in pre-market and market hours (not after the close or on a weekend). The 9:45 and 11:30 emails send no pick on such a run, and the run is reported as failed (red status plus a failure email), the same as a news outage. Before today's 9:30 AM ET open, and on a weekend or holiday, the S&P 500 move on screen is the last session's, so Grow Today also holds ETF picks and adds then (the scan's picks are already held under *Only today's scan sizes a new pick*); a banner names the session the move belongs to and when the hold clears. A risk-off (down) day is unchanged: it still shows its own protection message, which names the session ("in the last session (Wed Nov 25)") when the move isn't today's.
+
 **Portfolio beta (since 2026-11-26).** When your book's beta is above 1.4 and a candidate's own beta is above 1.8, Grow Today doesn't open it: it shows under **"⛔ Portfolio beta"** with both numbers and no size, the same hold the 📋 Watchlist applies, and it clears when the book's beta is back at or under 1.4. An add to a high-beta name you hold is paused the same way. If one of the two betas couldn't be read and the other is already over its line, the name shows under **"⏸ Beta couldn't be checked"** instead of being sized: a reason to pause, not a green light. Neither appears in the morning or 11:30 emails.
 
 **Grow Today is the only place the app issues a buy.** (Until 2026-10-15 a separate "More Buy Candidates" list showed scanner names labelled "BUY — Scanner Pick" on momentum alone; most of them had a composite below the Buy bar, so it was retired.) Below the sized picks you may see these, none with a share size or a trade button — open any of them with ▶ Analyze:
 - **"✔ Also cleared every check — not one of today's picks"** — names that passed every check but were held back only by pacing: the daily pick limit, the one-per-sector slot or the breakout limit (the reason is named). A 📋 tag shows when the name is on your Watchlist.
 - **"⏸ Mixed market — held back by today's higher bar"** — names held back on a flat day, with their composite and, where it can be known, what would clear them (e.g. after earnings).
 - **"Momentum leads — not checked today"** (collapsed) — hot names Grow Today didn't evaluate today, so they carry no verdict.
-- **"Adds paused on a flat/down day"** (collapsed) — holdings that would qualify for an add-to-winner; adds resume on the next up day.
+- **"Adds paused on a flat/down day"** (collapsed) — holdings that would qualify for an add-to-winner; adds resume on the next up day. When Grow Today is holding everything because the market move couldn't be read or the market hasn't opened, it reads **"Adds held …"** and says when it clears.
 
 **Daily new-position budget (since 2026-10-16).** Each idea is capped on its own (15% of the book, 25% of net capital); this caps the **sum**. One trading day's new buys — what you've logged (adds included), sizes already emailed to you today, and newly sized suggestions — are capped at **40% of net capital**. Grow Today, 📋 Watchlist, 📈 Analysis and the three emails each show a *"New positions today: … of net capital … — budget 40%, … left"* line. Sizes already emailed are locked (*"Reserved by today's email run"*); everything later is sized from what's left, highest composite first — Grow Today, then the Watchlist, then Analysis. A name that gets less says *"Sized from what's left of today's budget — n of m shares"*; once it's used, a pick keeps its BUY call but reads *"not sized"* — never dropped, and it resets the next trading day. Sells don't give budget back, and nothing ever trims a holding. If the budget can't be checked (trade log or today's emailed sizes unreadable, cash figure stale or missing) the call still shows and the size is withheld with the reason. A ticker gets one share count a day: a Grow Today pick reads *"Sized in Grow Today today — see 🏠 Home"* on the Watchlist, and Analysis matches the Watchlist's size once you've opened the Watchlist today (and again after logging a trade) — until then it says it doesn't yet count the Watchlist's Ready-to-Enter names. Logging a BUY in the Trade Journal shows today's total including that buy — a heads-up, never a block. It can't see a buy you didn't log, and for up to 5 minutes after an email or a trade logged elsewhere a page can show a pre-update size. The cash figure behind the budget comes from the last broker sync, so a trade logged after it still counts; if a BUY or SELL has no fill time the app can place against that sync (left blank, or an import), the app can't tell whether the sync already included it, so a BUY is still subtracted and a SELL is not added, and Grow Today, the Watchlist and Analysis say *"Budget basis may be up to $X low until the next broker sync after the trade"* (for an import, the next day's sync; typing Robinhood's fill time when you log avoids it). The three emails use the same tightened basis and carry no such line. The budget's net capital is also the **lower of your journal's figure and Robinhood's own positions** (see 💰 Account → Net capital check): when that makes it lower by 1% or more, the status line adds a note that net capital was taken from Robinhood's positions, with the dollar gap — and, when a sell logged as after Robinhood's last sync is already part of that gap, a pointer to check that trade's fill time. When Robinhood's positions can't be compared, the line says the sizes were not cross-checked and why, and the journal figure is used. The three emails carry the same note.
 
-**Shared new-entry check (since 2026-10-16).** 📋 Watchlist, its morning Ready-to-Enter email and 📈 Analysis now apply the same entry checks Grow Today uses: no new entry on a bear day, ahead of a HIGH-impact macro release in the stock's sector, on negative news, or on stale data (Analysis also holds off with earnings within 7 days). A Watchlist name that would be READY TO ENTER but fails one shows as **⏸ HELD TODAY**, right under Enter Now, with the reason and what would clear it — but no share size and no Log BUY. On a bear day a Protect Mode banner explains it and says where the market read came from. The email never sends or budgets a held name, and its footer states the market tone it used. On Analysis, a held-back Buy keeps its verdict but shows *Not an entry today* and no size; Hold and Sell verdicts never show a share count. If a check couldn't run, the page says so. **Where the market read comes from (since 2026-11-27).** These pages reuse 🏠 Home's read of the S&P 500 only while it is under 30 minutes old and from the same session (a read taken before the 9:30 AM ET open stops counting at the open); otherwise they read the S&P 500 live and say so. If neither read works, 📋 Watchlist, 📈 Analysis and the 09:45 Watchlist email hold every new entry as **Held: market move couldn't be read** (they never treat a market that can't be read as a flat day), the Watchlist shows a banner naming the names that would otherwise be Ready, and Analysis offers no size; both re-check every time you open the page. On a bull or flat day a line under the summary shows the tone and when it was read. A name whose sector the app can't map (since 2026-11-04) is held as **Held: sector unknown (macro check)** while a sector-specific release is near, and clears when the release is out or the ticker gets a sector on the app's curated map that the event doesn't affect; an ETF is held on any sector-specific release, the same rule Grow Today uses for ETF picks. Since 2026-11-26 a name is also held when the sector-concentration or portfolio-beta check couldn't run. If 🏠 Home hasn't built your holdings this session (or you've logged a trade since it did), the Watchlist builds them itself from your current holdings at the last loaded prices and says so in a blue line; if that build fails, every Enter Now on the page is held with one warning. If a holding couldn't be priced for that build, an amber line names it: it isn't in the sector weights, so its sector reads low until a later load. When your portfolio's beta couldn't be computed, only a name whose own beta is above the limit or couldn't be read is held.
+**Shared new-entry check (since 2026-10-16).** 📋 Watchlist, its morning Ready-to-Enter email and 📈 Analysis now apply the same entry checks Grow Today uses: no new entry on a bear day, ahead of a HIGH-impact macro release in the stock's sector, on negative news, or on stale data (Analysis also holds off with earnings within 7 days). A Watchlist name that would be READY TO ENTER but fails one shows as **⏸ HELD TODAY**, right under Enter Now, with the reason and what would clear it — but no share size and no Log BUY. On a bear day a Protect Mode banner explains it and says where the market read came from. The email never sends or budgets a held name, and its footer states the market tone it used. On Analysis, a held-back Buy keeps its verdict but shows *Not an entry today* and no size; Hold and Sell verdicts never show a share count. If a check couldn't run, the page says so. **Where the market read comes from (since 2026-11-27).** These pages reuse 🏠 Home's read of the S&P 500 only while it is under 30 minutes old and from the same session (a read taken before the 9:30 AM ET open stops counting at the open); otherwise they read the S&P 500 live and say so. If neither read works, 📋 Watchlist, 📈 Analysis and the 09:45 Watchlist email hold every new entry as **Held: market move couldn't be read** (they never treat a market that can't be read as a flat day), the Watchlist shows a banner naming the names that would otherwise be Ready, and Analysis offers no size; both re-check every time you open the page. 🏠 Grow Today and the 9:45 / 11:30 pick emails hold the same way (since 2026-11-27, see below). On a bull or flat day a line under the summary shows the tone and when it was read. A name whose sector the app can't map (since 2026-11-04) is held as **Held: sector unknown (macro check)** while a sector-specific release is near, and clears when the release is out or the ticker gets a sector on the app's curated map that the event doesn't affect; an ETF is held on any sector-specific release, the same rule Grow Today uses for ETF picks. Since 2026-11-26 a name is also held when the sector-concentration or portfolio-beta check couldn't run. If 🏠 Home hasn't built your holdings this session (or you've logged a trade since it did), the Watchlist builds them itself from your current holdings at the last loaded prices and says so in a blue line; if that build fails, every Enter Now on the page is held with one warning. If a holding couldn't be priced for that build, an amber line names it: it isn't in the sector weights, so its sector reads low until a later load. When your portfolio's beta couldn't be computed, only a name whose own beta is above the limit or couldn't be read is held.
 
 **What it deliberately does *not* do:** it does **not** scan the entire market. A thin micro-cap up 300% on the day — the kind a broker's *"all stocks > 20% today"* filter shows — won't appear here by design: the app screens *liquid, quality* names and stays a medium-term advisor, not a squeeze-chaser. To check any specific ticker yourself, use **🔍 Research a Stock** on Home or the **📈 Analysis** page — type a company name ("microsoft") instead of a ticker and it resolves the most likely match, disclosing which symbol it picked (and any other close-scoring match, e.g. GOOGL vs GOOG) rather than silently substituting one.
 """
@@ -47513,7 +47548,7 @@ When a single sector grows past the **35% hard cap** (or approaches the **25% wa
 
 **Trim first — how much, and why.** It lists your holdings in that sector **weakest-conviction first** (by the engine's composite score), and for each shows the *basis* so a single number never proposes a trim blind: the composite's four pillars (**technical · business quality · valuation · sentiment**), its **recent momentum** (1-week / 1-month), and which pillar is holding the score down. It then turns the headline target into a plan that **adds up** — fully exit the weakest names, partial-trim the last — showing the **$ · % · ≈shares** to sell each and a 🧾 flag for whether the sale **realizes a gain or a loss**; the trims sum to exactly the reduction needed to bring the sector back under the warn line.
 
-**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else; names that clear both that gate and an R:R of at least 2:1 are listed first, so if any scanned name is an entry, at least one is always shown; the headline calls a name "a genuine entry" only when one of the names shown also has an **R:R of at least 2:1**, the minimum the Watchlist uses for an entry (otherwise it names the top scorer and why it isn't confirmed: R:R below 2:1, R:R not positive at today's price, or R:R not computable). **The headline only calls an entry on a bull day:** on a mixed day it says the name clears on its own numbers but 🏠 Grow Today makes today's buy calls (⏸), on a down day it says new entries are deferred (🛡️ Protect Mode), and if the market tone couldn't be read or the name's data is stale it says the entry isn't confirmed (⚠️); when the market read is available, a line under the headline says where it came from. Each name is annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there. Each sector's **Gap to 10% target** figure is how far that sector sits below its target in dollars of your book, not a buy size: size any buy on 📈 Analysis.
+**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else; names that clear both that gate and an R:R of at least 2:1 are listed first, so if any scanned name is an entry, at least one is always shown; the headline calls a name "a genuine entry" only when one of the names shown also has an **R:R of at least 2:1**, the minimum the Watchlist uses for an entry (otherwise it names the top scorer and why it isn't confirmed: R:R below 2:1, R:R not positive at today's price, or R:R not computable). **The headline only calls an entry on a bull day:** on a mixed day it says the name clears on its own numbers but 🏠 Grow Today makes today's buy calls (⏸), and whenever 🏠 Grow Today is holding every new entry (the market move couldn't be read, or it's before the open or a weekend / holiday and the move on screen is the last session's; since 2026-11-27) it says so and when the hold clears (⏸) instead of calling an entry, on a down day it says new entries are deferred (🛡️ Protect Mode), and if the market tone couldn't be read or the name's data is stale it says the entry isn't confirmed (⚠️); when the market read is available, a line under the headline says where it came from. Each name is annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there. Each sector's **Gap to 10% target** figure is how far that sector sits below its target in dollars of your book, not a buy size: size any buy on 📈 Analysis.
 
 **It advises; you decide.** The engine's conviction score sets the order (on the redeploy list, names that also clear the 2:1 R:R come first); correlation and analyst data only *annotate* (they never re-rank or gate). When a sector *must* be cut there are two honest schools — **trim the laggard** (momentum) or **take profit on the runner** (rebalance) — and the card names both and leaves the final call to you. Nothing is auto-sold.
 

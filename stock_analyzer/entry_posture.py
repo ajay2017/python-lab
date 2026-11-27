@@ -139,8 +139,9 @@ def tone_state_for_page(home_synth, today_iso, live_pct, live_ok, *,
 
 def page_needs_live(state) -> bool:
     """True when a page should try a live S&P read: the tone state is
-    unavailable for any reason except Home's own read having failed (Home then
-    holds its picks, so a live read must not call an entry it didn't)."""
+    unavailable for any reason except Home's own read having failed (since
+    buy-check C4b Home's Grow Today then holds every entry, so a live read must
+    not call an entry Home held)."""
     if not isinstance(state, dict):
         return True
     return state.get("available") is not True and state.get("why") != WHY_HOME_FAILED
@@ -198,8 +199,28 @@ def _fmt_pct(posture: dict) -> str:
     return txt
 
 
+def home_grow_hold(home_synth, today_iso):
+    """🏠 Home's Brief `grow_today["entry_hold"]` (buy-check C4b) from
+    ``_home_synth_cache`` when it was built today, else None.  A dict means Grow
+    Today held every entry; None means not held OR not known (Home not built
+    today): the caller's own tone rule then decides.  Never raises."""
+    try:
+        if (
+            isinstance(home_synth, dict)
+            and home_synth.get("date") == today_iso
+            and isinstance(home_synth.get("bundle"), dict)
+        ):
+            brief = home_synth["bundle"].get("_daily_brief")
+            gt = brief.get("grow_today") if isinstance(brief, dict) else None
+            hold = gt.get("entry_hold") if isinstance(gt, dict) else None
+            return hold if isinstance(hold, dict) else None
+    except Exception:
+        pass
+    return None
+
+
 def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
-                  home_state=None) -> dict:
+                  home_state=None, grow_hold=None) -> dict:
     """What the redeploy headline may say given today's entry posture.
 
     ``headline`` is a ``rr_readout.redeploy_headline`` dict; ``posture`` is the
@@ -211,7 +232,13 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
     should keep its existing per-state wording (every non-"entry" state);
     ``entry_called`` is True only for an "entry" headline on an open posture
     with no data-trust hold on the ticker.  Never raises: a malformed posture
-    reads as "unknown" (withhold)."""
+    reads as "unknown" (withhold).
+
+    ``grow_hold`` (buy-check C4b, owner rule #14: the headline defers to Grow Today)
+    is the hold dict from ``tone_freshness.redeploy_grow_hold``: when Grow Today
+    holds every entry (market move unread / not today's session) an "entry"
+    headline on an open or flat posture is NOT an entry call, and says why.  A
+    risk-off posture keeps its Protect Mode text."""
     h = headline if isinstance(headline, dict) else {}
     state = h.get("state")
     p = posture if isinstance(posture, dict) else {}
@@ -256,7 +283,15 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
             # here and the except below withheld the entry call).
             raise ValueError("score unreadable")
         rr = fmt_ratio_vs(h.get("rr"), RR_ENTRY_MIN, RR_FAVOURABLE_MIN)
-        if kind == "open" and hold is None and not hold_failed:
+        if isinstance(grow_hold, dict) and kind in ("open", "confirmed_only"):
+            why = str(grow_hold.get("reason") or "the market move isn't usable").strip()
+            clears = str(grow_hold.get("clears_when") or "").strip()
+            out.update(level="info", icon="⏸", text=(
+                f"**{t}**{sec} clears the Buy gate ({s} ≥ {COMPOSITE_BUY:.0f} · "
+                f"R:R {rr}:1 ≥ {RR_ENTRY_MIN:g}:1) on its own numbers, but 🏠 Grow "
+                f"Today holds new entries: {why}."
+                + (f" They return {clears}." if clears else "")))
+        elif kind == "open" and hold is None and not hold_failed:
             out.update(
                 entry_called=True, level="success", icon="🎯", invite_own_pick=True,
                 text=(
@@ -297,7 +332,7 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
             out.update(level="warning", icon="⚠️", text=(
                 f"Market tone couldn't be read, so **{t}** ({h['sector'] + '; ' if h.get('sector') else ''}{s} ≥ "
                 f"{COMPOSITE_BUY:.0f} · R:R {rr}:1) isn't confirmed as an entry here. "
-                "🏠 Grow Today treats an unread market as a flat day. "
+                "🏠 Grow Today holds new picks until the market move can be read. "
                 + ("Reload to retry." if site == "home" else "Open 🏠 Home to retry.")))
     except Exception:
         out.update(

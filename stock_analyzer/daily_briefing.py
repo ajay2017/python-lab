@@ -112,6 +112,7 @@ from stock_analyzer import act_trim_fold
 from stock_analyzer import breach_recovery
 from stock_analyzer import beta_fit_gate
 from stock_analyzer import scan_freshness
+from stock_analyzer import tone_freshness
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.text_fmt import share_word
 from stock_analyzer import g32_shadow
@@ -879,7 +880,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     Build growth-oriented action list calibrated to today's market tone.
 
     market_context keys: sp500_pct, nasdaq_pct, tone ('bull'|'bear'|'flat'),
-                         leading_sectors [{"sector", "etf", "return_1w"}]
+                         leading_sectors [{"sector", "etf", "return_1w"}],
+                         tone_available (False = the S&P read failed) and
+                         tone_read_at (aware ET datetime of that read). Buy-check
+                         C4b: an unread market, or a read that isn't today's
+                         session (pre-open / closed day), HOLDS every pick, ETF
+                         pick and add through `tone_freshness.grow_entry_hold`
+                         (returned as `entry_hold`; None when not held).
     act_today  : output of _act_today — tickers flagged here are excluded.
     review_list: output of _review_list — tickers flagged here (e.g. earnings-
                  overweight or weak-large-position TRIM_TO_TARGET) are ALSO
@@ -1351,6 +1358,61 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "banner":        scan_freshness.hold_banner(_sd),
         }
 
+    # Buy-check C4b: the market move couldn't be read (never a flat day), or the
+    # read isn't today's session (pre-open / closed day, owner U2). An unread
+    # market holds every entry BEFORE the bear branch (a bear tone can't be
+    # trusted on a failed read); a not-today read lets the bear branch stand
+    # (protection is the same on a last-session bear read) and holds otherwise.
+    _entry_hold = tone_freshness.grow_entry_hold(market_context, today)
+
+    def _entry_hold_return() -> dict:
+        """The early return of a held day: the bear return's shape with every
+        pick / add / ETF list empty, `entry_hold` carrying the strings, and
+        `tone` left as the caller's (a failed read reads "flat", never a made-up
+        reading). No gate-ledger rows can come from it (gate_ledger returns [])."""
+        _unread = _entry_hold["check"] == tone_freshness.CHECK_UNREAD
+        return {
+            "tone":          tone,
+            "sp500_pct":     None if _unread else sp500_pct,
+            "tone_available": market_context.get("tone_available"),
+            "entry_hold":    _entry_hold,
+            "message":       None,
+            "new_picks":                  [],
+            "add_positions":              [],
+            "risk_blocked_adds":          [],
+            "concentration_blocked_adds": [],
+            "sector_blocked_adds":        [],
+            "card_blocked_adds":          [],
+            "entry_held_adds":            [],
+            "room_blocked_adds":          [],
+            "sector_blocked_picks":       [],
+            "sector_unknown_picks":       [],
+            "macro_blocked_picks":        [],
+            "composite_skipped":          [],
+            "composite_unavailable":      [],
+            "news_skipped":               [],
+            "earnings_waiting":           [],
+            "etf_screened_out":           [],
+            "beta_blocked_picks":         [],
+            "beta_unknown_picks":         [],
+            "beta_blocked_adds":          [],
+            "scan_hold":                  _scan_hold_out(),
+            "overflow_picks":             [],
+            "flat_day_held":              [],
+            "unevaluated_leads":          _unevaluated_leads(set()),
+            "adds_paused":                _adds_paused_list(),
+            "cluster_blocked_adds":       [],
+            "cluster_gate_checked":       cluster_add_blocks is not None,
+            "pair_blocked_adds":          [],
+            "pair_gate_checked":          pair_add_blocks is not None,
+            "corr_unchecked":             corr_unchecked,
+            "risk_banner":                risk_banner,
+            "macro_coverage_expired":     _expired_macro_series(today),
+        }
+
+    if _entry_hold is not None and _entry_hold["check"] == tone_freshness.CHECK_UNREAD:
+        return _entry_hold_return()
+
     # On bear days — no new entries, return protection message
     if tone == "bear":
         # macro_coverage_expired is built AFTER all suppression decisions so it
@@ -1358,12 +1420,18 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         # new_picks == [] regardless of coverage, so the render condition
         # `macro_expired and new_picks` is provably False.
         _bear_expired = _expired_macro_series(today)
+        # GrowTodayStaleToday (Grow Today leg): a read from an earlier session
+        # (pre-open / weekend / holiday) says "in the last session (Wed Nov 25)",
+        # never "today". No read time (legacy context) keeps "today".
+        _bear_when = tone_freshness.session_phrase(
+            {"as_of": market_context.get("tone_read_at")}) or "today"
         return {
             "tone":          "bear",
             "sp500_pct":     sp500_pct,
             "tone_available": market_context.get("tone_available"),
+            "entry_hold":    None,
             "message":       (
-                f"S&P 500 {sp500_pct:+.2f}% today — market in risk-off mode. "
+                f"S&P 500 {sp500_pct:+.2f}% {_bear_when} — market in risk-off mode. "
                 "Focus on protecting existing positions. "
                 "Defer new entries until conditions stabilise."
             ),
@@ -1422,6 +1490,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # gate above can never read this value.
             "macro_coverage_expired":     _bear_expired,
         }
+
+    # U2: a read that isn't today's session (and isn't bear) holds ETF picks, adds
+    # and the scan's picks until today's open.
+    if _entry_hold is not None:
+        return _entry_hold_return()
 
     # Score threshold: higher bar on flat days, standard on bull days
     min_score   = COMPOSITE_BUY if tone == "bull" else COMPOSITE_BUY_FLAT_DAY
@@ -2987,6 +3060,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
 
     return {
         "tone":                       tone,
+        "entry_hold":                 None,
         "message":                    None,
         "new_picks":                  new_picks,
         "add_positions":              add_positions,
@@ -3041,7 +3115,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "risk_banner":                risk_banner,
         "sp500_pct":                  sp500_pct,
         # None when the context carries no flag; False = Home's index read failed
-        # (Grow Today then ran the day as flat); read by entry_posture.
+        # (Grow Today then holds every entry: `entry_hold`, buy-check C4b); read
+        # by entry_posture.
         "tone_available":             market_context.get("tone_available"),
         "nasdaq_pct":                 nasdaq_pct,
         "leading_sectors":            lead_secs,

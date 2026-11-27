@@ -399,10 +399,13 @@ class YFinanceProvider(DataProvider):
                         # the circuit-breaker counters (M7).
                         continue
                     col = close[ticker].dropna()
-                    if len(col) < 1:
+                    # A one-bar series has no previous close: omit the row rather
+                    # than make up a 0.0% move (a missing S&P row reads as
+                    # tone_available False, which holds new buys -- buy-check C4b).
+                    if len(col) < 2:
                         continue
                     price  = float(col.iloc[-1])
-                    prev   = float(col.iloc[-2]) if len(col) >= 2 else price
+                    prev   = float(col.iloc[-2])
                     change = price - prev
                     change_pct = change / prev * 100 if prev else 0.0
                     results.append({

@@ -1447,11 +1447,10 @@ def render_watchlist_entries_email(
         </div>""")
 
     # Entry-check disclosure (shared-entry-check chunk 5): the tone this run
-    # used and every check that could not run, each line escaped. KNOWN LIMIT
-    # (chunk-2 follow-up 6, disclosed not fixed): a one-bar index series makes
-    # the provider set prev = price (0.0%), and a genuinely flat read looks the
-    # same -- the index row does not expose enough to tell them apart, so that
-    # case still reads as an available flat tone.
+    # used and every check that could not run, each line escaped. (Chunk-2
+    # follow-up 6, fixed in buy-check C4b: a one-bar index series no longer
+    # makes up a 0.0% move -- the provider omits that row, so the S&P read
+    # fails and the tone reads as unavailable, never as a flat day.)
     _entry_footer_html = "".join(
         f'<div style="margin-top:6px">{_html.escape(ln)}</div>'
         for ln in email_footer_lines(entry_run)

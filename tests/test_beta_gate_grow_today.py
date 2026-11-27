@@ -8,6 +8,7 @@ from `constants.py`, never a literal. Spec: docs/plans/beta-gate-c2-spec.md.
 import ast
 import json
 import re
+from datetime import datetime, time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -501,7 +502,7 @@ def test_app_beta_fit_helper_reads_the_memoised_risk_through_get_or_offline():
     body = src[src.index("def _brief_beta_fit("):][:900]
     assert "_get_or_offline(_pr, \"beta\")" in body
     assert "buy_check_state.fit_state(" in body
-    assert "_SYNTH_SCHEMA_VER = 36" in src
+    assert "_SYNTH_SCHEMA_VER = 37" in src
 
 
 def test_app_grow_shown_and_dropoff_buckets_include_the_new_keys():
@@ -523,11 +524,21 @@ def _cron_ctx(port_risk):
     }
 
 
+class _OpenClock(datetime):
+    """hae's clock pinned to 10:30 ET on `_TODAY`: Grow Today (buy-check C4b) holds a
+    read that isn't `today`'s post-open session, and `_TODAY` is a fixed past date."""
+    @classmethod
+    def now(cls, tz=None):
+        naive = datetime.combine(_TODAY, time(10, 30))
+        return tz.localize(naive) if tz is not None else naive
+
+
 def _run_cron(port_risk, nvda_beta):
     bundle = _with_beta(_bundle(80.0), nvda_beta)
     scanner = _scanner_df([{"ticker": "NVDA", "score": 90.0, "sector": "Healthcare",
                             "price": 100.0}])
     with patch.object(hae, "_build_context", return_value=_cron_ctx(port_risk)), \
+         patch.object(hae, "datetime", _OpenClock), \
          patch("stock_analyzer.data.fetch_market_indices",
                return_value=[{"short": "S&P 500", "change_pct": 1.5},
                              {"short": "NASDAQ", "change_pct": 1.5}]), \

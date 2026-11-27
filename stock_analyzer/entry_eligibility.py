@@ -480,7 +480,7 @@ HOME_NOT_TODAY = "home_not_today"
 
 def home_tone_state(home_ctx, home_is_today) -> str:
     """How Home's Brief stands for TODAY's tone: built today with a real read,
-    built today but its index read failed (Home then runs the day as flat), or
+    built today but its index read failed (Home then holds its new picks), or
     not built today. Drives the Protect banner's wording only."""
     if not home_is_today:
         return HOME_NOT_TODAY
@@ -535,7 +535,7 @@ def tone_source_line(tone_state, home_state=None) -> "str | None":
         return f"Market read live{at} ({home_read} has no readable time)." + tail
     if why == _tf.WHY_HOME_FAILED or home_state == HOME_TODAY_TONE_FAILED:
         return (f"Market read live{at} — 🏠 Home's Brief couldn't read the market "
-                "this run (its Grow Today runs the day as flat)." + tail)
+                "this run; its new picks are held until it can." + tail)
     if why == _tf.WHY_HOME_NOT_TODAY or home_state == HOME_NOT_TODAY:
         return f"Market read live{at} (🏠 Home's Brief isn't built today)." + tail
     return f"Market read live{at}." + tail

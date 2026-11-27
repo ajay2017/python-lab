@@ -355,6 +355,14 @@ def held_add_verdict(ticker, grow, *, brief_date, today, brief_epoch, epoch) -> 
         if it is not None:
             return _verdict("add", "Grow Today's add call today", None, it)
 
+        # Buy-check C4b: Grow Today held every entry today (market move unread /
+        # not today's session): no add was called, and the tone it carries ("flat")
+        # must not be read as "adds only on an up day".
+        hold = grow.get("entry_hold")
+        if isinstance(hold, dict):
+            why = str(hold.get("reason") or "the market move isn't usable").strip()
+            return _verdict("not_called", f"Grow Today holds new picks and adds — {why}.")
+
         tone = grow.get("tone")
         if tone == "bear":
             return _verdict("not_called", "Market risk-off today — Grow Today makes no add calls.")

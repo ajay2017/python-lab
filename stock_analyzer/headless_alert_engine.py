@@ -913,7 +913,11 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     # so "0 picks" next to a Home page showing morning picks is usually the tone
     # gate, not a fault). bar=None on bear (new entries suppressed outright).
     _tone = grow.get("tone", "flat")
-    _bar = None if _tone == "bear" else (COMPOSITE_BUY if _tone == "bull" else COMPOSITE_BUY_FLAT_DAY)
+    # Buy-check C4b: a held day (market move unread / not today's session) has no
+    # pick bar and its tone is not a reading; the cron log names the hold.
+    _hold = grow.get("entry_hold")
+    _bar = (None if _tone == "bear" or isinstance(_hold, dict)
+            else (COMPOSITE_BUY if _tone == "bull" else COMPOSITE_BUY_FLAT_DAY))
     diag = {
         "tone":             _tone,
         # _grow_today's bear-day early return carries "sp500_pct" since
@@ -921,6 +925,9 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         # real risk-off move never logs as "S&P n/a".
         "sp500_pct":        grow.get("sp500_pct", market_context.get("sp500_pct")),
         "bar":              _bar,
+        # Buy-check C4b: the hold's check name ("tone_unread" / "tone_not_today")
+        # when Grow Today held every entry, else None.
+        "entry_hold":       _hold.get("check") if isinstance(_hold, dict) else None,
         "sector_blocked":   len(grow.get("sector_blocked_picks", []) or []),
         "sector_unknown":   len(grow.get("sector_unknown_picks", [])),
         "macro_blocked":    len(grow.get("macro_blocked_picks", []) or []),

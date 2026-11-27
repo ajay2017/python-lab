@@ -636,7 +636,7 @@ def test_banner_path_live_while_home_tone_failed_never_says_matching():
                             home_state=ee.HOME_TODAY_TONE_FAILED)["protect"]
     assert "matching" not in (p["title"] + p["body"] + p["source"])
     assert "couldn't read the market this run" in p["source"]
-    assert "its Grow Today runs the day as flat" in p["source"]
+    assert "its new picks are held until it can." in p["source"]
     assert "not deferred" not in p["source"] and "were not deferred" not in p["source"]
     assert p["body"].startswith("New entries deferred.")
 
@@ -667,7 +667,7 @@ def test_whole_chain_home_failed_then_live_bear_banner_is_true():
     assert st_["source"] == "live" and st_["tone"] == "bear"
     p = ee.watchlist_banner(st_, CLEAR_MAP, [], home_state=hs)["protect"]
     assert "matching" not in (p["body"] + p["source"])
-    assert "its Grow Today runs the day as flat" in p["source"]
+    assert "its new picks are held until it can." in p["source"]
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), True, "x", None])

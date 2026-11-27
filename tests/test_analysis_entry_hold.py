@@ -225,9 +225,8 @@ def test_banner_says_home_only_when_the_tone_came_from_home():
         BEAR_HOME, ee.HOME_TODAY_OK)   # binding = stale, tone is Home's
     assert st_["title"].split("— ")[1].startswith("held: score uses cached")
     assert "🏠 Home" not in st_["body"]
-    # C4a keeps this true to today's Grow Today (it still runs an unread day as
-    # flat); C4b flips it to the held wording.
-    assert "its Grow Today runs the day as flat" in live["source"]
+    # C4b: Home's Grow Today now holds its picks on a failed read, so the line says so.
+    assert "its new picks are held until it can." in live["source"]
     assert "not deferred" not in live["source"]
 
 

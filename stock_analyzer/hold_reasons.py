@@ -10,6 +10,7 @@ Pacing text must never say "sized": "not sized" is reserved for the budget.
 """
 from __future__ import annotations
 
+from stock_analyzer.tone_freshness import CLEARS_READ_AGAIN
 from stock_analyzer.constants import (
     COMPOSITE_BUY_FLAT_DAY,
     DAILY_NEW_POSITION_BUDGET_PCT,
@@ -49,9 +50,27 @@ WATCHLIST_TAG = "📋 On your Watchlist — check Ready to Enter there"
 FLAT_HELD_HEADER = "⏸ Mixed market — held back by today's higher bar"
 
 
-def leads_note(tone) -> str:
+def _hold_why(hold) -> str:
+    """The reason sentence of a Grow Today entry hold (buy-check C4b), "" when
+    `hold` isn't one."""
+    if not isinstance(hold, dict):
+        return ""
+    return str(hold.get("reason") or "the market move isn't usable").strip()
+
+
+def _hold_clears(hold) -> str:
+    c = hold.get("clears_when") if isinstance(hold, dict) else None
+    return f" Resumes {str(c).strip()}." if c else ""
+
+
+def leads_note(tone, hold=None) -> str:
     """Explainer under 'Momentum leads — not checked today'. Always says the
-    names carry no verdict, so a lead is never read as a buy call."""
+    names carry no verdict, so a lead is never read as a buy call. `hold` = the
+    Grow Today `entry_hold` dict: when set, the note says the picks are held and
+    why (never the flat-day wording)."""
+    if isinstance(hold, dict):
+        return (f"Grow Today holds new picks ({_hold_why(hold)}); these weren't "
+                f"checked and carry no verdict — not buy calls.{_hold_clears(hold)}")
     if tone == "bear":
         return ("New entries are deferred while the market is risk-off; these "
                 "weren't checked and carry no verdict. Resumes when the market "
@@ -64,14 +83,25 @@ def leads_note(tone) -> str:
             "not buy calls.")
 
 
-def adds_paused_note(names) -> str:
-    """Explainer under 'Adds paused on a flat/down day'. No size, by design."""
+def adds_paused_note(names, hold=None) -> str:
+    """Explainer under 'Adds paused on a flat/down day'. No size, by design.
+    `hold` = the Grow Today `entry_hold` dict: held wording, never "next up day"."""
     who = ", ".join(str(n) for n in names) if names else "These holdings"
+    if isinstance(hold, dict):
+        return (f"{who} would qualify for an add-to-winner. Adds are held "
+                f"({_hold_why(hold)}) — no size today.{_hold_clears(hold)}")
     return (f"{who} would qualify for an add-to-winner. Adds resume on the "
             "next up day — no size today.")
 
 
-def adds_paused_label(tone, n) -> str:
+def adds_paused_label(tone, n, hold=None) -> str:
+    if isinstance(hold, dict):
+        if hold.get("check") == "tone_unread":
+            return f"Adds held — market move couldn't be read ({n})"
+        if hold.get("clears_when") == CLEARS_READ_AGAIN:
+            # a read from another day, not a pre-open / closed-day one
+            return f"Adds held — the market move isn't today's ({n})"
+        return f"Adds held until the market opens ({n})"
     kind = "down" if tone == "bear" else "flat"
     return f"Adds paused on a {kind} day ({n})"
 

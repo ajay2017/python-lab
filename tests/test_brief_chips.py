@@ -193,5 +193,9 @@ def test_gauge_caption_is_now_an_escaped_title_tooltip_and_no_longer_a_caption()
 
 def test_tone_unread_note_is_inside_the_tone_card_not_a_caption():
     assert "st.caption(\"⚠️ Market tone couldn't be read this run" not in _SRC
-    assert "⚠️ Market tone couldn't be read this run — treated as a flat day; " in _SRC
-    assert '_tone_unread = _market_context.get("tone_available") is False' in _SRC
+    # C4b: the note comes from tone_card_view (an unread read is HELD, never "a flat
+    # day"), still the last line inside the card.
+    assert "treated as a flat day" not in _SRC
+    assert "the bear-day check didn't run" not in _SRC
+    assert "_tone_view['note']" in _SRC
+    assert "tone_freshness.tone_card_view(_market_context" in _SRC
