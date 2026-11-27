@@ -101,6 +101,8 @@ from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import stop_basis_notice as _stop_basis_notice
 from stock_analyzer import llm
 from stock_analyzer import news_feed
+from stock_analyzer import protective_coverage
+from stock_analyzer import regime_read
 from stock_analyzer import risk_window
 from stock_analyzer import scan_freshness as _scan_freshness
 from stock_analyzer import tone_freshness as _tone_freshness
@@ -649,6 +651,17 @@ def _run_premarket(now_et, force: bool) -> int:
     alerts = payload.get("alerts", [])
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
+    # Sell-check-unread C4: which held names / checks this scan did not really run.
+    # The two payload keys are always present on a real engine payload (coverage None
+    # = couldn't verify); an older payload shape or a total outage has neither, and
+    # that must not read as an "unverified" failure, so everything below is keyed on
+    # the key being present.
+    if "coverage" in payload:
+        for _cl in protective_coverage.log_lines(payload.get("coverage")):
+            _log(_cl)
+    if "regime_read" in payload:
+        _log(regime_read.log_text(payload.get("regime_read"))
+             + f" (book {payload.get('fragility_severity') or 'unmeasured'})")
     # A total PRICE outage (holdings read fine, nothing could be priced) is
     # not a quiet day: no stop, deterioration or risk-off check ran at all,
     # yet `alerts` is [] exactly as on a clean scan, so it used to log
@@ -666,6 +679,19 @@ def _run_premarket(now_et, force: bool) -> int:
                         f"without prices; stops / exits NOT checked")
         _log(f"PROTECTIVE SCAN RAN WITHOUT PRICES ({_price_outage_reason}) — "
              f"stops and exits were NOT checked; this is not a clean day.")
+    # Held names the scan did not really check (unpriced / saved copy / history behind),
+    # a missing S&P 500 6-month history, a raised engine: red + failure email, no
+    # tolerance (U-A / U-B / U-D / U-F). Disclosure only: every computed alert is
+    # still sent below (U-H). A total outage keeps its own line above.
+    _cov_check = (not _price_outage) and "coverage" in payload
+    _cov_failures: list[str] = []
+    if _cov_check:
+        _cov_failures = protective_coverage.lane_failures(
+            payload.get("coverage"), lane="premarket",
+            deterioration_basis=payload.get("deterioration_basis"),
+            deterioration_error=payload.get("deterioration_error"),
+            risk_off_error=payload.get("risk_off_error"))
+        failures.extend(_cov_failures)
     # Unreadable manual stops (2026-10-30): the scan DID run (auto stops and every
     # computed alert still go out below) but manually-stopped names were checked
     # against the auto stop only, so a real breach may be missing. Red heartbeat
@@ -730,6 +756,12 @@ def _run_premarket(now_et, force: bool) -> int:
         _footer_lines.insert(0, _recalc_line)
     # the Stop-basis lines go after the per-name held-stop notes (they are not repeated)
     _footer_lines.extend(_stop_basis_notice.email_lines(_sb_rows, _sb_drops))
+    # Sell-check-unread C4: the unchecked / saved-copy / behind names and the depth-only
+    # line ride in the alert email's footer (before the risk coverage / de-risk lines).
+    if _cov_check:
+        _footer_lines.extend(protective_coverage.email_lines(
+            payload.get("coverage"), lane="premarket",
+            deterioration_basis=payload.get("deterioration_basis")))
     # RiskListwiseYoung C2: how much of the book the risk series covered. One log
     # line every run; the footer note only when the beta could not be measured.
     _risk_cov = payload.get("risk_coverage")
@@ -884,6 +916,9 @@ def _run_premarket(now_et, force: bool) -> int:
         alerts
         + [{"kind": "velocity", "ticker": v["ticker"]} for v in velocity_alerts]
         + [{"kind": "split_withheld", "ticker": t} for t in split_withheld]
+        # a later slot that re-prices a name changes the fingerprint and still sends
+        + [{"kind": "coverage_gap", "ticker": t}
+           for t in protective_coverage.gap_tickers(payload.get("coverage"))]
     )
     fp = _fingerprint(_fp_input)
     sent = False
@@ -894,6 +929,9 @@ def _run_premarket(now_et, force: bool) -> int:
             # Not an all-clear: the de-risk check couldn't run (failure logged above).
             _log("no protective alert — no alert email (the de-risk check couldn't "
                  "run: see the failure above).")
+        elif _cov_failures:
+            # Not an all-clear: a held name or a check wasn't really run (failure above).
+            _log("no protective alert — a check didn't run, see the failure above.")
         else:
             _log("nothing to act on — no email.")
     elif fp == state.get("last_fingerprint") and not force:

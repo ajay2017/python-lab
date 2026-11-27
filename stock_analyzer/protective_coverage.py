@@ -49,6 +49,8 @@ _US_SYMBOL = re.compile(r"[A-Z]{1,5}(-[A-Z]{1,2})?")
 
 _MSG_MAX = 80
 
+# Also covers a bad `expected_session` (price_coverage -> None), which the cron can't
+# produce: `expected_session()` of a real date is always a date.
 _UNVERIFIED_LINE = ("held_coverage_unverified -- the held-ticker list was "
                     "unavailable, so it can't be confirmed every holding was checked")
 
@@ -139,6 +141,10 @@ def _last_bar(df):
     close, so that is the bar the check really used (YahooNaN)."""
     try:
         if df is None or getattr(df, "empty", True) or "Close" not in df.columns:
+            return None
+        # A frame without dates (RangeIndex) would read as 1970-01-01, i.e. thousands
+        # of sessions behind: undated, never "behind".
+        if not isinstance(df.index, pd.DatetimeIndex):
             return None
         sub = df.loc[df["Close"].notna()]
         if sub.empty:
@@ -291,7 +297,8 @@ def lane_failures(coverage, *, lane, deterioration_basis, deterioration_error,
                 parts = "; ".join(f"{', '.join(names)} ({phrase})"
                                   for phrase, names in _group_unpriced(unpriced).items())
                 out.append(
-                    f"held_unchecked -- not checked this morning: {parts}; its stop, "
+                    f"held_unchecked -- not checked this morning: {parts}; "
+                    f"{'their' if len(unpriced) > 1 else 'its'} stop, "
                     "deterioration and risk-off checks did not run (protective alerts "
                     "that were computed were still sent)")
             if cached:
@@ -307,7 +314,9 @@ def lane_failures(coverage, *, lane, deterioration_basis, deterioration_error,
                     f"{_sessions(b.get('sessions_behind'))} behind)" for b in behind)
                 out.append(
                     f"held_price_behind -- price history ends before the {exp} close: "
-                    f"{items}; its stop was checked against an old close (protective "
+                    f"{items}; "
+                    f"{'their stops were' if len(behind) > 1 else 'its stop was'} "
+                    "checked against an old close (protective "
                     "alerts that were computed were still sent)")
         if deterioration_basis == "depth_only":
             out.append(
@@ -421,12 +430,27 @@ def eod_withheld(coverage) -> list:
         return []
 
 
+def gap_tickers(coverage) -> list:
+    """Sorted tickers that are unpriced, cache-served or behind (the cron's dedup
+    fingerprint reads it, so a later slot that re-prices a name changes the
+    fingerprint and still sends).  [] when unknown.  `not_dated` is log only."""
+    try:
+        if coverage is None:
+            return []
+        names = set()
+        for key in ("unpriced", "cached", "behind"):
+            names.update(i["ticker"] for i in _items(coverage, key))
+        return sorted(names)
+    except Exception:
+        return []
+
+
 def log_lines(coverage) -> list:
     """The every-run cron log line; empty parts are omitted."""
     try:
         if coverage is None:
             return ["held coverage: unverified (held-ticker list unavailable)"]
-        head = f"held coverage: {coverage['fresh_count']} of {coverage['held_count']} fresh"
+        head = f"held coverage: {coverage['fresh_count']} of {coverage['held_count']} not flagged"
         parts = [head]
         cached = _items(coverage, "cached")
         if cached:

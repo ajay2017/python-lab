@@ -315,12 +315,46 @@ def test_lane_failures_order_and_content():
     assert "(rr)" in fl[5]
 
 
+def test_lane_failures_plural_follows_the_number_of_names():
+    """Reviewer carry (C4 first): "its stop" for one name, "their stops" for several."""
+    cov = _gaps_cov()                               # 2 unpriced, 1 behind
+    fl = pc.lane_failures(cov, lane="premarket", deterioration_basis="full",
+                          deterioration_error=None, risk_off_error=None)
+    unchecked = next(s for s in fl if s.startswith("held_unchecked"))
+    assert "; their stop, deterioration and risk-off checks did not run" in unchecked
+    behind = next(s for s in fl if s.startswith("held_price_behind"))
+    assert "their stops were checked against an old close" not in behind  # one behind name
+    assert "its stop was checked against an old close" in behind
+    many = {**cov, "unpriced": [{"ticker": "XYZ", "reason": "bundle_failed"}],
+            "behind": [{"ticker": "GHI", "last_bar": "2026-11-23", "sessions_behind": 1},
+                       {"ticker": "JKL", "last_bar": "2026-11-23", "sessions_behind": 1}]}
+    fl2 = pc.lane_failures(many, lane="premarket", deterioration_basis="full",
+                           deterioration_error=None, risk_off_error=None)
+    one = next(s for s in fl2 if s.startswith("held_unchecked"))
+    assert "; its stop, deterioration and risk-off checks did not run" in one
+    two = next(s for s in fl2 if s.startswith("held_price_behind"))
+    assert "their stops were checked against an old close" in two
+    assert "its stop was checked" not in two
+
+
+def test_last_bar_requires_a_datetime_index():
+    """Reviewer carry (C4 first): a RangeIndex frame is undated, never "14836 sessions
+    behind" (many lane test fixtures use pd.DataFrame({"Close": [...]}))."""
+    flat = pd.DataFrame({"Close": [1.0, 2.0, 3.0]})
+    assert pc._last_bar(flat) is None
+    cov = _cov(["AAA"], {"AAA": {"df": flat, "stale_as_of": None}}, exp="2026-11-25")
+    assert cov["state"] == "full" and cov["behind"] == [] and cov["not_dated"] == ["AAA"]
+    # a cached name on an undated frame stays cached, with no date
+    cov2 = _cov(["AAA"], {"AAA": {"df": flat, "stale_as_of": "2026-11-20"}}, exp="2026-11-25")
+    assert cov2["cached"] == [{"ticker": "AAA", "last_bar": None, "sessions_behind": None}]
+
+
 def test_lane_failures_clean_book_has_no_lines():
     cov = _cov(["AAA"], {"AAA": _bundle(["2026-11-25"])}, exp="2026-11-25")
     assert pc.lane_failures(cov, lane="premarket", deterioration_basis="full",
                             deterioration_error=None, risk_off_error=None) == []
     assert pc.email_lines(cov, lane="premarket", deterioration_basis="full") == []
-    assert pc.log_lines(cov) == ["held coverage: 1 of 1 fresh"]
+    assert pc.log_lines(cov) == ["held coverage: 1 of 1 not flagged"]
 
 
 def test_lane_failures_unknown_lane_follows_premarket():
@@ -364,7 +398,7 @@ def test_log_line_format():
     cov = _gaps_cov()
     line = pc.log_lines(cov)[0]
     assert line == (
-        "held coverage: 2 of 6 fresh; "
+        "held coverage: 2 of 6 not flagged; "
         "cached=ABC(last 2026-11-25, 0 behind),DEF(last 2026-11-23, 2 behind); "
         "behind=GHI(last 2026-11-23, 1 behind); "
         "unpriced=XYZ(bundle_failed),LOT(invalid_shares_or_cost); "
@@ -376,6 +410,14 @@ def test_eod_withheld_sorted():
                                      {"ticker": "AAA", "last_bar": "2026-11-25",
                                       "sessions_behind": 0}]}
     assert pc.eod_withheld(cov) == ["AAA", "ZZZ"]
+
+
+def test_gap_tickers_union_sorted_and_excludes_not_dated():
+    assert pc.gap_tickers(_gaps_cov()) == ["ABC", "DEF", "GHI", "LOT", "XYZ"]
+    assert pc.gap_tickers(None) == []
+    assert pc.gap_tickers("junk") == []
+    clean = _cov(["AAA"], {"AAA": _bundle(["2026-11-25"])}, exp="2026-11-25")
+    assert pc.gap_tickers(clean) == []
 
 
 # --------------------------------------------------------------- never raises

@@ -26,6 +26,8 @@ from stock_analyzer import db
 from stock_analyzer import broker_sync
 from stock_analyzer import exit_advisor
 from stock_analyzer import risk_off_check as _risk_off_check
+from stock_analyzer import protective_coverage
+from stock_analyzer import regime_read
 from stock_analyzer import split_detector
 from stock_analyzer import trim_sizing as _trim_sizing
 from stock_analyzer import stop_breach_text as _stop_breach_text
@@ -166,6 +168,7 @@ def _build_context(today: date) -> dict:
         spy_1y = fetch_spy("1y")
     except Exception:
         spy_1y = None
+        errors.append("SPY 1y fetch failed")
     vix = _vix_level()
 
     held_tickers = [
@@ -374,6 +377,27 @@ def compute_protective_alerts(today: date | None = None) -> dict:
     port_df, held_data = ctx["port_df"], ctx["held_data"]
     spy_6mo, spy_1y, vix, fragility = ctx["spy_6mo"], ctx["spy_1y"], ctx["vix"], ctx["fragility"]
 
+    # Sell-check-unread C4: which held names / checks this scan did NOT really run.
+    # Decision-only modules; each is wrapped so it can never raise the engine. A
+    # failure reads LOUD, never clean: coverage None = unverified, the deterioration
+    # basis falls to "depth_only", the regime to an all-unread read.
+    try:
+        coverage = protective_coverage.price_coverage(
+            ctx.get("held_tickers"), held_data, port_df,
+            expected_session=protective_coverage.expected_session(today, lane="premarket"))
+    except Exception:
+        coverage = None
+    try:
+        det_basis = protective_coverage.deterioration_basis(spy_6mo)
+    except Exception:
+        det_basis = "depth_only"
+    try:
+        regime = regime_read.read_regime(spy_1y, vix)
+    except Exception:
+        regime = regime_read.read_regime(None, None)
+    deterioration_error = None
+    risk_off_error = None
+
     # ── Protective signals (same rules as the Brief, single-surface) ──────────
     alerts: list[dict] = []
     reduced: set[str] = set()
@@ -437,6 +461,7 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         det = deterioration_signals(port_df, held_data, spy_6mo, split_flagged=split_flagged)
     except Exception as e:
         det = []
+        deterioration_error = str(e)
         errors.append(f"deterioration_signals failed: {e}")
 
     # composite_score enrichment for exit_signals capture (all tiers, not just
@@ -540,6 +565,7 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         )
     except Exception as e:
         risk_off = []
+        risk_off_error = str(e)
         errors.append(f"assess_risk_off_derisk failed: {e}")
     for c in risk_off:
         c["composite_score"] = composite_map.get(str(c.get("ticker", "")).upper())
@@ -550,6 +576,15 @@ def compute_protective_alerts(today: date | None = None) -> dict:
             "trigger": c.get("trigger", ""), "weight": c.get("weight"),
             "pnl_pct": c.get("pnl_pct"),
         })
+
+    # A protective alert is never hidden because its price was weak (U-H): a name
+    # priced from a saved copy, or from a history that ends before the expected
+    # session, keeps its alert and gains the "check the live price" sentence.
+    for _a in alerts:
+        _note = protective_coverage.alert_note(coverage, _a.get("ticker"))
+        if _note is not None:
+            _why = _a.get("why") or ""
+            _a["why"] = f"{_why} {_note}" if _why else _note
 
     # RiskOffUnchecked: fragility None on a risk-off day made the call above
     # return [] silently; same inputs, disclosure only (never raises).
@@ -596,6 +631,17 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         # Additive (RiskListwiseYoung C2): the book risk series' young-holding
         # coverage (None = not built); the premarket lane logs it and footers it.
         "risk_coverage": ctx.get("risk_coverage"),
+        # Additive (sell-check-unread C4): `coverage` None = couldn't verify (never
+        # "clean"); `deterioration_basis` "full" | "depth_only"; the two *_error
+        # fields hold the raised engine's message (None = it ran); `regime_read` is
+        # the per-leg risk-off read; `fragility_severity` is for the cron log line.
+        "coverage": coverage,
+        "deterioration_basis": det_basis,
+        "deterioration_error": deterioration_error,
+        "risk_off_error": risk_off_error,
+        "regime_read": regime,
+        "fragility_severity": (fragility.get("severity")
+                               if isinstance(fragility, dict) else None),
     }
 
 
