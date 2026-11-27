@@ -1402,6 +1402,16 @@ _GATE_FILES = {
     # while the market regime is armed) and words the Home / pre-market disclosure; a
     # wrong call stays silent on a skipped protective check or warns when it ran.
     "stock_analyzer/risk_off_check.py",
+    # Added 2026-11-27 (sell-check-unread C1, docs/plans/sell-check-unread-3a-3b.md):
+    # the per-leg risk-off regime read (tripped / clear / unread); decides "partly
+    # read" vs calm for every regime display and the de-risk unchecked check; a wrong
+    # call shows an unread regime as calm, or changes when a de-risk trim arms.
+    "stock_analyzer/regime_read.py",
+    # Added 2026-11-27 (sell-check-unread C3, docs/plans/sell-check-unread-3a-3b.md):
+    # which held names / checks the cron protective and EOD lanes did not really check
+    # (unpriced, cached, behind, depth-only, raised) and the lane failures they cause;
+    # a wrong call lets an unchecked holding read as a clean morning.
+    "stock_analyzer/protective_coverage.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

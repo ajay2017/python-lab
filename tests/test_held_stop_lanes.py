@@ -203,7 +203,9 @@ def test_premarket_unmeasured_coverage_note_appears_once_when_the_risk_off_text_
 def test_premarket_regime_unreadable_text_and_unmeasured_coverage_both_appear(monkeypatch):
     from stock_analyzer import risk_off_check, risk_window
     note = risk_window.coverage_note(_UNM_COV)
-    generic = risk_off_check._REGIME_UNREADABLE_TEXT
+    # sell-check-unread C2 (owner U-C 2026-11-27): the regime-unreadable text is now
+    # the both_unread kind (beta unmeasured AND neither regime leg read), no coverage.
+    generic = risk_off_check.derisk_unchecked(None, None, None)["text"]
     payload = _cov_payload(_UNM_COV)
     payload["risk_off_unchecked"] = {"reasons": [], "text": generic}
     rc, sent, saved, renders, notified = _run_pm(monkeypatch, payload, _LATE)
