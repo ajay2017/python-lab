@@ -12,6 +12,10 @@ When adding a new advisor or recommendation feature, **always** check whether it
 
 ---
 
+## Brief field `risk_off_unchecked` (kind added, sell-check-unread C2, 2026-11-27)
+
+Not a session key: a field of the cached Brief (`_home_synth_cache`). `risk_off_check.derisk_unchecked` returns None (the de-risk check ran, or couldn't arm on a calm book) or a dict with `reasons`, `text` and, since C2, `kind` ∈ `beta_unmeasured` / `regime_unread` / `both_unread`. It can now be set on a calm-regime-unread day (a caution / fragile book with a regime leg unread), not only when portfolio beta is unmeasured. Read by 🏠 Home's Act Today header, 🧾 Summary, the dock digest and the premarket footer / red lane. Since C6 the Home memo signature carries `regime_read.signature(...)`, so a leg that loads, fails or trips rebuilds the Brief (`_SYNTH_SCHEMA_VER` 39).
+
 ## `_leading_sectors_cache` (None widened, SectorRetsEmptyCached fix 2026-11-22)
 
 Produced by 🏠 Home's Brief build (the Brief's leading sector funds, flattened to every app sector alias they back), consumed by 🔔 Catalyst Watch's 🔥 leading-sector flag. `None` = couldn't check, now for two reasons: the Brief crashed or hasn't run (since F-260), **or** the Brief was built but the sector-fund read failed (`_market_context["leading_checked"]` is False; `_fetch_sector_returns` returns `None` on failure and keeps it only 5 minutes). `[]` = checked, nothing leading. Catalyst Watch shows "⚪ 🔥 leading-sector flag unavailable this session" on `None`. The same `leading_checked` flag makes the Brief's market card read "Leading sectors not checked (sector prices unavailable; the Brief's next refresh retries)"; with no leaders, no candidate gets `_sector_bonus`'s +5 (the same decision as before the fix, now disclosed). Known gap (review note): with 🔒 Lock Setup on, the frozen Brief and a fresh `_market_context` can disagree about whether the leaders were checked (see LockBreach).
