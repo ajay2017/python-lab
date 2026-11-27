@@ -824,6 +824,21 @@ def _run_premarket(now_et, force: bool) -> int:
             "below_ma_count": c.get("below_ma_count"),
             "rel_strength": c.get("rel_strength"),
         })
+    # Sell-check-unread C5 (ExitSignalsCachedPrice): a signal computed from a saved
+    # price copy is STILL recorded. These rows are read by live protective surfaces
+    # (the 09:45 email's "handle exits before entering new positions" block via
+    # _resolve_exit_alerts_for_email, its fingerprint, the Trade Journal's "matches an
+    # active TRIM signal" caption), so dropping them would hide a computed exit (U-H).
+    # Log only; a provenance marker the measurement readers exclude is the open
+    # ExitSignalsCachedPrice row. Coverage unknown (None / absent) = nothing to name.
+    _cached_sig = set(protective_coverage.cached_tickers(payload.get("coverage")))
+    if _cached_sig:
+        _cached_rows = sorted({str(r.get("ticker") or "").strip().upper()
+                               for r in exit_signal_rows
+                               if str(r.get("ticker") or "").strip().upper() in _cached_sig})
+        if _cached_rows:
+            _log(f"exit_signals: {len(_cached_rows)} name(s) recorded from a saved price "
+                 f"copy: {', '.join(_cached_rows)}")
     if exit_signal_rows and not is_trading_day(now_et.date()):
         # Only reachable under ALERT_FORCE=1 (the trading-day gate above is
         # skipped when forced). db.save_exit_signals_batch drops non-trading-
@@ -1070,8 +1085,30 @@ def _eod_held_stop_carry(payload, now_et) -> list[str]:
                  "seeded today.")
         _prior = payload.get("held_stop_carry")
         _sigs = payload.get("held_stop_journal_sigs")
+        # Sell-check-unread C5 (U-E): a saved-copy name whose stop fell back to the
+        # cached 6-month frame (basis partial / prior_session) must not advance or
+        # seed a saved row from that frame (an advance needs no today-dated bar, and a
+        # cached frame can carry an intraday-partial one). This also applies when
+        # the stop itself came from a fresh 1y frame: the seed guard's session
+        # close (held_stop_session_closes) is read from the cached bundle. Only a
+        # FULL-basis stop (fresh long history, no cache fallback, and exempt from
+        # the seed guard) still writes. The sweep below reads
+        # `held_tickers`, so a skipped name is never swept as sold.
+        _wh_raw = payload.get("eod_withheld")
+        _wh = ({str(t).strip().upper() for t in _wh_raw}
+               if isinstance(_wh_raw, list) else set())
+        _skip_carry = sorted(
+            str(t).strip().upper() for t, h in held_stops.items()
+            if str(t).strip().upper() in _wh
+            and not (isinstance(h, dict) and h.get("basis") == "full"))
+        _write_stops = held_stops
+        if _skip_carry:
+            _write_stops = {t: h for t, h in held_stops.items()
+                            if str(t).strip().upper() not in _skip_carry}
+            _log(f"held_stop_carry: not written for saved-copy name(s): "
+                 f"{', '.join(_skip_carry)}.")
         rows = _held_stop_carry.rows_to_write(
-            held_stops, as_of,
+            _write_stops, as_of,
             journal_sigs=_sigs if isinstance(_sigs, dict) else {},
             avg_costs={},
             prior_rows=_prior if isinstance(_prior, dict) else {},
@@ -1157,6 +1194,15 @@ def _run_eod(now_et, force: bool) -> int:
             "; ".join(payload.get("errors", [])) or "holdings unreadable")
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
+    # Sell-check-unread C5: the EOD price coverage, every run. A fresh read whose last
+    # bar is before the session is LOG ONLY here (U-D shadow, never a failure); a
+    # saved-copy name goes through `eod_withheld` below. Keyed on the key being
+    # present: an older payload shape logs nothing.
+    if "coverage" in payload:
+        for _cl in protective_coverage.log_lines(payload.get("coverage")):
+            _log(_cl)
+        for _cl in protective_coverage.eod_shadow_lines(payload.get("coverage")):
+            _log(_cl)
 
     # 2026-09-21 app-review Defect #2 fix: every write step below used to
     # log its own failure but never propagated it into this function's
@@ -1223,10 +1269,33 @@ def _run_eod(now_et, force: bool) -> int:
         _unpriced = sorted({str(t).strip().upper() for t in _held_raw if str(t).strip()} - _priced)
     else:
         _unpriced = None
+    # Sell-check-unread C5 (U-E): a saved-copy name has a port_df price, so it is in
+    # `_priced` above; the engine withheld it from every book figure, so it counts
+    # as unpriced here (the existing records-withhold rule then skips the account row
+    # and blanks the risk row; `held_tickers` keeps it from being swept as sold).
+    # `eod_withheld` is read only when present as a list (an older payload has none);
+    # an unverified held list (`_unpriced is None`) stays as it is.
+    _withheld_raw = payload.get("eod_withheld")
+    _withheld = (sorted({str(t).strip().upper() for t in _withheld_raw if str(t).strip()})
+                 if isinstance(_withheld_raw, list) else [])
+    if isinstance(_unpriced, list) and _withheld:
+        _unpriced = sorted(set(_unpriced) | set(_withheld))
     _partial_outage = _unpriced is None or bool(_unpriced)
+    # Sell-check-unread C5 review: compute_eod couldn't build the price coverage
+    # (an internal fault) although the held list is real, so nothing was withheld
+    # and a saved-copy price may be recorded tonight. Red, never silent (the
+    # premarket's held_coverage_unverified rule). Keyed on the key being present:
+    # an older payload shape has no coverage at all.
+    if ("coverage" in payload and payload.get("coverage") is None
+            and not _book_outage and isinstance(_held_raw, (list, tuple)) and _held_raw):
+        failures.append("held_coverage_unverified -- the EOD couldn't check which held "
+                        "names were priced from a saved copy, so tonight's records may "
+                        "carry a saved-copy price for some names")
     if _partial_outage:
+        _shown = ([f"{t} (saved copy only)" if t in _withheld else t for t in _unpriced]
+                  if _unpriced is not None else [])
         _what = ("held-ticker list unavailable, coverage unverified" if _unpriced is None
-                 else f"{len(_unpriced)} holding(s) unpriced: {', '.join(_unpriced[:8])}"
+                 else f"{len(_unpriced)} holding(s) unpriced: {', '.join(_shown[:8])}"
                       + (" ..." if len(_unpriced) > 8 else ""))
         failures.append(f"partial_price_outage: {_what} -- account snapshot skipped, "
                         f"risk-row book metrics withheld. To recover today's rows once "
@@ -1632,6 +1701,13 @@ def _run_eod(now_et, force: bool) -> int:
         from stock_analyzer import trim_sizing as _rf_tsz
         _rf_pdf = payload.get("port_df")
         _rf_held = payload.get("held_data")
+        # Sell-check-unread C5 (U-E): a row records the port_df price, so a saved-copy
+        # name is left out (never recorded as today's reading).
+        if _withheld and _rf_pdf is not None and "Ticker" in getattr(_rf_pdf, "columns", []):
+            _rf_pdf = _rf_pdf[~_rf_pdf["Ticker"].astype(str).str.strip().str.upper().isin(_withheld)]
+            if isinstance(_rf_held, dict):
+                _rf_held = {k: v for k, v in _rf_held.items()
+                            if str(k).strip().upper() not in _withheld}
         if (_rf_pdf is None or getattr(_rf_pdf, "empty", True)
                 or not isinstance(_rf_held, dict) or not _rf_held):
             _log("revision shadow: no portfolio / held data — nothing to record.")

@@ -424,9 +424,13 @@ def test_premarket_lane_extends_failures_with_lane_failures_and_footer_with_emai
     assert len(_attr_calls(fn, "protective_coverage", "gap_tickers")) == 1
 
 
-def test_eod_lane_is_not_wired_in_c4():
-    """C5 owns the EOD leg; C4 must not touch it."""
+def test_eod_lane_is_wired_in_c5():
+    """C4 left the EOD leg alone; C5 wires it (tests/test_protective_coverage_eod.py
+    pins the behaviour). `compute_eod` builds the eod-lane coverage and returns
+    `eod_withheld`; `_run_eod` reads it into `_unpriced`."""
     fn = _func(_ROOT / "cron_runner.py", "_run_eod")
-    assert "protective_coverage" not in ast.unparse(fn)
+    assert "protective_coverage" in ast.unparse(fn)
+    assert "eod_withheld" in ast.unparse(fn)
     eod = _func(_ROOT / "stock_analyzer" / "headless_alert_engine.py", "compute_eod")
-    assert "protective_coverage" not in ast.unparse(eod)
+    assert len(_attr_calls(eod, "protective_coverage", "price_coverage")) == 1
+    assert "'eod_withheld'" in ast.unparse(eod)

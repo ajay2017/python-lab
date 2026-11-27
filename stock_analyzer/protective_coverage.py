@@ -430,6 +430,38 @@ def eod_withheld(coverage) -> list:
         return []
 
 
+def cached_tickers(coverage) -> list:
+    """Sorted tickers served from the saved price copy (the capture writers skip
+    them: a saved copy is never recorded as the day's own reading).  [] when the
+    coverage is unknown, so an unverified run keeps recording."""
+    try:
+        if coverage is None:
+            return []
+        return sorted(c["ticker"] for c in _items(coverage, "cached"))
+    except Exception:
+        return []
+
+
+def eod_shadow_lines(coverage) -> list:
+    """EOD cron log lines for a fresh read whose last bar is before the session
+    being judged (U-D shadow: log only at the EOD, never a failure).  One line per
+    `behind` name, ISO dates; [] when none, unknown or malformed."""
+    out: list = []
+    try:
+        if coverage is None:
+            return out
+        exp = coverage.get("expected_session")
+        for b in _items(coverage, "behind"):
+            try:
+                out.append(f"eod price basis: {b['ticker']} last bar {b['last_bar']}, "
+                           f"expected {exp} (shadow, not a failure)")
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return []
+
+
 def gap_tickers(coverage) -> list:
     """Sorted tickers that are unpriced, cache-served or behind (the cron's dedup
     fingerprint reads it, so a later slot that re-prices a name changes the

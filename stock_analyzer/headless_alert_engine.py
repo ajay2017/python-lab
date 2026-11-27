@@ -1933,6 +1933,10 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
     unreadable) and `book_positions` ({TICKER: {"shares", "close"}} behind
     `gross_book`; {} for a real all-cash account, None = couldn't be built).
 
+    Sell-check-unread C5, also returned: `coverage` (protective_coverage.price_coverage
+    at the EOD, None = couldn't verify) and `eod_withheld` (saved-copy held names, kept
+    out of snapshot_rows / book_positions / gross_book; the cron counts them unpriced).
+
     snapshot_rows shape matches db.save_daily_snapshot: {ticker, shares, close_price}.
     Reuses the SAME _build_context as the protective run (post-close → last close
     is final)."""
@@ -1960,11 +1964,27 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
                 "book_positions": {} if ctx.get("reason") == "no_holdings" else None}
 
     port_df = ctx["port_df"]
+    # Sell-check-unread C5 (U-E): a held name served from the Supabase last-known-
+    # good copy is NOT today's close. It counts as unpriced at the EOD: it is kept
+    # out of snapshot_rows / book_positions / gross_book (so no cached price is
+    # recorded as today's) and the cron turns it into the partial_price_outage
+    # failure. Never raises: coverage None = unverified (nothing withheld here; the
+    # cron's own held_tickers check still covers an unlisted name).
+    try:
+        coverage = protective_coverage.price_coverage(
+            ctx.get("held_tickers"), ctx.get("held_data"), port_df,
+            expected_session=protective_coverage.expected_session(today, lane="eod"))
+    except Exception:
+        coverage = None
+    withheld = set(protective_coverage.eod_withheld(coverage))
+
     snapshot_rows = []
     for _, row in port_df.iterrows():
         px = _f(row.get("Price"))
         sh = _f(row.get("Shares"))
         t = str(row.get("Ticker", "")).upper()
+        if t in withheld:
+            continue
         if t and px and px > 0 and sh and sh > 0:
             snapshot_rows.append({"ticker": t, "shares": sh, "close_price": px})
 
@@ -1990,6 +2010,8 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
                 sh = _trim_sizing.exact_shares(row)
                 if not t or px is None or not math.isfinite(px) or px <= 0 or sh <= 0:
                     continue
+                if t in withheld:
+                    continue          # saved-copy price: never recorded (U-E)
                 if t in _book:
                     _book[t]["shares"] = round(_book[t]["shares"] + sh, 6)
                 else:
@@ -2003,7 +2025,9 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
     gross_book = None
     if book_positions is not None:
         gross_book = round(sum(v["shares"] * v["close"] for v in book_positions.values()), 2)
-    elif "Market Value" in port_df.columns:
+    elif "Market Value" in port_df.columns and not withheld:
+        # Skipped (gross_book stays None) whenever a name is withheld: the column
+        # sums every port_df row, so it would record the saved-copy price (U-E).
         try:
             import pandas as _pd_gb   # this module has no top-level pandas import
             _mv = _pd_gb.to_numeric(port_df["Market Value"], errors="coerce")
@@ -2017,6 +2041,9 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
             "gross_book": gross_book,
             "journal_max_trade_id": journal_max_trade_id,
             "book_positions": book_positions,
+            # Additive (sell-check-unread C5): the EOD price coverage (None = couldn't
+            # verify) and the saved-copy names kept out of every book figure above.
+            "coverage": coverage, "eod_withheld": sorted(withheld),
             "built_at": built_at, "errors": list(ctx["errors"]),
             "held_data": ctx.get("held_data", {}),
             # Additive (2026-09-15, portfolio_risk_snapshots capture) — both
