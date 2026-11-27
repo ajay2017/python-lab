@@ -190,7 +190,10 @@ def test_check_macro_no_label_with_a_non_empty_set_is_an_unknown_hold(sector):
 @pytest.mark.parametrize("sector", [None, "", "Other", "Technology"])
 def test_check_macro_unknown_with_empty_set_passes_without_a_note(sector):
     assert ee.check_macro({"macro_map": EMPTY_MAP, "sector": sector}) is None
-    r = ee.entry_check(sector=sector, macro_map=EMPTY_MAP, bundle={})
+    # A readable flat tone: since buy-check C4a a missing tone state holds
+    # (tone_unread), and this test is about the macro leg only.
+    r = ee.entry_check(sector=sector, macro_map=EMPTY_MAP, bundle={},
+                       tone_state={"tone": "flat", "sp500_pct": 0.1, "available": True})
     assert not [u for u in r["unchecked"] if u["check"] == "macro"] and r["eligible"]
 
 

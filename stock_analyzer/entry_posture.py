@@ -35,6 +35,7 @@ from stock_analyzer.entry_eligibility import (
 )
 from stock_analyzer.rr_readout import fmt_ratio_vs
 from stock_analyzer.score_text import composite_score_text
+from stock_analyzer.tone_freshness import STATE_FAILED, WHY_HOME_FAILED, home_read_state
 
 _UNAVAILABLE = {"tone": None, "sp500_pct": None, "available": False, "source": None, "as_of": None}
 
@@ -70,6 +71,8 @@ def new_entry_posture(tone_state) -> dict:
         "sp500_pct": pct if posture != "unknown" else None,
         "source": ts.get("source") if posture != "unknown" else None,
         "as_of": ts.get("as_of") if posture != "unknown" else None,
+        "why": ts.get("why") if posture != "unknown" else None,
+        "home_read_at": ts.get("home_read_at") if posture != "unknown" else None,
     }
 
 
@@ -90,29 +93,57 @@ def page_home_state(home_synth, today_iso) -> str:
     return entry_eligibility.HOME_NOT_TODAY
 
 
-def tone_state_for_page(home_synth, today_iso, live_pct, live_ok) -> dict:
-    """Tone state for a page that isn't Home: today's ``_home_synth_cache``
-    market context when it carries a readable tone; unavailable when Home was
-    built today but its tone read failed (Home then ran the day as flat, so a
-    live read must not call an entry Grow Today didn't make); else the live S&P
-    read when Home isn't built today; else unavailable.  Never raises."""
+def tone_state_for_page(home_synth, today_iso, live_pct, live_ok, *,
+                        now_et=None, live_read_at=None) -> dict:
+    """Tone state for a page that isn't Home.
+
+    ``now_et=None`` (the original rule): today's ``_home_synth_cache`` market
+    context when it carries a readable tone; unavailable when Home was built
+    today but its tone read failed (a live read must not call an entry Grow Today
+    didn't make); else the live S&P read when Home isn't built today; else
+    unavailable.
+
+    With ``now_et`` (buy-check C4a, ToneNoAge): Home's read is used only while it
+    is usable (``tone_freshness.home_read_state``: under
+    ``TONE_HOME_READ_MAX_AGE_MINUTES`` and the same session); a Home read that
+    is aged / from another session / has no readable time falls to the live read
+    (``live_pct`` / ``live_ok`` / ``live_read_at``), and to unavailable when that
+    also fails.  Home built today with a FAILED read stays unavailable with
+    ``why == "home_failed"`` and never takes the live read.  Never raises."""
     try:
         home_state = page_home_state(home_synth, today_iso)
         if home_state == entry_eligibility.HOME_TODAY_TONE_FAILED:
-            return dict(_UNAVAILABLE)
+            return {**_UNAVAILABLE, "why": WHY_HOME_FAILED}
         if home_state != entry_eligibility.HOME_NOT_TODAY:
             ctx = home_synth["bundle"].get("_market_context")
-            st = resolve_tone_state(
+            if now_et is None:
+                st = resolve_tone_state(
+                    ctx, True, ctx.get("tone_read_at") if isinstance(ctx, dict) else None,
+                    None, False)
+                if st.get("available"):
+                    return st
+                # Built today but the tone is unusable (e.g. NaN S&P change):
+                # never fall back to the live read.
+                return dict(_UNAVAILABLE)
+            if home_read_state(ctx, True, now_et)["state"] == STATE_FAILED:
+                # Built today but the tone is unusable (e.g. NaN S&P change).
+                return {**_UNAVAILABLE, "why": WHY_HOME_FAILED}
+            return resolve_tone_state(
                 ctx, True, ctx.get("tone_read_at") if isinstance(ctx, dict) else None,
-                None, False)
-            if st.get("available"):
-                return st
-            # Built today but the tone is unusable (e.g. NaN S&P change): never
-            # fall back to the live read.
-            return dict(_UNAVAILABLE)
-        return resolve_tone_state(None, False, None, live_pct, live_ok)
+                live_pct, live_ok, now_et=now_et, live_read_at=live_read_at)
+        return resolve_tone_state(None, False, None, live_pct, live_ok,
+                                  now_et=now_et, live_read_at=live_read_at)
     except Exception:
         return dict(_UNAVAILABLE)
+
+
+def page_needs_live(state) -> bool:
+    """True when a page should try a live S&P read: the tone state is
+    unavailable for any reason except Home's own read having failed (Home then
+    holds its picks, so a live read must not call an entry it didn't)."""
+    if not isinstance(state, dict):
+        return True
+    return state.get("available") is not True and state.get("why") != WHY_HOME_FAILED
 
 
 def locked_snapshot_for_today(locked_flag, locked_for_date, today, snapshot):
@@ -194,6 +225,8 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
             "available": kind != "unknown",
             "source": p.get("source"),
             "as_of": p.get("as_of"),
+            "why": p.get("why"),
+            "home_read_at": p.get("home_read_at"),
         }, home_state)
     except Exception:
         source_line = None

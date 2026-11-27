@@ -273,15 +273,29 @@ def test_a_passed_entry_context_is_used_and_no_second_read_is_made():
     assert spy[0][3]["action"] == "ENTRY_HELD"
 
 
-def test_tone_unreadable_fails_open_with_a_disclosure():
+def test_tone_unreadable_holds_every_name_and_says_so():
+    # Buy-check C4a (owner D1 of 2026-10-16 reversed 2026-11-27): an unread market
+    # holds the name; the macro calendar still fails open with a disclosure.
     ctx = {"market_context": {"tone_available": False}, "macro_events": None}
-    r, _s, spy, _g, _l = _wle(entry_context=ctx)
-    assert [e["ticker"] for e in r["entries"]] == [SEMIS]       # open
+    r, save, spy, _g, _l = _wle(entry_context=ctx)
+    assert r["entries"] == []
+    assert spy[0][3]["action"] == "ENTRY_HELD" and spy[0][3]["hold_kind"] == "tone_unread"
+    assert spy[0][3]["suppression_kind"] is None
+    save.assert_not_called()                       # a held card is never captured
+    assert r["gate_ledger_rows"] == []             # an abstention: no ledger row
+    assert r["checks_held"]["tone_unread"] == [SEMIS]
     assert r["entry_run"]["tone_state"]["available"] is False
     assert r["entry_run"]["macro_available"] is False
     lines = ee.email_footer_lines(r["entry_run"])
-    assert "Market tone couldn't be read — the bear-day check didn't run." in lines
+    assert ("Market tone couldn't be read — no name is listed as Ready to Enter "
+            "this run.") in lines
     assert "Macro calendar unavailable — the macro-event check didn't run." in lines
+
+
+def test_a_held_in_portfolio_name_is_not_counted_as_tone_unread():
+    ctx = {"market_context": {"tone_available": False}, "macro_events": []}
+    r, *_ = _wle(entry_context=ctx, held=(SEMIS,))
+    assert r["checks_held"]["tone_unread"] == []
 
 
 def test_nan_tone_is_unavailable_not_classified():
@@ -316,15 +330,16 @@ def test_a_malformed_macro_event_on_a_bear_day_still_defers():
     save.assert_not_called()
 
 
-def test_an_unreadable_tone_step_fails_open_and_says_so():
+def test_an_unreadable_tone_step_holds_and_says_so():
     with patch("stock_analyzer.headless_alert_engine.resolve_tone_state",
                side_effect=RuntimeError("boom")):
         r, _s, spy, *_ = _wle(entry_context=BEAR_CTX)
     assert any("entry check tone failed" in e for e in r["errors"])
-    assert [e["ticker"] for e in r["entries"]] == [SEMIS]          # open
+    assert r["entries"] == []                                      # held, not open
+    assert spy[0][3]["action"] == "ENTRY_HELD" and spy[0][3]["hold_kind"] == "tone_unread"
     assert spy[0][2]["tone_state"]["available"] is False
     assert ee.email_footer_lines(r["entry_run"])[0] == (
-        "Market tone couldn't be read — the bear-day check didn't run.")
+        "Market tone couldn't be read — no name is listed as Ready to Enter this run.")
 
 
 # ═════════════ 4. held names: never emailed, captured or allocated ═══════════
@@ -464,7 +479,7 @@ def test_footer_lines_per_path():
         "Macro calendar unavailable — the macro-event check didn't run."]
     down = {"tone_state": {"available": False}, "macro_available": True}
     assert ee.email_footer_lines(down) == [
-        "Market tone couldn't be read — the bear-day check didn't run."]
+        "Market tone couldn't be read — no name is listed as Ready to Enter this run."]
     assert ee.email_footer_lines(None) == []
     assert ee.email_footer_lines("junk") == []
 
@@ -760,7 +775,7 @@ def test_ctx_not_ok_holds_every_name_no_entries_no_capture_no_ledger(reason):
     assert r["gate_ledger_rows"] == []             # a data abstention: no ledger row
     assert r["fit_state"] == {"state": "unknown", "unpriced_sectors": None}
     assert r["fit_read"] is False and r["gate_degraded"] is True
-    assert r["checks_held"] == {"fit_unknown": [SEMIS], "beta_unknown": []}
+    assert r["checks_held"] == {"fit_unknown": [SEMIS], "beta_unknown": [], "tone_unread": []}
 
 
 def test_ctx_ok_with_an_empty_frame_holds_too():
@@ -776,7 +791,7 @@ def test_no_holdings_is_a_true_zero_book_and_entries_flow():
     assert spy[0][3]["action"] == "ENTER_NOW"
     assert [e["ticker"] for e in r["entries"]] == [SEMIS]
     assert r["fit_state"] == {"state": "flat", "unpriced_sectors": None}
-    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": []}
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [], "tone_unread": []}
     assert r["fit_read"] is True and r["gate_degraded"] is False
 
 
@@ -807,7 +822,7 @@ def test_a_real_g05_breach_binds_and_is_ledgered_with_fit_state_passed():
     assert spy[0][3]["suppression_kind"] == "sector"
     assert [(x["ticker"], x["gate_id"]) for x in r["gate_ledger_rows"]] == [(SEMIS, "G-05")]
     assert r["entries"] == []
-    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": []}   # not a data hold
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [], "tone_unread": []}   # not a data hold
 
 
 def test_beta_unknown_holds_when_the_unread_leg_could_bind():
@@ -817,7 +832,7 @@ def test_beta_unknown_holds_when_the_unread_leg_could_bind():
     assert spy[0][3]["suppression_kind"] == "beta_unknown"
     assert r["entries"] == [] and r["gate_ledger_rows"] == []
     save.assert_not_called()
-    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [SEMIS]}
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [SEMIS], "tone_unread": []}
     # ticker beta unread + portfolio beta over the ceiling -> held
     r2, *_ = _wle(entry_context=FLAT_CTX, bundle=_bundle(), ctx=_ok_ctx(beta=1.5))
     assert r2["entries"] == [] and r2["checks_held"]["beta_unknown"] == [SEMIS]
@@ -833,7 +848,7 @@ def test_beta_unread_but_unable_to_bind_still_emails_the_name():
 def test_a_held_in_portfolio_name_is_not_counted_in_checks_held():
     ctx = {"ok": False, "reason": "no_bundles", "errors": ["x"]}
     r, *_ = _wle(entry_context=FLAT_CTX, ctx=ctx, held=(SEMIS,))
-    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": []}
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [], "tone_unread": []}
 
 
 def test_scan_with_every_name_held_sends_no_email_and_logs_the_line(monkeypatch):
@@ -857,6 +872,13 @@ def test_the_held_checks_line_formats_and_is_silent_when_nothing_is_held():
     assert f({"checks_held": {"fit_unknown": [], "beta_unknown": ["C"]}}) == (
         "watchlist: 1 held, a check couldn't run (beta_unknown: C)")
     assert f({"checks_held": {"fit_unknown": [], "beta_unknown": []}}) is None
+    # buy-check C4a: the names held because the S&P 500 read failed
+    assert f({"checks_held": {"fit_unknown": [], "beta_unknown": [],
+                              "tone_unread": ["D", "E"]}}) == (
+        "watchlist: 2 held, a check couldn't run (tone_unread: D, E)")
+    assert f({"checks_held": {"fit_unknown": ["A"], "beta_unknown": [],
+                              "tone_unread": ["D"]}}) == (
+        "watchlist: 2 held, a check couldn't run (fit_unknown: A; tone_unread: D)")
     for bad in (None, {}, {"checks_held": None}, {"checks_held": "x"}, "payload", 5,
                 {"checks_held": {"fit_unknown": 5}}):
         assert f(bad) is None

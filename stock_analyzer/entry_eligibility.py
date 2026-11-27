@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import math
 from datetime import date, time as _time
+from zoneinfo import ZoneInfo
 
 from stock_analyzer import macro_sector_gate as _msg
+from stock_analyzer import tone_freshness as _tf
 from stock_analyzer.asset_type import ASSET_TYPE_ETF
 from stock_analyzer.news_feed import (
     NEWS_STATUS_CACHED, NEWS_STATUS_ERROR, NEWS_STATUS_NONE,
@@ -27,7 +29,11 @@ from stock_analyzer.constants import (
     MARKET_TONE_BEAR_PCT,
     MARKET_TONE_BULL_PCT,
     NEWS_SENTIMENT_NEGATIVE,
+    TONE_HOME_READ_MAX_AGE_MINUTES,
 )
+
+
+_ET_ZONE = ZoneInfo("America/New_York")
 
 
 # ── Tone ─────────────────────────────────────────────────────────────────────
@@ -45,12 +51,34 @@ def _finite(x) -> bool:
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
 
 
-def resolve_tone_state(home_ctx, home_is_today, home_built_at, live_pct, live_ok) -> dict:
+def resolve_tone_state(home_ctx, home_is_today, home_built_at, live_pct, live_ok,
+                      *, now_et=None, live_read_at=None) -> dict:
     """Today's Home market context first, else the live read, else unavailable.
 
-    A NaN / inf S&P change reads as unavailable on both legs (never classified)."""
+    A NaN / inf S&P change reads as unavailable on both legs (never classified).
+
+    ``now_et=None`` (cron, tests) keeps the original rule: any same-day Home
+    context with a readable tone is used.  With ``now_et`` the Home leg also
+    needs ``tone_freshness.home_read_state(...)["state"] == "usable"`` (under
+    ``TONE_HOME_READ_MAX_AGE_MINUTES`` old and the same session; buy-check C4a).
+
+    The result adds ``why`` (None when Home's read was used; else why it wasn't:
+    ``home_not_today`` / ``home_aged`` / ``home_other_session`` / ``home_failed`` /
+    ``home_unreadable``, or ``live_failed`` when nothing was readable and Home
+    can't be blamed) and ``home_read_at`` (Home's aware read time when known).
+    ``as_of`` is Home's read time on the Home leg and ``live_read_at`` on the
+    live leg."""
+    why = None
+    home_read_at = None
+    if now_et is None:
+        home_ok = bool(home_is_today)
+    else:
+        hs = _tf.home_read_state(home_ctx, home_is_today, now_et)
+        home_ok = hs["state"] == _tf.STATE_USABLE
+        home_read_at = hs["read_at"]
+        why = _tf.why_for_state(hs["state"])
     if (
-        home_is_today
+        home_ok
         and isinstance(home_ctx, dict)
         and home_ctx.get("tone_available") is True
         and home_ctx.get("tone") is not None
@@ -62,6 +90,8 @@ def resolve_tone_state(home_ctx, home_is_today, home_built_at, live_pct, live_ok
             "available": True,
             "source": "home",
             "as_of": home_built_at,
+            "why": None,
+            "home_read_at": home_read_at,
         }
     if live_ok and _finite(live_pct):
         return {
@@ -69,9 +99,15 @@ def resolve_tone_state(home_ctx, home_is_today, home_built_at, live_pct, live_ok
             "sp500_pct": live_pct,
             "available": True,
             "source": "live",
-            "as_of": None,
+            "as_of": live_read_at,
+            "why": why,
+            "home_read_at": home_read_at,
         }
-    return {"tone": None, "sp500_pct": None, "available": False, "source": None, "as_of": None}
+    # Nothing readable: blame Home only when it had a read that couldn't be used.
+    if why in (None, _tf.WHY_HOME_NOT_TODAY):
+        why = _tf.WHY_LIVE_FAILED
+    return {"tone": None, "sp500_pct": None, "available": False, "source": None,
+            "as_of": None, "why": why, "home_read_at": home_read_at}
 
 
 # ── Macro (G-07) ─────────────────────────────────────────────────────────────
@@ -197,9 +233,18 @@ def check_stale(ctx):
 
 def check_tone(ctx):
     ts = ctx.get("tone_state")
-    if not ts or not ts.get("available"):
-        return {"kind": "unchecked", "check": "tone",
-                "why": "market tone unavailable — the bear-day check couldn't run"}
+    if not isinstance(ts, dict) or not ts.get("available"):
+        # Buy-check C4a (owner D1 of 2026-10-16 reversed 2026-11-27): a market
+        # that couldn't be read HOLDS a new entry; it is never read as flat.
+        # No gate_id and no _HOLD_SUPPRESSION_KIND entry: a data abstention, not
+        # a ledgered policy gate.
+        return {
+            "kind": "hold", "check": "tone_unread", "gate_id": None,
+            "reason": _tf.unread_reason(ts),
+            "clears_when": ("the S&P 500 read succeeds — re-checked every time "
+                            "you open this page"),
+            "gate_value": None, "gate_threshold": None,
+        }
     if ts.get("tone") == "bear":
         pct = ts.get("sp500_pct")
         return {
@@ -302,6 +347,20 @@ DEFAULT_CHECKS = (check_stale, check_tone, check_macro, check_news, check_earnin
 
 DEFAULT_GATE_IDS = {"tone": None, "macro": None}
 
+# Holds that are a check that couldn't run (a data abstention), not a policy
+# gate. When a policy hold fires on the same name it binds instead, so the
+# ledgered gate row (G-28 etc.) is never lost behind an abstention.
+_ABSTENTION_CHECKS = frozenset({"tone_unread"})
+
+
+def _binding_hold(holds):
+    """The first hold whose ``check`` is not an abstention, else the first hold
+    (None when there are none). ``holds`` order itself is unchanged."""
+    for h in holds:
+        if not (isinstance(h, dict) and h.get("check") in _ABSTENTION_CHECKS):
+            return h
+    return holds[0] if holds else None
+
 
 def entry_check(*, bundle=None, tone_state=None, sector=None, macro_map=None,
                 news=None, earnings_days=None, gate_ids=None, checks=None,
@@ -345,7 +404,7 @@ def entry_check(*, bundle=None, tone_state=None, sector=None, macro_map=None,
     return {
         "eligible": not holds,
         "holds": holds,
-        "binding": holds[0] if holds else None,
+        "binding": _binding_hold(holds),
         "unchecked": unchecked,
         "passed": passed,
     }
@@ -402,7 +461,12 @@ def watchlist_ticker_ctx(run_ctx, *, sector, classified, news_items) -> dict:
 
 
 def _fmt_clock(dt) -> "str | None":
+    """12-hour clock text in ET: an aware datetime is converted to
+    America/New_York first (a UTC-stamped read must not print UTC hours); a
+    naive one is read as ET wall clock, as before."""
     try:
+        if getattr(dt, "tzinfo", None) is not None and dt.tzinfo.utcoffset(dt) is not None:
+            dt = dt.astimezone(_ET_ZONE)
         hour = dt.hour % 12 or 12
         return f"{hour}:{dt.minute:02d} {'AM' if dt.hour < 12 else 'PM'}"
     except Exception:
@@ -430,59 +494,117 @@ def _fmt_read_time(as_of) -> "str | None":
     return None if clock is None else clock
 
 
+def _session_tail(tone_state) -> str:
+    """" This is the move in the last session (Wed Nov 25), not today's." when the
+    read's S&P move is an earlier session's; else ""."""
+    phrase = _tf.session_phrase(tone_state)
+    return f" This is the move {phrase}, not today's." if phrase else ""
+
+
 def tone_source_line(tone_state, home_state=None) -> "str | None":
     """Where the tone came from, worded so it is true on every path.
 
     home  -> "Market read from Home's Brief, 9:42 AM ET." (time omitted when
              the context carries none);
-    live  -> says why Home's read wasn't used when ``home_state`` tells us;
-    unavailable -> None (the caller says the check couldn't run instead)."""
+    live  -> says why Home's read wasn't used from the state's ``why`` (else
+             from ``home_state``);
+    unavailable -> None (the caller says the check couldn't run instead).
+    A read whose S&P move belongs to an earlier session says so (pre-open,
+    weekend, holiday)."""
     if not isinstance(tone_state, dict) or not tone_state.get("available"):
         return None
+    tail = _session_tail(tone_state)
     if tone_state.get("source") == "home":
         clock = _fmt_read_time(tone_state.get("as_of"))
-        return ("Market read from Home's Brief" + (f", {clock} ET" if clock else "") + ".")
+        return ("Market read from Home's Brief" + (f", {clock} ET" if clock else "") + "." + tail)
     if tone_state.get("source") == "home_locked":
         clock = _fmt_read_time(tone_state.get("as_of"))
         return ("Market read from Home's locked Brief (Lock Setup"
-                + (f", locked {clock} ET" if clock else "") + ").")
-    if home_state == HOME_TODAY_TONE_FAILED:
-        return ("Market read live — 🏠 Home's Brief couldn't read the market this run "
-                "and is treating today as flat (its picks were not deferred).")
-    if home_state == HOME_NOT_TODAY:
-        return "Market read live (🏠 Home's Brief isn't built today)."
-    return "Market read live."
+                + (f", locked {clock} ET" if clock else "") + ")." + tail)
+    clock = _fmt_read_time(tone_state.get("as_of"))
+    at = f" at {clock} ET" if clock else ""
+    why = tone_state.get("why")
+    home_clock = _fmt_read_time(tone_state.get("home_read_at"))
+    home_read = f"Home's read from {home_clock} ET" if home_clock else "Home's read"
+    n = TONE_HOME_READ_MAX_AGE_MINUTES
+    if why == _tf.WHY_HOME_AGED:
+        return f"Market read live{at} ({home_read} is over {n:g} minutes old)." + tail
+    if why == _tf.WHY_HOME_OTHER_SESSION:
+        return f"Market read live{at} ({home_read} is from an earlier session)." + tail
+    if why == _tf.WHY_HOME_UNREADABLE:
+        return f"Market read live{at} ({home_read} has no readable time)." + tail
+    if why == _tf.WHY_HOME_FAILED or home_state == HOME_TODAY_TONE_FAILED:
+        return (f"Market read live{at} — 🏠 Home's Brief couldn't read the market "
+                "this run (its Grow Today runs the day as flat)." + tail)
+    if why == _tf.WHY_HOME_NOT_TODAY or home_state == HOME_NOT_TODAY:
+        return f"Market read live{at} (🏠 Home's Brief isn't built today)." + tail
+    return f"Market read live{at}." + tail
+
+
+def tone_line(tone_state, home_state=None) -> "str | None":
+    """One caption for a bull / flat day: the tone, the S&P change and where /
+    when it was read (None on a bear day, where the Protect box says it, and
+    when the tone is unavailable, where the unread box says it)."""
+    ts = tone_state if isinstance(tone_state, dict) else {}
+    if not ts.get("available") or ts.get("tone") not in ("bull", "flat"):
+        return None
+    pct = ts.get("sp500_pct")
+    if not _finite(pct):
+        return None
+    src = tone_source_line(ts, home_state)
+    return f"Market tone: {ts.get('tone')} (S&P {pct:+.1f}%)." + (f" {src}" if src else "")
+
+
+def _tickers_held_only_by(recs, check, exclude) -> list:
+    """Tickers of ENTRY_HELD cards whose every hold is ``check``, minus ``exclude``
+    (an Already-in-Portfolio / Sold-Today override replaces the held card)."""
+    skip = {str(x).upper() for x in (exclude or ())}
+    tickers = []
+    for r in (recs if recs is not None else []):
+        if not (isinstance(r, dict) and r.get("action") == "ENTRY_HELD"):
+            continue
+        if str(r.get("ticker", "")).upper() in skip:
+            continue
+        holds = r.get("holds")
+        holds = [] if holds is None else holds
+        if holds and all(isinstance(h, dict) and h.get("check") == check for h in holds):
+            tickers.append(str(r.get("ticker")))
+    return tickers
 
 
 def watchlist_banner(tone_state, macro_map, recs, home_state=None, exclude=()) -> dict:
     """What the top of the Actionable view says.
 
-    ``{"protect": None | {"title", "body", "source"}, "notes": [str, ...]}``.
+    ``{"protect": None | {"title", "body", "source"},
+    "unread": None | {"title", "body"}, "tone_line": str | None,
+    "notes": [str, ...]}``.
     ``protect`` is set on a bear tone; "matching 🏠 Home" is said ONLY when the
-    tone really came from Home's Brief. The "would otherwise be Ready" list is
-    names held ONLY by the tone check and not replaced by an Already-in-
-    Portfolio / Sold-Today override (``exclude``). ``notes`` carries the
-    fail-open "couldn't run" disclosures."""
+    tone really came from Home's Brief. ``unread`` is set when the market move
+    couldn't be read (new entries are HELD, never read as flat). The "would
+    otherwise be Ready" lists are names held ONLY by that one tone check and not
+    replaced by an Already-in-Portfolio / Sold-Today override (``exclude``).
+    ``tone_line`` is one caption on every bull / flat day (the time and source
+    of the read). ``notes`` carries the remaining fail-open "couldn't run"
+    disclosures (the macro calendar)."""
     notes: list = []
     protect = None
+    unread = None
     ts = tone_state if isinstance(tone_state, dict) else {}
     if not ts.get("available"):
-        notes.append("⚠️ The bear-day check couldn't run (market tone unavailable) — "
-                     "entries are shown, not deferred.")
+        tickers = _tickers_held_only_by(recs, "tone_unread", exclude)
+        n = len(tickers)
+        unread = {
+            "title": "Market move couldn't be read — new entries held",
+            "body": ((f"{n} name{'s' if n != 1 else ''} would otherwise be "
+                      f"Ready: {', '.join(tickers)}. " if n else "")
+                     + _tf.unread_detail(ts)
+                     + " Clears when the S&P 500 read succeeds — re-checked "
+                       "every time you open this page."),
+        }
     elif ts.get("tone") == "bear":
         pct = ts.get("sp500_pct")
         pct_txt = f"{pct:+.1f}%" if _finite(pct) else "down"
-        skip = {str(x).upper() for x in (exclude or ())}
-        tickers = []
-        for r in (recs if recs is not None else []):
-            if not (isinstance(r, dict) and r.get("action") == "ENTRY_HELD"):
-                continue
-            if str(r.get("ticker", "")).upper() in skip:
-                continue
-            holds = r.get("holds")
-            holds = [] if holds is None else holds
-            if holds and all(isinstance(h, dict) and h.get("check") == "tone" for h in holds):
-                tickers.append(str(r.get("ticker")))
+        tickers = _tickers_held_only_by(recs, "tone", exclude)
         n = len(tickers)
         matching = " matching 🏠 Home." if ts.get("source") in ("home", "home_locked") else ""
         protect = {
@@ -496,7 +618,9 @@ def watchlist_banner(tone_state, macro_map, recs, home_state=None, exclude=()) -
     if macro_map is None:
         notes.append("⚠️ The macro-event check couldn't run (macro calendar unavailable) — "
                      "entries are shown, not held for it.")
-    return {"protect": protect, "notes": notes}
+    return {"protect": protect, "unread": unread,
+            "tone_line": None if protect is not None else tone_line(ts, home_state),
+            "notes": notes}
 
 
 def held_budget_footer(em_line, allocs) -> str:
@@ -569,7 +693,8 @@ def emailed_then_held_line(card, allocs, alloc_times) -> "str | None":
             clock = None
     when = f"at {clock}" if clock else "today"
     reason = card.get("hold_reason") or "held by the shared entry check"
-    return f"Emailed {when}{sh_txt} — now deferred: {reason}"
+    word = "deferred" if card.get("hold_kind") == "tone" else "held"
+    return f"Emailed {when}{sh_txt} — now {word}: {reason}"
 
 
 HELD_KIND_LABELS = {
@@ -579,6 +704,8 @@ HELD_KIND_LABELS = {
     "stale": "stale data",
     "earnings": "earnings",
     "check_failed": "entry check couldn't run",
+    # buy-check C4a: the S&P 500 read couldn't run (never read as a flat day)
+    "tone_unread": "market move couldn't be read",
     # entry-fail-closed C2a: a portfolio-fit / beta check that couldn't run
     "fit_unknown": "portfolio fit couldn't be checked",
     "beta_unknown": "portfolio beta couldn't be checked",
@@ -620,7 +747,7 @@ def email_footer_lines(entry_run) -> "list[str]":
             "The app re-checks when you open it and defers if the market turns risk-off."
         )
     else:
-        lines.append("Market tone couldn't be read — the bear-day check didn't run.")
+        lines.append("Market tone couldn't be read — no name is listed as Ready to Enter this run.")
     if entry_run.get("macro_available") is not True:
         lines.append("Macro calendar unavailable — the macro-event check didn't run.")
     return lines
@@ -729,7 +856,9 @@ def analysis_gate_tiles(decision) -> "list[dict]":
             ("news", "News", "No negative news"),
             ("stale", "Data fresh", "Data is current"))
     # The Macro tile reads both the G-28 hold and the unknown-sector hold.
-    _checks_for = {"macro": ("macro", "macro_unknown_sector")}
+    # The Market tone tile reads both the bear-day hold and the unread hold.
+    _checks_for = {"macro": ("macro", "macro_unknown_sector"),
+                   "tone": ("tone", "tone_unread")}
     tiles = []
     for chk, label, ok in spec:
         _names = _checks_for.get(chk, (chk,))
@@ -775,6 +904,7 @@ def analysis_hold_banner(decision, tone_state=None, home_state=None) -> "dict | 
         }
     reason = binding.get("reason") or "held by the entry check"
     lead = "deferred: " if binding.get("check") == "tone" else "held: "
+    _tone_check = binding.get("check") in ("tone", "tone_unread")
     ts = tone_state if isinstance(tone_state, dict) else {}
     # 🏠 Home is named only when the binding hold IS the tone and the tone
     # really came from Home's Brief; no claim about what the Watchlist shows
@@ -796,18 +926,20 @@ def analysis_hold_banner(decision, tone_state=None, home_state=None) -> "dict | 
     return {
         "title": f"Not an entry today — {lead}{reason}",
         "body": body,
-        "source": (tone_source_line(ts, home_state) if binding.get("check") == "tone" else None),
+        "source": (_tf.unread_detail(ts) if binding.get("check") == "tone_unread"
+                   else tone_source_line(ts, home_state) if _tone_check else None),
     }
 
 
-def analysis_notes(tone_state, macro_map) -> "list[str]":
-    """Fail-open disclosures for the Analysis page (worded for sizes, not for
-    the Watchlist's entries)."""
+def analysis_notes(tone_state, macro_map, home_state=None) -> "list[str]":
+    """Disclosures for the Analysis page (worded for sizes, not for the
+    Watchlist's entries): the tone line on a bull / flat day (an unread market
+    is a HOLD on the card, not a note) and the macro fail-open note."""
     notes = []
     ts = tone_state if isinstance(tone_state, dict) else {}
-    if not ts.get("available"):
-        notes.append("⚠️ The bear-day check couldn't run (market tone unavailable) — "
-                     "sizes are shown, not deferred.")
+    line = tone_line(ts, home_state)
+    if line:
+        notes.append(line)
     if macro_map is None:
         notes.append("⚠️ The macro-event check couldn't run (macro calendar unavailable) — "
                      "sizes are shown, not held for it.")

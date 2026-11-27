@@ -22,6 +22,11 @@ pytestmark = pytest.mark.fast
 
 _TODAY = date(2026, 7, 27)
 _UNAVAIL = {"tone": None, "sp500_pct": None, "available": False, "source": None, "as_of": None}
+
+
+def _core(st):
+    """A tone state without the C4a ``why`` / ``home_read_at`` annotations."""
+    return {k: v for k, v in st.items() if k not in ("why", "home_read_at")}
 _STATES = ("entry", "rr_fails", "no_upside", "rr_unknown", "none_pass", "none_scored")
 _POSTURES = ("open", "confirmed_only", "deferred", "unknown")
 
@@ -116,9 +121,9 @@ def test_page_tone_yesterdays_synth_falls_to_live():
 
 
 def test_page_tone_live_failed_is_unavailable():
-    assert tone_state_for_page(None, _TODAY_ISO, None, False) == _UNAVAIL
+    assert _core(tone_state_for_page(None, _TODAY_ISO, None, False)) == _UNAVAIL
     ctx = {"tone": "bull", "sp500_pct": 1.0, "tone_available": True}
-    assert tone_state_for_page(_synth(ctx, "2026-10-28"), _TODAY_ISO, None, False) == _UNAVAIL
+    assert _core(tone_state_for_page(_synth(ctx, "2026-10-28"), _TODAY_ISO, None, False)) == _UNAVAIL
 
 
 @pytest.mark.parametrize("ctx", [
@@ -131,7 +136,7 @@ def test_page_tone_unreadable_home_ctx_never_bull(ctx):
     assert st["available"] is False and st["tone"] is None
     # Home built today but its read failed: a live read is NOT consulted (#20a).
     st2 = tone_state_for_page(_synth(ctx), _TODAY_ISO, 0.0, True)
-    assert st2 == _UNAVAIL
+    assert _core(st2) == _UNAVAIL
 
 
 @pytest.mark.parametrize("synth", [
@@ -349,7 +354,7 @@ def test_page_home_state_three_states():
 
 def test_home_today_failed_ignores_live_bull():
     st = tone_state_for_page(_synth({"tone_available": False}), _TODAY_ISO, 2.0, True)
-    assert st == _UNAVAIL
+    assert _core(st) == _UNAVAIL and st["why"] == "home_failed"
     assert new_entry_posture(st)["posture"] == "unknown"
 
 

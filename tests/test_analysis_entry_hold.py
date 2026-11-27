@@ -153,10 +153,21 @@ def test_withheld_verdict_never_gets_a_size():
     assert _decide(basis="weird")["offer_size"] is False
 
 
-def test_unavailable_tone_fails_open_with_a_note():
+def test_unavailable_tone_holds_the_size():
+    # Buy-check C4a (owner D1 of 2026-10-16 reversed 2026-11-27): a market that
+    # couldn't be read HOLDS the size; it is never read as a flat day.
     d = _decide(run_ctx=_run(UNAVAIL))
-    assert d["offer_size"] is True
-    assert any(u["check"] == "tone" for u in d["unchecked"])
+    assert d["offer_size"] is False
+    assert d["hold"]["check"] == "tone_unread"
+    assert d["reason_if_no_size"] == "the market move couldn't be read"
+    assert not any(u["check"] == "tone" for u in d["unchecked"])
+    assert ee.analysis_shares_label(d) == "— (held)"
+    tile = next(t for t in ee.analysis_gate_tiles(d) if t["label"] == "Market tone")
+    assert tile["state"] is False and "couldn't be read" in tile["detail"]
+    b = ee.analysis_hold_banner(d, UNAVAIL, ee.HOME_NOT_TODAY)
+    assert b["title"] == "Not an entry today — held: the market move couldn't be read"
+    assert "deferred" not in b["title"]
+    assert b["source"] == "The S&P 500 read failed."
 
 
 def test_unavailable_macro_fails_open_with_a_note():
@@ -214,7 +225,10 @@ def test_banner_says_home_only_when_the_tone_came_from_home():
         BEAR_HOME, ee.HOME_TODAY_OK)   # binding = stale, tone is Home's
     assert st_["title"].split("— ")[1].startswith("held: score uses cached")
     assert "🏠 Home" not in st_["body"]
-    assert "treating today as flat" in live["source"]
+    # C4a keeps this true to today's Grow Today (it still runs an unread day as
+    # flat); C4b flips it to the held wording.
+    assert "its Grow Today runs the day as flat" in live["source"]
+    assert "not deferred" not in live["source"]
 
 
 def test_banner_for_a_non_tone_hold_and_for_a_crash_and_when_nothing_held():
@@ -389,10 +403,15 @@ def test_shares_label_and_fail_open_notes():
     assert ee.analysis_shares_label(_decide(run_ctx=_run(BEAR_LIVE))) == "— (deferred)"
     assert ee.analysis_shares_label(_decide(news=NEG_NEWS)) == "— (held)"
     assert ee.analysis_shares_label(_decide(run_ctx=None)) == "— (held)"
+    # An unread market is a HOLD on the card, no longer a fail-open note.
     n = ee.analysis_notes(UNAVAIL, None)
-    assert len(n) == 2 and all("sizes are shown" in x for x in n)
-    assert all("entries are shown" not in x for x in n)
-    assert ee.analysis_notes(FLAT, CLEAR_MAP) == []
+    assert len(n) == 1 and "macro-event check" in n[0] and "sizes are shown" in n[0]
+    assert all("bear-day" not in x for x in n)
+    assert ee.analysis_notes(UNAVAIL, CLEAR_MAP) == []
+    # A bull / flat day gets the tone line (time + source); a bear day does not.
+    flat_note = ee.analysis_notes(FLAT, CLEAR_MAP)
+    assert flat_note == ["Market tone: flat (S&P -0.1%). Market read live."]
+    assert ee.analysis_notes(BEAR_LIVE, CLEAR_MAP) == []
 
 
 def test_one_normalized_held_test_in_app():

@@ -1033,7 +1033,7 @@ def compute_watchlist_entries(
     """Return {"entries": [...] | None, "built_at": <ET iso>, "errors": [...],
     "reason": str | None, "gate_degraded": bool, "fit_read": bool,
     "beta_read": bool, "fit_state": {"state", "unpriced_sectors"},
-    "checks_held": {"fit_unknown": [...], "beta_unknown": [...]},
+    "checks_held": {"fit_unknown": [...], "beta_unknown": [...], "tone_unread": [...]},
     "entry_run": {...}, "gate_ledger_rows": [...]}.
 
     `entry_context` (shared-entry-check chunk 5): compute_morning_picks'
@@ -1213,7 +1213,8 @@ def compute_watchlist_entries(
     # macro failure must never discard a correctly-read tone (a bear day must
     # not fail open because the macro build raised).
     _ec_unavailable = {"tone": None, "sp500_pct": None, "available": False,
-                       "source": None, "as_of": None}
+                       "source": None, "as_of": None, "why": "live_failed",
+                       "home_read_at": None}
     try:
         if not isinstance(entry_context, dict):
             entry_context = _live_entry_context(today, port_df)
@@ -1226,8 +1227,8 @@ def compute_watchlist_entries(
             # When the index was read -- the email footer prints it.
             _ec_tone["as_of"] = _ec_mc.get("tone_read_at")
     except Exception as e:
-        # Never silently skip the check: the tone reads as "couldn't run" (open
-        # + disclosed, the app's own fallback).
+        # Never silently skip the check: the tone reads as unavailable, which
+        # HOLDS every name as tone_unread (buy-check C4a, owner D1 reversed).
         errors.append(f"entry check tone failed: {e}")
         _ec_tone = dict(_ec_unavailable)
         entry_context = entry_context if isinstance(entry_context, dict) else {}
@@ -1604,14 +1605,19 @@ def compute_watchlist_entries(
 
     # entry-fail-closed C2a: additive scan-log input -- the NOT-held-in-portfolio
     # names the advisor held because a fit / beta check couldn't run. Never fatal.
-    _checks_held = {"fit_unknown": [], "beta_unknown": []}
+    # buy-check C4a: plus the names held because the S&P 500 read failed
+    # (ENTRY_HELD cards with hold_kind "tone_unread").
+    _checks_held = {"fit_unknown": [], "beta_unknown": [], "tone_unread": []}
     try:
         for _c in all_cards:
             _k = _c.get("suppression_kind")
             _tk = str(_c.get("ticker", "")).strip().upper()
-            if (_k in _checks_held and _c.get("action") == "NEAR_ENTRY"
+            if (_k in ("fit_unknown", "beta_unknown") and _c.get("action") == "NEAR_ENTRY"
                     and _tk and _tk not in held_set):
                 _checks_held[_k].append(_tk)
+            elif (_c.get("action") == "ENTRY_HELD" and _c.get("hold_kind") == "tone_unread"
+                    and _tk and _tk not in held_set):
+                _checks_held["tone_unread"].append(_tk)
     except Exception as e:
         errors.append(f"held-checks summary failed ({e})")
 

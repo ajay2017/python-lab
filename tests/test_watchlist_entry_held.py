@@ -187,11 +187,58 @@ def test_fit_gate_downgrade_wins_over_an_entry_hold():
     assert r["suppression_kind"] == "sector"
 
 
-def test_tone_unavailable_fails_open_with_a_visible_note():
-    r = _rec(ctx=_ctx(tone_state={"tone": None, "sp500_pct": None, "available": False,
-                                  "source": None, "as_of": None}))
-    assert r["action"] == "ENTER_NOW"
-    assert [u["check"] for u in r["entry_unchecked"]] == ["tone"]
+_UNREAD = {"tone": None, "sp500_pct": None, "available": False,
+           "source": None, "as_of": None}
+
+
+def test_tone_unavailable_holds_the_entry_as_tone_unread():
+    # Buy-check C4a (owner D1 of 2026-10-16 reversed 2026-11-27): a market that
+    # couldn't be read holds a would-be Enter Now; no ledger kind, no note.
+    r = _rec(ctx=_ctx(tone_state=_UNREAD))
+    assert r["action"] == "ENTRY_HELD" and r["hold_kind"] == "tone_unread"
+    assert r["suppression_kind"] is None
+    assert r["hold_reason"] == "the market move couldn't be read"
+    assert [h["check"] for h in r["holds"]] == ["tone_unread"]
+    assert r["entry_unchecked"] == []
+    assert ee.held_label(r) == "Held: market move couldn't be read"
+    # a None / non-dict tone state reads the same way
+    for bad in (None, "junk"):
+        assert _rec(ctx=_ctx(tone_state=bad))["hold_kind"] == "tone_unread"
+
+
+def test_tone_unread_never_binds_ahead_of_a_policy_hold():
+    mm = {"sectors": {"Technology"}, "reasons": {"Technology": "CPI"}}
+    news = {"compound": NEWS_SENTIMENT_NEGATIVE, "n": 2, "headline": "bad"}
+    # G-28 macro + tone_unread: macro binds, so its ledger kind survives.
+    r = _rec(ctx=_ctx(tone_state=_UNREAD, macro_map=mm))
+    assert [h["check"] for h in r["holds"]] == ["tone_unread", "macro"]
+    assert r["hold_kind"] == "macro" and r["suppression_kind"] == "entry_macro"
+    rows = gate_ledger.build_watchlist_suppression_rows(
+        [r], rec_date=TODAY_ISO, source="cron")
+    assert [row["gate_id"] for row in rows] == ["G-28"]
+    # news + tone_unread: news binds.
+    r = _rec(ctx=_ctx(tone_state=_UNREAD, news=news))
+    assert r["hold_kind"] == "news"
+    # stale + tone_unread: stale binds.
+    r = _rec(data=_data(stale_as_of="2026-10-10"), ctx=_ctx(tone_state=_UNREAD))
+    assert r["hold_kind"] == "stale"
+    # tone_unread alone: it binds, and writes no ledger row.
+    r = _rec(ctx=_ctx(tone_state=_UNREAD))
+    assert r["hold_kind"] == "tone_unread"
+    assert gate_ledger.build_watchlist_suppression_rows(
+        [r], rec_date=TODAY_ISO, source="cron") == []
+    # a real bear tone is NOT an abstention: it still binds ahead of macro.
+    r = _rec(ctx=_ctx(tone_state=BEAR, macro_map=mm))
+    assert r["hold_kind"] == "tone"
+
+
+def test_emailed_then_held_line_says_deferred_only_for_the_bear_tone():
+    allocs = {"XYZ": {"shares": 6}}
+    bear = _rec(ctx=_ctx(tone_state=BEAR))
+    assert "now deferred: " in ee.emailed_then_held_line(bear, allocs, {})
+    unread = _rec(ctx=_ctx(tone_state=_UNREAD))
+    line = ee.emailed_then_held_line(unread, allocs, {})
+    assert "now held: " in line and "deferred" not in line
 
 
 def test_missing_news_and_macro_are_noted_not_silent():

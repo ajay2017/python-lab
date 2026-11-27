@@ -1679,6 +1679,17 @@ PROVIDER_RL_COOLDOWN_SEC = 120
 # Operational cadence knob, NOT an investment threshold.
 BRIEF_AUTO_REFRESH_MINUTES = 30
 
+# Buy-check C4a (docs/plans/entry-fail-closed-c4-spec.md, owner U1 2026-11-27):
+# how old 🏠 Home's market-tone read may be before 📋 Watchlist / 📈 Analysis /
+# 📡 Signals read the S&P live instead. Deliberately an ALIAS of
+# BRIEF_AUTO_REFRESH_MINUTES: a page agrees with Home only while Home's read is
+# still inside Home's own freshness promise (the chip says "stale" at this age,
+# and the Home watchdog rebuilds then). Change BRIEF_AUTO_REFRESH_MINUTES and
+# this moves with it; if the two should ever differ, break the alias on
+# purpose. Compared only in stock_analyzer/tone_freshness.py (strict: an age of
+# exactly this many minutes is aged, matching the watchdog's rebuild at >= 30).
+TONE_HOME_READ_MAX_AGE_MINUTES = BRIEF_AUTO_REFRESH_MINUTES
+
 # ── Advisory-AI request timeout (operational infra knob, NOT an investment
 # threshold) ─────────────────────────────────────────────────────────────────
 # Per-request wall-clock cap (seconds) on each Anthropic LLM call in the AI

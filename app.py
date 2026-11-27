@@ -1,5 +1,6 @@
 import os
 import json
+import math as _math
 import uuid
 import streamlit as st
 import pandas as pd
@@ -4400,6 +4401,22 @@ def _cached_vix(period: str = "1mo"):
 @st.cache_data(ttl=45, show_spinner=False)
 def _cached_market_indices() -> list[dict]:
     return fetch_market_indices()
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_sp500_read() -> dict:
+    """The S&P 500's live % change and the ET time it was read (buy-check C4a:
+    the live leg for pages whose Home read is aged / from an earlier session).
+    RAISES on a missing S&P row or a non-numeric change, so a failed read is
+    never cached (st.cache_data does not cache an exception)."""
+    _idx = fetch_market_indices()
+    _sp = next((i for i in _idx if i.get("short") == "S&P 500"), None)
+    if _sp is None:
+        raise RuntimeError("S&P 500 row missing")
+    _pct = float(_sp["change_pct"])
+    if not _math.isfinite(_pct):
+        raise RuntimeError("S&P 500 change is not a finite number")
+    return {"pct": _pct, "read_at": _now_et()}
 
 
 @st.cache_data(ttl=45, show_spinner=False)
@@ -13383,10 +13400,12 @@ if page == "🏠 Home":
                         _hm_ctx = globals().get("_market_context")
                         _hm_tone = (
                             _entry_elig.resolve_tone_state(
-                                _hm_ctx, True, _hm_ctx.get("tone_read_at"), None, False)
+                                _hm_ctx, True, _hm_ctx.get("tone_read_at"), None, False,
+                                now_et=None)
                             if isinstance(_hm_ctx, dict)
                             else {"tone": None, "sp500_pct": None, "available": False,
-                                  "source": None, "as_of": None}
+                                  "source": None, "as_of": None, "why": "live_failed",
+                                  "home_read_at": None}
                         )
                         # Brief locked: Grow Today shows the locked morning tone;
                         # follow the stricter of it and the current read.
@@ -18510,21 +18529,26 @@ elif page == "📡 Signals & Advice":
                 _sg_syn = _get_or_offline(st.session_state, "_home_synth_cache")
                 _sg_home_state = _entry_posture.page_home_state(
                     _sg_syn, _today_et().isoformat())
+                _sg_now = _now_et()
                 _sg_tone = _entry_posture.tone_state_for_page(
-                    _sg_syn, _today_et().isoformat(), None, False)
-                # Live read only when Home's Brief isn't built today; if it was
-                # built but its tone read failed, the posture stays unknown.
-                if not _sg_tone["available"] and _sg_home_state == _entry_elig.HOME_NOT_TODAY:
+                    _sg_syn, _today_et().isoformat(), None, False, now_et=_sg_now)
+                # Live read when Home's read isn't usable (not built today, aged
+                # past TONE_HOME_READ_MAX_AGE_MINUTES, or from an earlier
+                # session); if Home was built but its own read failed, the
+                # posture stays unknown (page_needs_live says so).
+                if _entry_posture.page_needs_live(_sg_tone):
                     _sg_live_pct = None
+                    _sg_live_at = None
                     try:
-                        _sg_idx = fetch_market_indices()
-                        _sg_sp = next((i for i in _sg_idx if i["short"] == "S&P 500"), None)
-                        _sg_live_pct = float(_sg_sp["change_pct"]) if _sg_sp else None
+                        _sg_live = _cached_sp500_read()
+                        _sg_live_pct = _sg_live["pct"]
+                        _sg_live_at = _sg_live["read_at"]
                     except Exception:
                         _sg_live_pct = None
                     _sg_tone = _entry_posture.tone_state_for_page(
                         _sg_syn, _today_et().isoformat(), _sg_live_pct,
-                        _sg_live_pct is not None)
+                        _sg_live_pct is not None, now_et=_sg_now,
+                        live_read_at=_sg_live_at)
                 # Brief locked: Grow Today shows the locked morning tone; follow
                 # the stricter of it and the current read.
                 _sg_tone = _entry_posture.stricter_tone_state(
@@ -27313,7 +27337,8 @@ elif page == "📈 Analysis":
         _entry_elig.analysis_needs_check(_b, _l, str(_t).strip().upper() in _an_held_set)
         for _t, (_b, _l) in _an_basis_lbl.items())
     _an_tone_state = {"tone": None, "sp500_pct": None, "available": False,
-                      "source": None, "as_of": None}
+                      "source": None, "as_of": None, "why": "live_failed",
+                      "home_read_at": None}
     _an_home_state = _entry_elig.HOME_NOT_TODAY
     _an_run_ctx = {"tone_state": _an_tone_state, "macro_map": None}
     if _an_need_ctx:
@@ -27328,21 +27353,30 @@ elif page == "📈 Analysis":
             _an_home_mc = _get_or_offline(_an_home_b, "_market_context")
             _an_home_state = _entry_elig.home_tone_state(_an_home_mc, _an_home_is_today)
             _an_read_at = _get_or_offline(_an_home_mc, "tone_read_at")
+            _an_now = _now_et()
             _an_tone_state = _entry_elig.resolve_tone_state(
-                _an_home_mc, _an_home_is_today, _an_read_at, None, False)
+                _an_home_mc, _an_home_is_today, _an_read_at, None, False,
+                now_et=_an_now)
             if not _an_tone_state["available"]:
+                # Home's read is missing, aged or from an earlier session: read
+                # the S&P live (buy-check C4a); a failed read leaves the state
+                # unavailable and the check HOLDS the entry.
                 _an_live_pct = None
+                _an_live_at = None
                 try:
-                    _an_idx = fetch_market_indices()
-                    _an_sp = next((i for i in _an_idx if i["short"] == "S&P 500"), None)
-                    _an_live_pct = float(_an_sp["change_pct"]) if _an_sp else None
+                    _an_live = _cached_sp500_read()
+                    _an_live_pct = _an_live["pct"]
+                    _an_live_at = _an_live["read_at"]
                 except Exception:
                     _an_live_pct = None
                 _an_tone_state = _entry_elig.resolve_tone_state(
-                    None, False, None, _an_live_pct, _an_live_pct is not None)
+                    _an_home_mc, _an_home_is_today, _an_read_at,
+                    _an_live_pct, _an_live_pct is not None,
+                    now_et=_an_now, live_read_at=_an_live_at)
         except Exception:
             _an_tone_state = {"tone": None, "sp500_pct": None, "available": False,
-                              "source": None, "as_of": None}
+                              "source": None, "as_of": None, "why": "live_failed",
+                              "home_read_at": None}
         _an_macro_events = None
         try:
             _an_home_events = _get_or_offline(_an_home_b, "_macro_events")
@@ -27448,7 +27482,7 @@ elif page == "📈 Analysis":
     if _an_need_ctx:
         # Fail-open disclosures, worded for Analysis sizes.
         for _an_note in _entry_elig.analysis_notes(
-                _an_tone_state, _an_run_ctx.get("macro_map")):
+                _an_tone_state, _an_run_ctx.get("macro_map"), _an_home_state):
             st.caption(_an_note)
 
     # Daily new-position budget (docs/plans/daily-new-position-budget.md):
@@ -31022,7 +31056,8 @@ elif page == "📋 Watchlist":
     # same way. Render-only wiring: the source order and every decision live in
     # stock_analyzer/entry_eligibility.py.
     _wl_tone_state = {"tone": None, "sp500_pct": None, "available": False,
-                      "source": None, "as_of": None}
+                      "source": None, "as_of": None, "why": "live_failed",
+                      "home_read_at": None}
     _wl_home_state = _entry_elig.HOME_NOT_TODAY
     _wl_home_b = None
     _wl_home_is_today = False
@@ -31039,21 +31074,30 @@ elif page == "📋 Watchlist":
         _wl_home_state = _entry_elig.home_tone_state(_wl_home_mc, _wl_home_is_today)
         # The read time lives on the market context itself (None when absent).
         _wl_read_at = _get_or_offline(_wl_home_mc, "tone_read_at")
+        _wl_now = _now_et()
         _wl_tone_state = _entry_elig.resolve_tone_state(
-            _wl_home_mc, _wl_home_is_today, _wl_read_at, None, False)
+            _wl_home_mc, _wl_home_is_today, _wl_read_at, None, False,
+            now_et=_wl_now)
         if not _wl_tone_state["available"]:
+            # Home's read is missing, aged or from an earlier session: read the
+            # S&P live (buy-check C4a); a failed read leaves the state
+            # unavailable and the check HOLDS every new entry.
             _wl_live_pct = None
+            _wl_live_at = None
             try:
-                _wl_idx = fetch_market_indices()
-                _wl_sp = next((i for i in _wl_idx if i["short"] == "S&P 500"), None)
-                _wl_live_pct = float(_wl_sp["change_pct"]) if _wl_sp else None
+                _wl_live = _cached_sp500_read()
+                _wl_live_pct = _wl_live["pct"]
+                _wl_live_at = _wl_live["read_at"]
             except Exception:
                 _wl_live_pct = None
             _wl_tone_state = _entry_elig.resolve_tone_state(
-                None, False, None, _wl_live_pct, _wl_live_pct is not None)
+                _wl_home_mc, _wl_home_is_today, _wl_read_at,
+                _wl_live_pct, _wl_live_pct is not None,
+                now_et=_wl_now, live_read_at=_wl_live_at)
     except Exception:
         _wl_tone_state = {"tone": None, "sp500_pct": None, "available": False,
-                          "source": None, "as_of": None}
+                          "source": None, "as_of": None, "why": "live_failed",
+                          "home_read_at": None}
     _wl_macro_events_final = None
     try:
         _wl_home_events = _get_or_offline(_wl_home_b, "_macro_events")
@@ -31259,6 +31303,20 @@ elif page == "📋 Watchlist":
         )
         if _wl_pm.get("source"):
             st.caption(_wl_pm["source"])
+    if _wl_banner["unread"] is not None:
+        # The S&P 500 read couldn't run: every new entry is HELD (never read as
+        # a flat day). Same box shape as Protect Mode.
+        _wl_ur = _wl_banner["unread"]
+        st.markdown(
+            f"<div style='padding:10px 14px;background:#2d1a05;border-radius:6px;"
+            f"border-left:4px solid #f59e0b;margin:6px 0 2px'>"
+            f"<span style='color:#fcd34d;font-weight:700'>⏸ {_safe_html(_wl_ur['title'])}</span><br>"
+            f"<span style='color:#eee;font-size:0.9em'>{_safe_html(_wl_ur['body'])}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    if _wl_banner["tone_line"]:
+        st.caption(_wl_banner["tone_line"])
     for _wl_note in _wl_banner["notes"]:
         st.caption(_wl_note)
 
@@ -47348,7 +47406,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **Daily new-position budget (since 2026-10-16).** Each idea is capped on its own (15% of the book, 25% of net capital); this caps the **sum**. One trading day's new buys — what you've logged (adds included), sizes already emailed to you today, and newly sized suggestions — are capped at **40% of net capital**. Grow Today, 📋 Watchlist, 📈 Analysis and the three emails each show a *"New positions today: … of net capital … — budget 40%, … left"* line. Sizes already emailed are locked (*"Reserved by today's email run"*); everything later is sized from what's left, highest composite first — Grow Today, then the Watchlist, then Analysis. A name that gets less says *"Sized from what's left of today's budget — n of m shares"*; once it's used, a pick keeps its BUY call but reads *"not sized"* — never dropped, and it resets the next trading day. Sells don't give budget back, and nothing ever trims a holding. If the budget can't be checked (trade log or today's emailed sizes unreadable, cash figure stale or missing) the call still shows and the size is withheld with the reason. A ticker gets one share count a day: a Grow Today pick reads *"Sized in Grow Today today — see 🏠 Home"* on the Watchlist, and Analysis matches the Watchlist's size once you've opened the Watchlist today (and again after logging a trade) — until then it says it doesn't yet count the Watchlist's Ready-to-Enter names. Logging a BUY in the Trade Journal shows today's total including that buy — a heads-up, never a block. It can't see a buy you didn't log, and for up to 5 minutes after an email or a trade logged elsewhere a page can show a pre-update size. The cash figure behind the budget comes from the last broker sync, so a trade logged after it still counts; if a BUY or SELL has no fill time the app can place against that sync (left blank, or an import), the app can't tell whether the sync already included it, so a BUY is still subtracted and a SELL is not added, and Grow Today, the Watchlist and Analysis say *"Budget basis may be up to $X low until the next broker sync after the trade"* (for an import, the next day's sync; typing Robinhood's fill time when you log avoids it). The three emails use the same tightened basis and carry no such line. The budget's net capital is also the **lower of your journal's figure and Robinhood's own positions** (see 💰 Account → Net capital check): when that makes it lower by 1% or more, the status line adds a note that net capital was taken from Robinhood's positions, with the dollar gap — and, when a sell logged as after Robinhood's last sync is already part of that gap, a pointer to check that trade's fill time. When Robinhood's positions can't be compared, the line says the sizes were not cross-checked and why, and the journal figure is used. The three emails carry the same note.
 
-**Shared new-entry check (since 2026-10-16).** 📋 Watchlist, its morning Ready-to-Enter email and 📈 Analysis now apply the same entry checks Grow Today uses: no new entry on a bear day, ahead of a HIGH-impact macro release in the stock's sector, on negative news, or on stale data (Analysis also holds off with earnings within 7 days). A Watchlist name that would be READY TO ENTER but fails one shows as **⏸ HELD TODAY**, right under Enter Now, with the reason and what would clear it — but no share size and no Log BUY. On a bear day a Protect Mode banner explains it and says where the market read came from. The email never sends or budgets a held name, and its footer states the market tone it used. On Analysis, a held-back Buy keeps its verdict but shows *Not an entry today* and no size; Hold and Sell verdicts never show a share count. If a check couldn't run, the page says so. A name whose sector the app can't map (since 2026-11-04) is held as **Held: sector unknown (macro check)** while a sector-specific release is near, and clears when the release is out or the ticker gets a sector on the app's curated map that the event doesn't affect; an ETF is held on any sector-specific release, the same rule Grow Today uses for ETF picks. Since 2026-11-26 a name is also held when the sector-concentration or portfolio-beta check couldn't run. If 🏠 Home hasn't built your holdings this session (or you've logged a trade since it did), the Watchlist builds them itself from your current holdings at the last loaded prices and says so in a blue line; if that build fails, every Enter Now on the page is held with one warning. If a holding couldn't be priced for that build, an amber line names it: it isn't in the sector weights, so its sector reads low until a later load. When your portfolio's beta couldn't be computed, only a name whose own beta is above the limit or couldn't be read is held.
+**Shared new-entry check (since 2026-10-16).** 📋 Watchlist, its morning Ready-to-Enter email and 📈 Analysis now apply the same entry checks Grow Today uses: no new entry on a bear day, ahead of a HIGH-impact macro release in the stock's sector, on negative news, or on stale data (Analysis also holds off with earnings within 7 days). A Watchlist name that would be READY TO ENTER but fails one shows as **⏸ HELD TODAY**, right under Enter Now, with the reason and what would clear it — but no share size and no Log BUY. On a bear day a Protect Mode banner explains it and says where the market read came from. The email never sends or budgets a held name, and its footer states the market tone it used. On Analysis, a held-back Buy keeps its verdict but shows *Not an entry today* and no size; Hold and Sell verdicts never show a share count. If a check couldn't run, the page says so. **Where the market read comes from (since 2026-11-27).** These pages reuse 🏠 Home's read of the S&P 500 only while it is under 30 minutes old and from the same session (a read taken before the 9:30 AM ET open stops counting at the open); otherwise they read the S&P 500 live and say so. If neither read works, 📋 Watchlist, 📈 Analysis and the 09:45 Watchlist email hold every new entry as **Held: market move couldn't be read** (they never treat a market that can't be read as a flat day), the Watchlist shows a banner naming the names that would otherwise be Ready, and Analysis offers no size; both re-check every time you open the page. On a bull or flat day a line under the summary shows the tone and when it was read. A name whose sector the app can't map (since 2026-11-04) is held as **Held: sector unknown (macro check)** while a sector-specific release is near, and clears when the release is out or the ticker gets a sector on the app's curated map that the event doesn't affect; an ETF is held on any sector-specific release, the same rule Grow Today uses for ETF picks. Since 2026-11-26 a name is also held when the sector-concentration or portfolio-beta check couldn't run. If 🏠 Home hasn't built your holdings this session (or you've logged a trade since it did), the Watchlist builds them itself from your current holdings at the last loaded prices and says so in a blue line; if that build fails, every Enter Now on the page is held with one warning. If a holding couldn't be priced for that build, an amber line names it: it isn't in the sector weights, so its sector reads low until a later load. When your portfolio's beta couldn't be computed, only a name whose own beta is above the limit or couldn't be read is held.
 
 **What it deliberately does *not* do:** it does **not** scan the entire market. A thin micro-cap up 300% on the day — the kind a broker's *"all stocks > 20% today"* filter shows — won't appear here by design: the app screens *liquid, quality* names and stays a medium-term advisor, not a squeeze-chaser. To check any specific ticker yourself, use **🔍 Research a Stock** on Home or the **📈 Analysis** page — type a company name ("microsoft") instead of a ticker and it resolves the most likely match, disclosing which symbol it picked (and any other close-scoring match, e.g. GOOGL vs GOOG) rather than silently substituting one.
 """

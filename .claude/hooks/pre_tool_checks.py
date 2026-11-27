@@ -1380,6 +1380,12 @@ _GATE_FILES = {
     # (the dip trigger, the SPY guard and, from G-35, the pick's own stop); a wrong
     # call emails a buy on a name already below the stop its own pick set.
     "stock_analyzer/intraday_entry.py",
+    # Added 2026-11-27 (buy-check C4a, docs/plans/entry-fail-closed-c4-spec.md): when
+    # 🏠 Home's market-tone read may be reused by another page (under
+    # TONE_HOME_READ_MAX_AGE_MINUTES and the same session) and the wording of a read
+    # that couldn't be made; a wrong call lets a page call an entry off a stale or
+    # unreadable market, or holds one that is fine.
+    "stock_analyzer/tone_freshness.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

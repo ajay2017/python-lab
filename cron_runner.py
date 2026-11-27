@@ -491,7 +491,7 @@ def _log_watchlist_earnings_read(payload) -> None:
 def _watchlist_checks_held_line(payload) -> "str | None":
     """The scan-log line for names the Watchlist HELD because a buy check couldn't
     run (entry-fail-closed C2a): "watchlist: N held, a check couldn't run
-    (fit_unknown: X, Y; beta_unknown: Z)", or None when there is nothing to say (no
+    (fit_unknown: X, Y; beta_unknown: Z; tone_unread: W)", or None when there is nothing to say (no
     `checks_held` in the payload, or none held). Pure; never raises (a malformed
     payload reads as None)."""
     try:
@@ -499,7 +499,7 @@ def _watchlist_checks_held_line(payload) -> "str | None":
         if not isinstance(ch, dict):
             return None
         parts, n = [], 0
-        for kind in ("fit_unknown", "beta_unknown"):
+        for kind in ("fit_unknown", "beta_unknown", "tone_unread"):
             raw = ch.get(kind)
             tickers = [str(t) for t in raw] if isinstance(raw, (list, tuple)) else []
             if tickers:

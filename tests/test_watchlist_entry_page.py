@@ -251,11 +251,66 @@ def test_no_protect_banner_on_flat_or_bull_firing_control_on_bear():
 
 
 def test_banner_says_when_the_tone_or_macro_check_could_not_run():
+    # Buy-check C4a: an unread market is an `unread` HOLD box, not a fail-open
+    # note; only the macro calendar still fails open with a note.
     b = ee.watchlist_banner(UNAVAIL, None, [])
-    assert b["protect"] is None
-    assert any("bear-day check couldn't run" in n for n in b["notes"])
+    assert b["protect"] is None and b["unread"] is not None
+    assert b["tone_line"] is None
+    assert not any("bear-day" in n for n in b["notes"])
     assert any("macro-event check couldn't run" in n for n in b["notes"])
     assert ee.watchlist_banner(FLAT, CLEAR_MAP, [])["notes"] == []
+
+
+def _held_card(ticker, *checks):
+    return {"ticker": ticker, "action": "ENTRY_HELD",
+            "holds": [{"check": c} for c in checks]}
+
+
+def test_unread_banner_lists_only_names_held_by_tone_unread_alone():
+    recs = [_held_card("BKNG", "tone_unread"),
+            _held_card("JPM", "tone_unread", "macro"),     # not Ready on a calm day
+            _held_card("OLD", "tone"),                     # a bear hold, not this one
+            _held_card("SOLD", "tone_unread"),             # replaced by an override
+            _rec("OK", ctx=_ctx())]
+    b = ee.watchlist_banner(UNAVAIL, CLEAR_MAP, recs, exclude={"sold"})
+    u = b["unread"]
+    assert u["title"] == "Market move couldn't be read — new entries held"
+    assert "1 name would otherwise be Ready: BKNG." in u["body"]
+    assert "JPM" not in u["body"] and "OLD" not in u["body"] and "SOLD" not in u["body"]
+    assert "The S&P 500 read failed." in u["body"]
+    assert "Clears when the S&P 500 read succeeds" in u["body"]
+    assert "shown, not deferred" not in (u["title"] + u["body"])
+    assert "entries are shown" not in (u["title"] + u["body"])
+    # no names -> no list, still a box
+    assert "would otherwise" not in ee.watchlist_banner(UNAVAIL, CLEAR_MAP, [])["unread"]["body"]
+    # plural wording
+    two = ee.watchlist_banner(UNAVAIL, CLEAR_MAP,
+                              [_held_card("A", "tone_unread"), _held_card("B", "tone_unread")])
+    assert "2 names would otherwise be Ready: A, B." in two["unread"]["body"]
+    # a readable tone has no unread box
+    assert ee.watchlist_banner(FLAT, CLEAR_MAP, recs)["unread"] is None
+
+
+def test_unread_banner_detail_follows_the_why():
+    aged = {**UNAVAIL, "why": "home_aged",
+            "home_read_at": datetime.datetime(2026, 10, 16, 9, 42,
+                                              tzinfo=datetime.timezone.utc)}
+    u = ee.watchlist_banner(aged, CLEAR_MAP, [])["unread"]
+    assert "Home's read from" in u["body"] and "more than 30 minutes old" in u["body"]
+    assert "fresh S&P 500 read failed" in u["body"]
+
+
+def test_tone_line_on_bull_and_flat_days_with_time_and_source_not_beside_protect():
+    home_flat = {"tone": "flat", "sp500_pct": -0.1, "available": True, "source": "home",
+                 "as_of": datetime.datetime(2026, 10, 16, 9, 42)}
+    b = ee.watchlist_banner(home_flat, CLEAR_MAP, [])
+    assert b["tone_line"] == ("Market tone: flat (S&P -0.1%). "
+                              "Market read from Home's Brief, 9:42 AM ET.")
+    bull = ee.watchlist_banner({**FLAT, "tone": "bull", "sp500_pct": 0.9}, CLEAR_MAP, [])
+    assert bull["tone_line"] == "Market tone: bull (S&P +0.9%). Market read live."
+    # a bear day says it in the Protect box, so no second line
+    assert ee.watchlist_banner(BEAR, CLEAR_MAP, [])["tone_line"] is None
+    assert ee.watchlist_banner(UNAVAIL, CLEAR_MAP, [])["tone_line"] is None
 
 
 def test_live_tone_source_line_and_unavailable_none():
@@ -581,7 +636,8 @@ def test_banner_path_live_while_home_tone_failed_never_says_matching():
                             home_state=ee.HOME_TODAY_TONE_FAILED)["protect"]
     assert "matching" not in (p["title"] + p["body"] + p["source"])
     assert "couldn't read the market this run" in p["source"]
-    assert "treating today as flat" in p["source"] and "were not deferred" in p["source"]
+    assert "its Grow Today runs the day as flat" in p["source"]
+    assert "not deferred" not in p["source"] and "were not deferred" not in p["source"]
     assert p["body"].startswith("New entries deferred.")
 
 
@@ -600,7 +656,8 @@ def test_banner_path_live_with_no_home_state_is_plain_live():
 def test_banner_path_unavailable_has_no_protect_banner_and_says_so():
     b = ee.watchlist_banner(UNAVAIL, CLEAR_MAP, [], home_state=ee.HOME_TODAY_TONE_FAILED)
     assert b["protect"] is None
-    assert any("bear-day check couldn't run" in n for n in b["notes"])
+    assert b["unread"]["title"] == "Market move couldn't be read — new entries held"
+    assert not any("bear-day check couldn't run" in n for n in b["notes"])
 
 
 def test_whole_chain_home_failed_then_live_bear_banner_is_true():
@@ -609,7 +666,8 @@ def test_whole_chain_home_failed_then_live_bear_banner_is_true():
     st_ = ee.resolve_tone_state(ctx, True, None, -0.8, True)
     assert st_["source"] == "live" and st_["tone"] == "bear"
     p = ee.watchlist_banner(st_, CLEAR_MAP, [], home_state=hs)["protect"]
-    assert "matching" not in (p["body"] + p["source"]) and "treating today as flat" in p["source"]
+    assert "matching" not in (p["body"] + p["source"])
+    assert "its Grow Today runs the day as flat" in p["source"]
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), True, "x", None])

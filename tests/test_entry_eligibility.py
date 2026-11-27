@@ -39,7 +39,10 @@ def test_resolver_order():
     r = ee.resolve_tone_state({**home, "tone_available": False}, True, "x", -0.8, True)
     assert (r["source"], r["tone"]) == ("live", "bear")
     r = ee.resolve_tone_state(None, False, None, None, False)
-    assert r == {"tone": None, "sp500_pct": None, "available": False, "source": None, "as_of": None}
+    # C4a: the result also carries why / home_read_at (legacy now_et=None: nothing
+    # readable and no Home to blame reads "live_failed").
+    assert r == {"tone": None, "sp500_pct": None, "available": False, "source": None,
+                 "as_of": None, "why": "live_failed", "home_read_at": None}
     r = ee.resolve_tone_state(home, False, None, 0.0, False)
     assert r["available"] is False and r["source"] is None
 
@@ -159,12 +162,20 @@ def test_gate_ids_default_none():
     assert r["holds"][0]["gate_id"] is None
 
 
-def test_unchecked_entries_fail_open():
+def test_unchecked_entries_fail_open_except_the_tone():
+    # Buy-check C4a (owner D1 of 2026-10-16 reversed 2026-11-27): an unreadable
+    # market HOLDS; the macro and news "couldn't run" notes still fail open.
     r = _clean(tone_state={"available": False}, macro_map=None, news=None)
-    assert r["eligible"] and r["holds"] == []
-    assert {u["check"] for u in r["unchecked"]} == {"tone", "macro", "news"}
+    assert not r["eligible"]
+    assert [h["check"] for h in r["holds"]] == ["tone_unread"]
+    assert {u["check"] for u in r["unchecked"]} == {"macro", "news"}
     assert any("no recent headlines" in u["why"] for u in r["unchecked"])
-    assert _clean(tone_state=None)["unchecked"][0]["check"] == "tone"
+    r2 = _clean(tone_state=None)
+    assert [h["check"] for h in r2["holds"]] == ["tone_unread"]
+    assert "tone" not in {u["check"] for u in r2["unchecked"]}
+    # with a readable tone the same macro / news gaps leave the name eligible
+    r3 = _clean(tone_state=FLAT, macro_map=None, news=None)
+    assert r3["eligible"] and {u["check"] for u in r3["unchecked"]} == {"macro", "news"}
 
 
 def test_earnings_boundary_and_unknown():
@@ -207,11 +218,12 @@ def test_no_local_tone_rule(rel):
 
 # -- chunk 3 follow-ups ----------------------------------------------------------
 def test_stale_check_without_a_bundle_is_unchecked_not_a_silent_pass():
-    r = ee.entry_check(bundle=None)
+    r = ee.entry_check(bundle=None, tone_state=FLAT)
     assert r["eligible"]
     assert {"check": "stale", "why": "no data bundle — the stale-data check couldn't run"} in r["unchecked"]
     # a real (empty) bundle is a checked pass
-    assert not [u for u in ee.entry_check(bundle={})["unchecked"] if u["check"] == "stale"]
+    assert not [u for u in ee.entry_check(bundle={}, tone_state=FLAT)["unchecked"]
+                if u["check"] == "stale"]
 
 
 def test_resolver_requires_tone_available_true():
@@ -249,13 +261,14 @@ def test_compute_daily_brief_fallback_ctx_marks_tone_unavailable():
 def test_macro_hold_decided_on_membership_not_reason_truthiness():
     for reasons in ({}, {"Technology": ""}, {"Technology": None}):
         bm = {"sectors": {"Technology"}, "reasons": reasons}
-        r = ee.entry_check(sector="Technology", macro_map=bm, bundle={})
+        r = ee.entry_check(sector="Technology", macro_map=bm, bundle={}, tone_state=FLAT)
         assert not r["eligible"] and r["binding"]["check"] == "macro"
         assert "imminent HIGH-impact macro event" in r["binding"]["reason"]
     allm = {"sectors": {"__ALL__"}, "reasons": {}}
-    assert not ee.entry_check(sector="Whatever", macro_map=allm, bundle={})["eligible"]
+    assert not ee.entry_check(sector="Whatever", macro_map=allm, bundle={},
+                              tone_state=FLAT)["eligible"]
     # not in the set -> no hold even though a reason exists for another sector
-    assert ee.entry_check(sector="Energy", bundle={},
+    assert ee.entry_check(sector="Energy", bundle={}, tone_state=FLAT,
                           macro_map={"sectors": {"Technology"}, "reasons": {"Energy": "x"}})["eligible"]
 
 
