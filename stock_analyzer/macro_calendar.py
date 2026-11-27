@@ -1079,7 +1079,18 @@ def build_macro_calendar(
     # ── FRED live layer ───────────────────────────────────────────────────────
     # Works with or without a key. Without key FRED allows ~10 req/min (enough
     # for 6 series fetched once per day). With a free key: 120 req/min.
-    _fetch_fred(fred_key, rows, today)
+    # buy-check C4m (owner Q3): a FRED failure is NOT an unreadable calendar. The
+    # static dates are the source of truth for G-07's imminence gate, so an
+    # unexpected FRED payload keeps the static rows (released stays False, so the
+    # same-day gate holds until the release time passes) and is logged.
+    try:
+        _fetch_fred(fred_key, rows, today)
+    except Exception as _fred_exc:
+        try:
+            from stock_analyzer import api_health as _ah
+            _ah.record("fred", "parse", f"calendar enrichment failed: {str(_fred_exc)[:120]}")
+        except Exception:
+            pass
 
     rows.sort(key=lambda x: (x["date"], x["time_et"]))
     return rows

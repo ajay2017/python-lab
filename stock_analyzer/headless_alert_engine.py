@@ -36,6 +36,7 @@ from stock_analyzer import held_stop_carry as _held_stop_carry
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import young_holding_stop as _young_holding_stop
 from stock_analyzer import news_feed
+from stock_analyzer import macro_read
 from stock_analyzer import buy_check_state as _buy_check_state
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
@@ -767,31 +768,22 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
     except Exception:
         news_items = []
 
-    # Macro calendar — MUST pass it (not []), else the imminent-HIGH-impact-event
-    # sector gate is disabled headlessly and the buy email could surface a pick
-    # the app would suppress on a binary-catalyst day (FOMC/CPI/jobs). The static
+    # Macro calendar — MUST pass it, else the imminent-HIGH-impact-event sector
+    # gate is disabled headlessly and the buy email could surface a pick the app
+    # would suppress on a binary-catalyst day (FOMC/CPI/jobs). The static
     # backbone gives the event dates even without a FRED key. (Streamlit-free.)
-    macro_events: list = []
-    # The SAME events the Watchlist's entry check reads (entry_context below).
-    # None = the calendar could not be built (unchecked); [] = checked, none.
-    # Kept apart from `macro_events` because Grow Today's own input above
-    # defaults to [] on a failure.
-    entry_macro_events = None
+    # Buy-check C4m: None = the calendar could not be built (never `[]`, which
+    # means "checked, no event"): Grow Today holds the whole day
+    # (`macro_unread`) and the Watchlist lane holds every name. The SAME name
+    # feeds build_daily_briefing and entry_context below, so the two emails of a
+    # run can never disagree about one read.
+    macro_events = None
     try:
         import os as _os
         from stock_analyzer.macro_calendar import build_macro_calendar
-        # 2026-09-24 app review, Q2 (antipattern-baseline decision):
-        # build_macro_calendar's own return type is always `list[dict]`,
-        # never None -- its core event/date/impact data comes from a
-        # HARDCODED static table (_STATIC in macro_calendar.py), not a live
-        # API call, so it isn't exposed to a provider outage the way
-        # exit_signals is. The FRED layer only enriches with actual
-        # released VALUES, which G-07's imminence gate doesn't read. `or []`
-        # is redundant defensive code here, not a fabricated-all-clear risk.
-        macro_events = build_macro_calendar(
+        macro_events = macro_read.events_or_none(build_macro_calendar(
             port_df, fred_key=(_os.environ.get("FRED_API_KEY") or None), today=today,
-        ) or []
-        entry_macro_events = macro_events
+        ))
     except Exception as e:
         errors.append(f"macro calendar failed: {e}")
 
@@ -919,7 +911,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
                 # The tone/macro reads were already made: the Watchlist email
                 # still shares them (one tone read per run).
                 "entry_context": {"market_context": market_context,
-                                  "macro_events": entry_macro_events}}
+                                  "macro_events": macro_events}}
 
     # build_daily_briefing's tone/new_picks/etc. live nested under "grow_today"
     # (app.py always reads it that way) -- NOT at the top level of `brief`.
@@ -971,8 +963,9 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         # real risk-off move never logs as "S&P n/a".
         "sp500_pct":        grow.get("sp500_pct", market_context.get("sp500_pct")),
         "bar":              _bar,
-        # Buy-check C4b: the hold's check name ("tone_unread" / "tone_not_today")
-        # when Grow Today held every entry, else None.
+        # Buy-check C4b / C4m: the hold's check name ("tone_unread" /
+        # "tone_not_today" / "macro_unread") when Grow Today held every entry,
+        # else None.
         "entry_hold":       _hold.get("check") if isinstance(_hold, dict) else None,
         "sector_blocked":   len(grow.get("sector_blocked_picks", []) or []),
         "sector_unknown":   len(grow.get("sector_unknown_picks", [])),
@@ -1014,9 +1007,9 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
             # context (incl. `tone_read_at`) and the macro events loaded above,
             # so `compute_watchlist_entries` -- and so both emails in a scan
             # run -- use the SAME reads. `macro_events` None = couldn't be
-            # built (unchecked), [] = checked, none. Additive.
+            # built (unread: a HOLD), [] = checked, none. Additive.
             "entry_context": {"market_context": market_context,
-                              "macro_events": entry_macro_events},
+                              "macro_events": macro_events},
             # Additive -- news_feed.feed_state over the held + Grow-candidate
             # bundles this run loaded; the cron reddens the heartbeat on an outage.
             "news_feed": news_feed.feed_state({**grow_composites, **held_data})}
@@ -1041,7 +1034,7 @@ def _live_entry_context(today: date, port_df) -> dict:
 
     Same sentinel semantics as compute_morning_picks: an unreadable index ->
     tone_available False (the check reports "couldn't run", it is not skipped);
-    an unbuildable calendar -> macro_events None (unchecked), [] = checked,
+    an unbuildable calendar -> macro_events None (unread: a HOLD), [] = checked,
     none. Never raises."""
     try:
         mc = _read_market_context()
@@ -1086,7 +1079,8 @@ def compute_watchlist_entries(
     """Return {"entries": [...] | None, "built_at": <ET iso>, "errors": [...],
     "reason": str | None, "gate_degraded": bool, "fit_read": bool,
     "beta_read": bool, "fit_state": {"state", "unpriced_sectors"},
-    "checks_held": {"fit_unknown": [...], "beta_unknown": [...], "tone_unread": [...]},
+    "checks_held": {"fit_unknown": [...], "beta_unknown": [...], "tone_unread": [...],
+    "macro_unread": [...]},
     "entry_run": {...}, "gate_ledger_rows": [...]}.
 
     `entry_context` (shared-entry-check chunk 5): compute_morning_picks'
@@ -1293,7 +1287,7 @@ def compute_watchlist_entries(
         errors.append(f"entry check macro failed: {e}")
         _entry_run_ctx = {"tone_state": _ec_tone, "macro_map": None}
     _entry_run = {"tone_state": _ec_tone,
-                  "macro_available": _entry_run_ctx.get("macro_map") is not None}
+                  "macro_available": not macro_read.map_unread(_entry_run_ctx.get("macro_map"))}
 
     # ── Per-ticker: bundle load → portfolio_ctx → build_watchlist_recommendation ──
     qualifying: list[dict] = []
@@ -1660,7 +1654,9 @@ def compute_watchlist_entries(
     # names the advisor held because a fit / beta check couldn't run. Never fatal.
     # buy-check C4a: plus the names held because the S&P 500 read failed
     # (ENTRY_HELD cards with hold_kind "tone_unread").
-    _checks_held = {"fit_unknown": [], "beta_unknown": [], "tone_unread": []}
+    # buy-check C4m: plus the names held because the macro calendar couldn't be read.
+    _checks_held = {"fit_unknown": [], "beta_unknown": [], "tone_unread": [],
+                    "macro_unread": []}
     try:
         for _c in all_cards:
             _k = _c.get("suppression_kind")
@@ -1671,6 +1667,9 @@ def compute_watchlist_entries(
             elif (_c.get("action") == "ENTRY_HELD" and _c.get("hold_kind") == "tone_unread"
                     and _tk and _tk not in held_set):
                 _checks_held["tone_unread"].append(_tk)
+            elif (_c.get("action") == "ENTRY_HELD" and _c.get("hold_kind") == "macro_unread"
+                    and _tk and _tk not in held_set):
+                _checks_held["macro_unread"].append(_tk)
     except Exception as e:
         errors.append(f"held-checks summary failed ({e})")
 

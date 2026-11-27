@@ -535,7 +535,6 @@
     },
     "stock_analyzer/headless_alert_engine.py": {
       "OFFLINE_SENTINEL_COLLAPSE\u001fbrief.get(\"grow_today\") or {}": 1,
-      "OFFLINE_SENTINEL_COLLAPSE\u001fbuild_macro_calendar( port_df, fred_key=(_os.environ.get(\"FRED_API_KEY\") or None), today=today, ) or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fbundle.get(\"financials\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001ffrag.get(\"exposed\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fgrow.get(\"composite_skipped\", []) or []": 1,

@@ -100,6 +100,7 @@ from stock_analyzer import held_stop_view as _held_stop_view
 from stock_analyzer import held_stop_wiring as _held_stop_wiring
 from stock_analyzer import stop_basis_notice as _stop_basis_notice
 from stock_analyzer import llm
+from stock_analyzer import macro_read
 from stock_analyzer import news_feed
 from stock_analyzer import protective_coverage
 from stock_analyzer import regime_read
@@ -476,6 +477,9 @@ def _entry_hold_text(hold) -> str:
     C4b): why the run's new picks were held."""
     if hold == _tone_freshness.CHECK_UNREAD:
         return "market move couldn't be read — new picks held (G-34)"
+    if hold == macro_read.CHECK_UNREAD:
+        # buy-check C4m: the macro calendar couldn't be read.
+        return "macro calendar couldn't be read — new picks held (G-34)"
     return "the market read isn't today's session — new picks held (G-34)"
 
 
@@ -518,7 +522,7 @@ def _log_watchlist_earnings_read(payload) -> None:
 def _watchlist_checks_held_line(payload) -> "str | None":
     """The scan-log line for names the Watchlist HELD because a buy check couldn't
     run (entry-fail-closed C2a): "watchlist: N held, a check couldn't run
-    (fit_unknown: X, Y; beta_unknown: Z; tone_unread: W)", or None when there is nothing to say (no
+    (fit_unknown: X, Y; beta_unknown: Z; tone_unread: W; macro_unread: V)", or None when there is nothing to say (no
     `checks_held` in the payload, or none held). Pure; never raises (a malformed
     payload reads as None)."""
     try:
@@ -526,7 +530,7 @@ def _watchlist_checks_held_line(payload) -> "str | None":
         if not isinstance(ch, dict):
             return None
         parts, n = [], 0
-        for kind in ("fit_unknown", "beta_unknown", "tone_unread"):
+        for kind in ("fit_unknown", "beta_unknown", "tone_unread", macro_read.CHECK_UNREAD):
             raw = ch.get(kind)
             tickers = [str(t) for t in raw] if isinstance(raw, (list, tuple)) else []
             if tickers:
@@ -2694,6 +2698,13 @@ def _run_scan(now_et, force: bool) -> int:
     if _tone_fail:
         _log(f"TONE UNREAD — {_tone_fail}")
         failures.append(_tone_fail)
+    # C4m (owner Q2): an unreadable macro calendar held every buy: a failed lane too.
+    # The Watchlist's own run read (`entry_run.macro_available`) counts as well.
+    _wle_run = _wle_payload.get("entry_run") if isinstance(_wle_payload, dict) else None
+    _macro_fail = macro_read.failure_line(payload.get("entry_context"), _wle_run)
+    if _macro_fail:
+        _log(f"MACRO UNREAD — {_macro_fail}")
+        failures.append(_macro_fail)
 
     # ── Watchlist "Ready to Enter" proactive email ──────────────────────────
     # ENTER_NOW verdicts are otherwise only discoverable by opening 📋 Watchlist
@@ -2840,6 +2851,11 @@ def _run_intraday(now_et, force: bool) -> int:
         _id_tone_fail = _tone_unread_failure(payload)
         if _id_tone_fail:
             _id_failures.append(_id_tone_fail)
+    # C4m (owner Q2): an unreadable macro calendar held every pick: a failed lane.
+    _id_macro_fail = macro_read.failure_line(payload.get("entry_context"))
+    if _id_macro_fail:
+        _log(f"MACRO UNREAD — {_id_macro_fail}")
+        _id_failures.append(_id_macro_fail)
     picks = payload.get("picks", [])
     go_picks = [
         p for p in picks

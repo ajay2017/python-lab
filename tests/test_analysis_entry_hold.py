@@ -170,10 +170,14 @@ def test_unavailable_tone_holds_the_size():
     assert b["source"] == "The S&P 500 read failed."
 
 
-def test_unavailable_macro_fails_open_with_a_note():
+def test_unavailable_macro_holds_the_name_and_offers_no_size():
+    # Buy-check C4m (owner Q1, 2026-11-27): the macro calendar couldn't be read ->
+    # held, never "sizes are shown" (it used to fail open with a note).
     d = _decide(run_ctx=_run(macro=None))
-    assert d["offer_size"] is True
-    assert any(u["check"] == "macro" for u in d["unchecked"])
+    assert d["offer_size"] is False
+    assert d["hold"]["check"] == "macro_unread"
+    assert d["reason_if_no_size"] == "the macro-event calendar couldn't be read"
+    assert not any(u["check"] == "macro" for u in d["unchecked"])
 
 
 def test_needs_check_only_for_not_held_real_buys():
@@ -189,7 +193,9 @@ def test_gate_tiles_states():
         _decide(run_ctx=_run(BEAR_LIVE, macro=None), news=[]))}
     assert list(tiles) == ["Market tone", "Macro", "News", "Data fresh"]
     assert tiles["Market tone"]["state"] is False
-    assert tiles["Macro"]["state"] is None and tiles["Macro"]["detail"] == "not checked"
+    # C4m: an unread calendar is a HOLD on the Macro tile, not "not checked"
+    assert tiles["Macro"]["state"] is False
+    assert tiles["Macro"]["detail"] == "the macro-event calendar couldn't be read"
     assert tiles["News"]["state"] is None      # no headlines to check
     assert tiles["Data fresh"]["state"] is True
 
@@ -403,9 +409,10 @@ def test_shares_label_and_fail_open_notes():
     assert ee.analysis_shares_label(_decide(news=NEG_NEWS)) == "— (held)"
     assert ee.analysis_shares_label(_decide(run_ctx=None)) == "— (held)"
     # An unread market is a HOLD on the card, no longer a fail-open note.
+    # C4m: so is an unread macro calendar (a HOLD on the card; the old "sizes are
+    # shown, not held for it" note is gone).
     n = ee.analysis_notes(UNAVAIL, None)
-    assert len(n) == 1 and "macro-event check" in n[0] and "sizes are shown" in n[0]
-    assert all("bear-day" not in x for x in n)
+    assert n == []
     assert ee.analysis_notes(UNAVAIL, CLEAR_MAP) == []
     # A bull / flat day gets the tone line (time + source); a bear day does not.
     flat_note = ee.analysis_notes(FLAT, CLEAR_MAP)

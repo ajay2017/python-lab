@@ -15,6 +15,7 @@ import math
 from datetime import date, time as _time
 from zoneinfo import ZoneInfo
 
+from stock_analyzer import macro_read as _mr
 from stock_analyzer import macro_sector_gate as _msg
 from stock_analyzer import tone_freshness as _tf
 from stock_analyzer.asset_type import ASSET_TYPE_ETF
@@ -263,7 +264,8 @@ def check_macro(ctx):
     is_etf = isinstance(bundle, dict) and bundle.get("asset_type") == ASSET_TYPE_ETF
     d = _msg.decide(ctx.get("sector"), ctx.get("macro_map"), is_etf=is_etf)
     if d["state"] == "unchecked":
-        return {"kind": "unchecked", "check": "macro", "why": d["reason"]}
+        # buy-check C4m: an unreadable calendar HOLDS the name (never "no event").
+        return {**_mr.entry_hold()}
     if d["state"] == "blocked":
         return {
             "kind": "hold", "check": "macro", "gate_id": _gid(ctx, "macro"),
@@ -350,7 +352,7 @@ DEFAULT_GATE_IDS = {"tone": None, "macro": None}
 # Holds that are a check that couldn't run (a data abstention), not a policy
 # gate. When a policy hold fires on the same name it binds instead, so the
 # ledgered gate row (G-28 etc.) is never lost behind an abstention.
-_ABSTENTION_CHECKS = frozenset({"tone_unread"})
+_ABSTENTION_CHECKS = frozenset({"tone_unread", _mr.CHECK_UNREAD})
 
 
 def _binding_hold(holds):
@@ -374,8 +376,8 @@ def entry_check(*, bundle=None, tone_state=None, sector=None, macro_map=None,
 
     ``news`` is ``{"compound", "n", "headline"}`` or None. ``gate_ids`` maps
     "tone"/"macro" to the calling surface's ledger gate id (stale/news/earnings
-    never carry one). ``macro_map`` is ``macro_block_map``'s result (None =
-    unchecked).
+    never carry one). ``macro_map`` is ``macro_block_map``'s result (None = the
+    calendar couldn't be read: a HOLD, ``macro_unread``).
     """
     ctx = {
         "bundle": bundle, "tone_state": tone_state, "sector": sector,
@@ -438,7 +440,7 @@ def pick_macro_events(home_events, home_is_today, live_events):
 def watchlist_run_ctx(tone_state, macro_events, today: date, now_et) -> dict:
     """The per-run part of an ``entry_ctx``: the tone state (from
     ``resolve_tone_state``) and the macro block map (None when the events
-    couldn't be loaded -> check_macro's "unchecked")."""
+    couldn't be loaded -> check_macro holds every name, ``macro_unread``)."""
     return {"tone_state": tone_state,
             "macro_map": macro_block_map(macro_events, today, now_et)}
 
@@ -556,8 +558,10 @@ def tone_line(tone_state, home_state=None) -> "str | None":
 
 
 def _tickers_held_only_by(recs, check, exclude) -> list:
-    """Tickers of ENTRY_HELD cards whose every hold is ``check``, minus ``exclude``
-    (an Already-in-Portfolio / Sold-Today override replaces the held card)."""
+    """Tickers of ENTRY_HELD cards whose every hold is ``check`` (one check name or
+    a set / tuple of them), minus ``exclude`` (an Already-in-Portfolio /
+    Sold-Today override replaces the held card)."""
+    _checks = {check} if isinstance(check, str) else set(check)
     skip = {str(x).upper() for x in (exclude or ())}
     tickers = []
     for r in (recs if recs is not None else []):
@@ -567,7 +571,7 @@ def _tickers_held_only_by(recs, check, exclude) -> list:
             continue
         holds = r.get("holds")
         holds = [] if holds is None else holds
-        if holds and all(isinstance(h, dict) and h.get("check") == check for h in holds):
+        if holds and all(isinstance(h, dict) and h.get("check") in _checks for h in holds):
             tickers.append(str(r.get("ticker")))
     return tickers
 
@@ -576,22 +580,29 @@ def watchlist_banner(tone_state, macro_map, recs, home_state=None, exclude=()) -
     """What the top of the Actionable view says.
 
     ``{"protect": None | {"title", "body", "source"},
-    "unread": None | {"title", "body"}, "tone_line": str | None,
-    "notes": [str, ...]}``.
+    "unread": None | {"title", "body"}, "macro_unread": None | {"title", "body"},
+    "tone_line": str | None, "notes": [str, ...]}``.
     ``protect`` is set on a bear tone; "matching 🏠 Home" is said ONLY when the
     tone really came from Home's Brief. ``unread`` is set when the market move
     couldn't be read (new entries are HELD, never read as flat). The "would
     otherwise be Ready" lists are names held ONLY by that one tone check and not
     replaced by an Already-in-Portfolio / Sold-Today override (``exclude``).
     ``tone_line`` is one caption on every bull / flat day (the time and source
-    of the read). ``notes`` carries the remaining fail-open "couldn't run"
-    disclosures (the macro calendar)."""
+    of the read). ``macro_unread`` is set when the macro calendar couldn't be read
+    (buy-check C4m: new entries are HELD; its list is the names held only by that
+    check, or none when the tone is also unread -- the tone ``unread`` block then
+    lists every name held only by either check, one list, never two). ``notes`` is
+    kept for future run-level disclosures (none today)."""
     notes: list = []
+    macro_unread = None
     protect = None
     unread = None
     ts = tone_state if isinstance(tone_state, dict) else {}
     if not ts.get("available"):
-        tickers = _tickers_held_only_by(recs, "tone_unread", exclude)
+        _macro_too = _mr.map_unread(macro_map)
+        tickers = _tickers_held_only_by(
+            recs, {"tone_unread", _mr.CHECK_UNREAD} if _macro_too else {"tone_unread"},
+            exclude)
         n = len(tickers)
         unread = {
             "title": "Market move couldn't be read — new entries held",
@@ -615,10 +626,20 @@ def watchlist_banner(tone_state, macro_map, recs, home_state=None, exclude=()) -
                        f"Ready: {', '.join(tickers)}." if n else ""),
             "source": tone_source_line(ts, home_state),
         }
-    if macro_map is None:
-        notes.append("⚠️ The macro-event check couldn't run (macro calendar unavailable) — "
-                     "entries are shown, not held for it.")
-    return {"protect": protect, "unread": unread,
+    if _mr.map_unread(macro_map):
+        _both = unread is not None
+        _mtickers = [] if _both else _tickers_held_only_by(recs, {_mr.CHECK_UNREAD}, exclude)
+        _mn = len(_mtickers)
+        macro_unread = {
+            "title": "Macro calendar couldn't be read — new entries held",
+            "body": ((f"{_mn} name{'s' if _mn != 1 else ''} would otherwise be "
+                      f"Ready: {', '.join(_mtickers)}. " if _mn else "")
+                     + "The app can't tell whether a CPI, jobs or Fed release is due, "
+                       "so it holds new entries rather than assume none. Clears when "
+                       "the macro calendar can be read — re-checked every time you "
+                       "open this page."),
+        }
+    return {"protect": protect, "unread": unread, "macro_unread": macro_unread,
             "tone_line": None if protect is not None else tone_line(ts, home_state),
             "notes": notes}
 
@@ -706,6 +727,8 @@ HELD_KIND_LABELS = {
     "check_failed": "entry check couldn't run",
     # buy-check C4a: the S&P 500 read couldn't run (never read as a flat day)
     "tone_unread": "market move couldn't be read",
+    # buy-check C4m: the macro-event calendar couldn't be read
+    "macro_unread": "macro calendar couldn't be read",
     # entry-fail-closed C2a: a portfolio-fit / beta check that couldn't run
     "fit_unknown": "portfolio fit couldn't be checked",
     "beta_unknown": "portfolio beta couldn't be checked",
@@ -749,7 +772,7 @@ def email_footer_lines(entry_run) -> "list[str]":
     else:
         lines.append("Market tone couldn't be read — no name is listed as Ready to Enter this run.")
     if entry_run.get("macro_available") is not True:
-        lines.append("Macro calendar unavailable — the macro-event check didn't run.")
+        lines.append("Macro calendar couldn't be read — no name is listed as Ready to Enter this run.")
     return lines
 
 
@@ -855,9 +878,9 @@ def analysis_gate_tiles(decision) -> "list[dict]":
             ("macro", "Macro", "No imminent macro event"),
             ("news", "News", "No negative news"),
             ("stale", "Data fresh", "Data is current"))
-    # The Macro tile reads both the G-28 hold and the unknown-sector hold.
+    # The Macro tile reads the G-28 hold, the unknown-sector hold and the unread hold.
     # The Market tone tile reads both the bear-day hold and the unread hold.
-    _checks_for = {"macro": ("macro", "macro_unknown_sector"),
+    _checks_for = {"macro": ("macro", "macro_unknown_sector", "macro_unread"),
                    "tone": ("tone", "tone_unread")}
     tiles = []
     for chk, label, ok in spec:
@@ -934,15 +957,12 @@ def analysis_hold_banner(decision, tone_state=None, home_state=None) -> "dict | 
 def analysis_notes(tone_state, macro_map, home_state=None) -> "list[str]":
     """Disclosures for the Analysis page (worded for sizes, not for the
     Watchlist's entries): the tone line on a bull / flat day (an unread market
-    is a HOLD on the card, not a note) and the macro fail-open note."""
+    is a HOLD on the card, not a note; so is an unread macro calendar)."""
     notes = []
     ts = tone_state if isinstance(tone_state, dict) else {}
     line = tone_line(ts, home_state)
     if line:
         notes.append(line)
-    if macro_map is None:
-        notes.append("⚠️ The macro-event check couldn't run (macro calendar unavailable) — "
-                     "sizes are shown, not held for it.")
     return notes
 
 

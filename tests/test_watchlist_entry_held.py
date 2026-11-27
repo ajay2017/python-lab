@@ -241,10 +241,15 @@ def test_emailed_then_held_line_says_deferred_only_for_the_bear_tone():
     assert "now held: " in line and "deferred" not in line
 
 
-def test_missing_news_and_macro_are_noted_not_silent():
+def test_missing_news_is_noted_and_a_missing_macro_calendar_holds():
+    # C4m (owner Q1, 2026-11-27): an unread calendar HOLDS; only news stays a note.
     r = _rec(ctx=_ctx(news=None, macro_map=None))
-    assert r["action"] == "ENTER_NOW"
-    assert {u["check"] for u in r["entry_unchecked"]} == {"macro", "news"}
+    assert r["action"] == "ENTRY_HELD" and r["hold_kind"] == "macro_unread"
+    assert r["suppression_kind"] is None
+    assert {u["check"] for u in r["entry_unchecked"]} == {"news"}
+    r2 = _rec(ctx=_ctx(news=None, macro_map={"sectors": set(), "reasons": {}}))
+    assert r2["action"] == "ENTER_NOW"
+    assert {u["check"] for u in r2["entry_unchecked"]} == {"news"}
 
 
 def test_crash_fails_closed_check_failed_no_ledger_kind(monkeypatch):

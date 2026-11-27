@@ -534,7 +534,7 @@ def test_entry_hold_text_names_each_hold():
     assert "isn't today's session" in cr._entry_hold_text("tone_not_today")
 
 
-def _run_scan(monkeypatch, diag):
+def _run_scan(monkeypatch, diag, entry_context=None):
     from datetime import date as _date
     from stock_analyzer import reference_data as rd, scanner as real_scanner
     emails, notified = {}, []
@@ -548,6 +548,8 @@ def _run_scan(monkeypatch, diag):
     payload = {"picks": [], "errors": [], "built_at": "x", "diag": diag, "book_drift": None,
                "macro_coverage": None, "grow": {"entry_hold": None},
                "budget_inputs": _bud.BUDGET_INPUTS, "news_feed": {"state": "ok"}}
+    if entry_context is not None:       # C4m: the macro calendar read the run carried
+        payload["entry_context"] = entry_context
     monkeypatch.setattr(cr, "compute_morning_picks", lambda **_k: payload)
     monkeypatch.setattr(cr, "compute_watchlist_entries", lambda **_k: {
         "entries": [], "built_at": "x", "errors": [], "reason": None,
@@ -600,7 +602,7 @@ def test_scan_without_a_hold_keeps_its_old_zero_pick_wording(monkeypatch, capsys
     assert rc == 0 and notified == []
 
 
-def _run_intraday(monkeypatch, diag):
+def _run_intraday(monkeypatch, diag, entry_context=None):
     import stock_analyzer.intraday_entry as ie
     emails, notified = {}, []
     now = cr._ET.localize(datetime(2026, 10, 16, 11, 35).replace(tzinfo=None))
@@ -612,6 +614,8 @@ def _run_intraday(monkeypatch, diag):
     payload = {"picks": [], "errors": [], "built_at": "x", "book_drift": None,
                "macro_coverage": None, "budget_inputs": _bud.BUDGET_INPUTS,
                "news_feed": {"state": "ok"}, "diag": diag}
+    if entry_context is not None:       # C4m: the macro calendar read the run carried
+        payload["entry_context"] = entry_context
     monkeypatch.setattr(cr, "compute_morning_picks", lambda **_k: payload)
     monkeypatch.setattr(ie, "fetch_intraday_prices", lambda t: {})
     monkeypatch.setattr(cr.db, "load_alert_state", lambda *_a, **_k: None)
@@ -742,8 +746,9 @@ def test_pin_market_tone_cache_publishes_none_for_an_unread_market():
     assert "None if tone_freshness.tone_unread(_market_context) else _db_tone" in seg
 
 
-def test_pin_synth_signature_carries_the_session_and_schema_is_37():
-    assert "_SYNTH_SCHEMA_VER = 37  # bumped: Grow Today carries entry_hold" in _APP_SRC
+def test_pin_synth_signature_carries_the_session_and_schema_has_the_c4b_reason():
+    # C4m bumped the version to 38 and prepended its reason; C4b's reason stays in the line.
+    assert "was 37: Grow Today carries entry_hold" in _APP_SRC
     sig = _APP_SRC[_APP_SRC.index("_synth_sig = ("):][:2600]
     assert "session_label.price_move_session(_now_et())" in sig
 

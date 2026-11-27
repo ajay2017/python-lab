@@ -113,9 +113,10 @@ def test_check_macro_empty_sets_are_a_pass_not_a_crash(bm):
 
 
 @pytest.mark.parametrize("bm", [{}, {"reasons": {}}, {"sectors": None, "reasons": None}, "oops", []])
-def test_check_macro_malformed_map_is_unchecked_not_a_silent_pass(bm):
+def test_check_macro_malformed_map_is_a_macro_unread_hold_not_a_silent_pass(bm):
+    # C4m (owner Q1, 2026-11-27): it used to be an "unchecked" note that passed.
     r = ee.check_macro({"macro_map": bm, "sector": "Technology"})
-    assert r["kind"] == "unchecked" and r["check"] == "macro"
+    assert r["kind"] == "hold" and r["check"] == "macro_unread"
 
 
 def test_check_macro_set_membership_decides_not_the_reason_string():
@@ -176,14 +177,16 @@ def test_macro_events_source_order():
     assert ee.pick_macro_events(None, False, None) is None
 
 
-def test_macro_none_becomes_an_unchecked_note_not_a_pass():
+def test_macro_none_becomes_a_hold_not_a_pass():
     ctx = ee.watchlist_run_ctx(FLAT, None, TODAY, NOW)
     assert ctx["macro_map"] is None
     tctx = ee.watchlist_ticker_ctx(ctx, sector="Technology", classified=True, news_items=None)
     r = build_watchlist_recommendation("XYZ", _data(), entry_ctx=tctx)
-    assert r["action"] == "ENTER_NOW"
-    assert {u["check"] for u in r["entry_unchecked"]} == {"macro", "news"}
-    # firing control: [] is "checked, none" -> no macro note
+    # C4m (owner Q1, 2026-11-27): an unread calendar HOLDS the name; the news
+    # "couldn't run" note stays a note.
+    assert r["action"] == "ENTRY_HELD" and r["hold_kind"] == "macro_unread"
+    assert {u["check"] for u in r["entry_unchecked"]} == {"news"}
+    # firing control: [] is "checked, none" -> no macro hold
     ctx = ee.watchlist_run_ctx(FLAT, [], TODAY, NOW)
     assert ctx["macro_map"] == {"sectors": set(), "reasons": {}}
 
@@ -252,13 +255,15 @@ def test_no_protect_banner_on_flat_or_bull_firing_control_on_bear():
 
 def test_banner_says_when_the_tone_or_macro_check_could_not_run():
     # Buy-check C4a: an unread market is an `unread` HOLD box, not a fail-open
-    # note; only the macro calendar still fails open with a note.
+    # note. C4m (owner Q1, 2026-11-27): so is an unread macro calendar, in its
+    # own `macro_unread` block; no note says "entries are shown, not held".
     b = ee.watchlist_banner(UNAVAIL, None, [])
     assert b["protect"] is None and b["unread"] is not None
+    assert b["macro_unread"] is not None
     assert b["tone_line"] is None
-    assert not any("bear-day" in n for n in b["notes"])
-    assert any("macro-event check couldn't run" in n for n in b["notes"])
+    assert b["notes"] == []
     assert ee.watchlist_banner(FLAT, CLEAR_MAP, [])["notes"] == []
+    assert ee.watchlist_banner(FLAT, CLEAR_MAP, [])["macro_unread"] is None
 
 
 def _held_card(ticker, *checks):

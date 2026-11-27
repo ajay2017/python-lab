@@ -197,15 +197,21 @@ def test_check_macro_unknown_with_empty_set_passes_without_a_note(sector):
     assert not [u for u in r["unchecked"] if u["check"] == "macro"] and r["eligible"]
 
 
-def test_check_macro_all_sectors_and_unchecked_notes_unchanged():
+def test_check_macro_all_sectors_unchanged_and_an_unusable_map_is_now_a_hold():
+    # Buy-check C4m (owner Q1, 2026-11-27): a missing / malformed map used to be an
+    # "unchecked" note that let the name through; it is now a `macro_unread` hold.
     allm = {"sectors": {"__ALL__"}, "reasons": {"__ALL__": "FOMC"}}
     assert ee.check_macro({"macro_map": allm, "sector": None})["check"] == "macro"
-    assert ee.check_macro({"macro_map": None, "sector": "Energy"}) == {
-        "kind": "unchecked", "check": "macro",
-        "why": "macro calendar unavailable — the macro-event check couldn't run"}
-    assert ee.check_macro({"macro_map": {"reasons": {}}, "sector": "Energy"}) == {
-        "kind": "unchecked", "check": "macro",
-        "why": "macro calendar unreadable — the macro-event check couldn't run"}
+    for bad in (None, {"reasons": {}}):
+        r = ee.check_macro({"macro_map": bad, "sector": "Energy"})
+        assert r["kind"] == "hold" and r["check"] == "macro_unread"
+        assert r["gate_id"] is None
+        assert r["reason"] == "the macro-event calendar couldn't be read"
+    # the gate's own decision is unchanged (the two unchecked reasons it words)
+    assert msg.decide("Energy", None)["reason"] == (
+        "macro calendar unavailable — the macro-event check couldn't run")
+    assert msg.decide("Energy", {"reasons": {}})["reason"] == (
+        "macro calendar unreadable — the macro-event check couldn't run")
 
 
 def test_check_macro_etf_from_the_bundle_asset_type():

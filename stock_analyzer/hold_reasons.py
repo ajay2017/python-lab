@@ -10,6 +10,7 @@ Pacing text must never say "sized": "not sized" is reserved for the budget.
 """
 from __future__ import annotations
 
+from stock_analyzer.macro_read import CHECK_UNREAD as _MACRO_UNREAD
 from stock_analyzer.tone_freshness import CLEARS_READ_AGAIN
 from stock_analyzer.constants import (
     COMPOSITE_BUY_FLAT_DAY,
@@ -96,6 +97,10 @@ def adds_paused_note(names, hold=None) -> str:
 
 def adds_paused_label(tone, n, hold=None) -> str:
     if isinstance(hold, dict):
+        if hold.get("check") == _MACRO_UNREAD:
+            # buy-check C4m: the macro calendar couldn't be read (checked first:
+            # a merged hold's clears_when also names the open).
+            return f"Adds held — macro calendar couldn't be read ({n})"
         if hold.get("check") == "tone_unread":
             return f"Adds held — market move couldn't be read ({n})"
         if hold.get("clears_when") == CLEARS_READ_AGAIN:

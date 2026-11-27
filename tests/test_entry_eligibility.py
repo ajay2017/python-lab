@@ -162,20 +162,25 @@ def test_gate_ids_default_none():
     assert r["holds"][0]["gate_id"] is None
 
 
-def test_unchecked_entries_fail_open_except_the_tone():
-    # Buy-check C4a (owner D1 of 2026-10-16 reversed 2026-11-27): an unreadable
-    # market HOLDS; the macro and news "couldn't run" notes still fail open.
+def test_unchecked_entries_fail_open_except_the_tone_and_the_macro_calendar():
+    # Buy-check C4a (owner D1 of 2026-10-16 reversed 2026-11-27) and C4m (owner Q1
+    # 2026-11-27): an unreadable market and an unreadable macro calendar HOLD; only
+    # the news "couldn't run" note still fails open.
     r = _clean(tone_state={"available": False}, macro_map=None, news=None)
     assert not r["eligible"]
-    assert [h["check"] for h in r["holds"]] == ["tone_unread"]
-    assert {u["check"] for u in r["unchecked"]} == {"macro", "news"}
+    assert [h["check"] for h in r["holds"]] == ["tone_unread", "macro_unread"]
+    assert {u["check"] for u in r["unchecked"]} == {"news"}
     assert any("no recent headlines" in u["why"] for u in r["unchecked"])
     r2 = _clean(tone_state=None)
     assert [h["check"] for h in r2["holds"]] == ["tone_unread"]
     assert "tone" not in {u["check"] for u in r2["unchecked"]}
-    # with a readable tone the same macro / news gaps leave the name eligible
+    # a readable tone with an unread macro calendar still holds (macro_unread)
     r3 = _clean(tone_state=FLAT, macro_map=None, news=None)
-    assert r3["eligible"] and {u["check"] for u in r3["unchecked"]} == {"macro", "news"}
+    assert not r3["eligible"] and [h["check"] for h in r3["holds"]] == ["macro_unread"]
+    assert {u["check"] for u in r3["unchecked"]} == {"news"}
+    # with both readable the news gap alone leaves the name eligible
+    r4 = _clean(tone_state=FLAT, news=None)
+    assert r4["eligible"] and {u["check"] for u in r4["unchecked"]} == {"news"}
 
 
 def test_earnings_boundary_and_unknown():
@@ -218,11 +223,12 @@ def test_no_local_tone_rule(rel):
 
 # -- chunk 3 follow-ups ----------------------------------------------------------
 def test_stale_check_without_a_bundle_is_unchecked_not_a_silent_pass():
-    r = ee.entry_check(bundle=None, tone_state=FLAT)
+    _map = {"sectors": set(), "reasons": {}}    # C4m: a missing macro map now HOLDS
+    r = ee.entry_check(bundle=None, tone_state=FLAT, macro_map=_map)
     assert r["eligible"]
     assert {"check": "stale", "why": "no data bundle — the stale-data check couldn't run"} in r["unchecked"]
     # a real (empty) bundle is a checked pass
-    assert not [u for u in ee.entry_check(bundle={}, tone_state=FLAT)["unchecked"]
+    assert not [u for u in ee.entry_check(bundle={}, tone_state=FLAT, macro_map=_map)["unchecked"]
                 if u["check"] == "stale"]
 
 

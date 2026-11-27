@@ -486,7 +486,13 @@ def test_entry_check_binding_precedence():
                        news={"compound": 0.2, "n": 1, "headline": "ok"})
     assert [h["check"] for h in r["holds"]] == ["tone_unread", "macro_unknown_sector"]
     assert r["binding"]["check"] == "macro_unknown_sector"
-    assert ee._ABSTENTION_CHECKS == frozenset({"tone_unread"})
+    # buy-check C4m: an unread macro calendar is the second abstention (it never
+    # outranks a policy hold on the same name, so the G-29 / G-28 rows are kept)
+    assert ee._ABSTENTION_CHECKS == frozenset({"tone_unread", "macro_unread"})
+    r = ee.entry_check(bundle={}, tone_state=flat, sector="Tech", macro_map=None,
+                       news=news)
+    assert [h["check"] for h in r["holds"]] == ["macro_unread", "news"]
+    assert r["binding"]["check"] == "news"
 
 
 def test_held_kind_label_and_held_label():

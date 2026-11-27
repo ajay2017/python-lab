@@ -1386,6 +1386,12 @@ _GATE_FILES = {
     # that couldn't be made; a wrong call lets a page call an entry off a stale or
     # unreadable market, or holds one that is fine.
     "stock_analyzer/tone_freshness.py",
+    # Added 2026-11-27 (buy-check C4m, docs/plans/entry-fail-closed-c4m-spec.md):
+    # what an unreadable macro-event calendar means for a new buy (a whole-day Grow
+    # Today hold, a per-name Watchlist / Analysis / email hold, the cron failure
+    # line); a wrong call reads "couldn't read the calendar" as "no event due" and
+    # calls a buy into a CPI / jobs / Fed release, or holds every buy on a good day.
+    "stock_analyzer/macro_read.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

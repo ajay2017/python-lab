@@ -113,6 +113,7 @@ from stock_analyzer import breach_recovery
 from stock_analyzer import beta_fit_gate
 from stock_analyzer import scan_freshness
 from stock_analyzer import tone_freshness
+from stock_analyzer import macro_read
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.text_fmt import share_word
 from stock_analyzer import g32_shadow
@@ -875,7 +876,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 corr_unchecked: list | None = None,
                 corr_coverage: dict | None = None,
                 beta_fit: dict | None = None,
-                scan_state: dict | None = None) -> dict:
+                scan_state: dict | None = None,
+                macro_unread: bool = False) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -887,6 +889,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                          session (pre-open / closed day), HOLDS every pick, ETF
                          pick and add through `tone_freshness.grow_entry_hold`
                          (returned as `entry_hold`; None when not held).
+    macro_unread: buy-check C4m. True = the macro-event calendar couldn't be read
+                         (`macro_events` was None, not []): the day is held
+                         whole (`entry_hold.check == "macro_unread"`) after the
+                         bear branch, because an unread calendar can't say which
+                         sector. The default False (every direct caller / test)
+                         changes nothing; `build_daily_briefing` is the one
+                         production caller and passes `macro_read.events_unread`.
     act_today  : output of _act_today — tickers flagged here are excluded.
     review_list: output of _review_list — tickers flagged here (e.g. earnings-
                  overweight or weak-large-position TRIM_TO_TARGET) are ALSO
@@ -1068,7 +1077,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     except Exception:
         _now_et_dt = None                                  # keep gate on
     _macro_map = macro_block_map(macro_events, today, _now_et_dt)
-    # None (macro_events unchecked) reads as "nothing blocked", as it always did.
+    # None (macro_events unread) leaves this per-pick map empty; the unread
+    # calendar is held for the WHOLE day by `macro_unread` below (buy-check C4m),
+    # so no pick is ever called on it.
     _macro_blocked_sectors: set = set(_macro_map["sectors"]) if _macro_map else set()
     _macro_block_reasons:   dict = dict(_macro_map["reasons"]) if _macro_map else {}
 
@@ -1493,6 +1504,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
 
     # U2: a read that isn't today's session (and isn't bear) holds ETF picks, adds
     # and the scan's picks until today's open.
+    # Buy-check C4m: an unread macro calendar holds the whole day (it can't say
+    # which sector). After the bear branch (the G-23 row stands) and before the
+    # not-today hold, whose "returns after the open" it merges into one banner.
+    if macro_unread:
+        _entry_hold = macro_read.grow_hold(tone_hold=_entry_hold)
+        return _entry_hold_return()
+
     if _entry_hold is not None:
         return _entry_hold_return()
 
@@ -4632,7 +4650,7 @@ def build_daily_briefing(
     alert_list:      list,
     risk_recs:       list,
     news_items:      list,
-    macro_events:    list,
+    macro_events:    "list | None",
     held_data:       dict,
     scanner_results,
     portfolio_value: float,
@@ -4660,6 +4678,10 @@ def build_daily_briefing(
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
 
+    macro_events:    the macro calendar. ``[]`` = checked, none; ``None`` = the
+                     calendar couldn't be read (buy-check C4m): Grow Today holds
+                     the whole day (`macro_unread`); the protective cards read it
+                     as no events (they stay).
     grow_composites: optional dict {ticker: load_all() result} pre-fetched for top
                      scanner picks so _grow_today can validate conviction using the
                      full composite score, not just the momentum scanner score.
@@ -4860,6 +4882,7 @@ def build_daily_briefing(
                          act_today=act, review_list=review, composites=grow_composites or {},
                          risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events,
+                         macro_unread=macro_read.events_unread(macro_events),
                          deterioration=deterioration,
                          movers=movers,
                          winner_profile=winner_profile,
