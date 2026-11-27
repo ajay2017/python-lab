@@ -1004,12 +1004,16 @@ def render_intraday_entry_email(
     book_drift: dict | None = None,
     macro_coverage_expired: "list[dict] | None" = None,
     budget: "dict | None" = None,
+    excluded: "list[dict] | None" = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the intraday pullback entry-window email.
 
     `entries` are qualifying picks enriched with intraday_drop_pct, current_price,
-    open_price from intraday_entry.compute_intraday_entries().  Non-empty guaranteed
-    by caller. `spy_drop` is SPY's intraday drop (negative float) or None.
+    open_price, stop_distance_pct from intraday_entry.compute_intraday_entries().
+    Non-empty guaranteed by caller. `excluded` is that function's excluded list
+    (below_stop / stop_unknown / no_price); when non-empty each name gets a
+    footer line (G-35: an exclusion is never silent in an email that goes out
+    anyway). `spy_drop` is SPY's intraday drop (negative float) or None.
     `book_drift` is the verdict dict from broker_sync.decide_drift_banner, or
     None — see `_book_drift_banner` for when it renders (F-252 follow-up).
     `macro_coverage_expired` is from reference_shelf.expired_macro_series or
@@ -1032,7 +1036,9 @@ def render_intraday_entry_email(
         sector = _html.escape(str(e.get("sector") or ""))
         sz     = e.get("sizing") or {}
         _lo, _hi_p = sz.get("entry_lo"), sz.get("entry_hi")
-        _stop  = sz.get("stop")
+        # The stop the 11:30 check actually used (an ETF's is measured from the
+        # open); older callers / entries without it fall back to the pick's own.
+        _stop  = e.get("stop") if e.get("stop") is not None else sz.get("stop")
         _cap_note = _sizing_cap_note(sz, budget)
         # An intraday allocation always means "a size was shown to you": every
         # entry whose budget-adjusted sizing still carries shares (sized /
@@ -1055,7 +1061,11 @@ def render_intraday_entry_email(
         if _lo is not None and _hi_p is not None:
             entry_bits.append(f"original zone ${float(_lo):.2f}–${float(_hi_p):.2f}")
         if _stop is not None:
-            entry_bits.append(f"stop ${float(_stop):.2f}")
+            _sd = e.get("stop_distance_pct")
+            entry_bits.append(
+                f"stop ${float(_stop):.2f}"
+                + ("" if _sd is None else
+                   " (<0.1% below now)" if float(_sd) < 0.1 else f" ({float(_sd):.1f}% below now)"))
         entry_str = "  ·  ".join(entry_bits)
 
         cards.append(f"""
@@ -1083,6 +1093,34 @@ def render_intraday_entry_email(
     macro_cov_html = _macro_coverage_banner(macro_coverage_expired)
     budget_html    = _budget_banner(budget, "this email")
 
+    # Names left out of this email, one line each (G-35). Only rendered when
+    # given: the email exists because another name is an entry.
+    _ex_lines = []
+    for _x in (excluded or []):
+        _xt = _html.escape(str(_x.get("ticker") or ""))
+        _why = _x.get("why")
+        _xc, _xs = _x.get("current_price"), _x.get("stop")
+        if _why == "below_stop" and _xc is not None and _xs is not None:
+            _src = ("measured from today's open" if _x.get("stop_basis") == "open"
+                    else "this morning's pick set")
+            _ex_lines.append(f"Not an entry: {_xt} is now ${float(_xc):.2f}, below the "
+                             f"${float(_xs):.2f} stop {_src}.")
+        elif _why == "no_price":
+            _ex_lines.append(f"Not checked: {_xt} had no live price at this run.")
+        elif _why == "unreadable":
+            _ex_lines.append(f"Not checked: {_xt}'s pick couldn't be read at this run.")
+        elif _why == "no_size":
+            _ex_lines.append(f"Not an entry: {_xt} had no share size this morning, "
+                             "so no entry is sent.")
+        else:
+            _ex_lines.append(f"Not an entry: {_xt} has no stop from this morning's pick, "
+                             "so no entry is sent.")
+    excluded_html = ""
+    if _ex_lines:
+        excluded_html = (
+            '<div style="font-family:Arial,Helvetica,sans-serif;color:#fbbf24;font-size:12px;'
+            'margin:10px 0 0 0">' + "<br>".join(_ex_lines) + "</div>")
+
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
         <div style="font-family:Arial,Helvetica,sans-serif;color:#f9fafb;font-size:18px;
@@ -1096,11 +1134,13 @@ def render_intraday_entry_email(
         {macro_cov_html}
         {budget_html}
         {''.join(cards)}
+        {excluded_html}
         {_budget_save_failed_footer(budget)}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;
                     margin-top:18px;border-top:1px solid #292524;padding-top:10px">
-          These names cleared all gates this morning (composite + tone + sector + macro). The
-          intraday dip may offer a better entry price than the morning scan's open. <b>Verify the
+          These names passed today's buy checks (composite score, market tone, sector cap,
+          macro events, news, earnings, portfolio beta) and are still above each pick's stop.
+          The intraday dip may offer a better entry price than the morning scan's open. <b>Verify the
           price is still near the current level before acting — this email may be minutes old.</b>
           Advisory only — you place the trade. Original morning entry zone shown for reference.
         </div>

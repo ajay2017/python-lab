@@ -2033,6 +2033,7 @@
   "nasdaq_pct": -0.588,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -2173,6 +2174,7 @@
   "nasdaq_pct": -0.588,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -2233,6 +2235,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -2293,6 +2296,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -2696,6 +2700,7 @@
   "nasdaq_pct": 0.6,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -2756,6 +2761,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -2929,6 +2935,7 @@
   "nasdaq_pct": 0.6,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -2989,6 +2996,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -3049,6 +3057,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -3109,6 +3118,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -3292,6 +3302,7 @@
   "nasdaq_pct": 0.588,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -3432,6 +3443,7 @@
   "nasdaq_pct": 0.588,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -3492,6 +3504,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -3552,6 +3565,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -3966,6 +3980,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -4079,6 +4094,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -4181,6 +4197,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -4242,6 +4259,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -4355,6 +4373,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -4457,6 +4476,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -4517,6 +4537,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -4620,6 +4641,7 @@
   "new_picks": [
    {
     "asset_type": "etf",
+    "atr": null,
     "composite_fetched_at": "2026-10-04T12:00:00+00:00",
     "composite_label": "Strong Buy",
     "composite_score": 85.0,
@@ -4832,6 +4854,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -4934,6 +4957,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -4994,6 +5018,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -5096,6 +5121,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -5156,6 +5182,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -5326,6 +5353,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -5386,6 +5414,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -5488,6 +5517,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -5548,6 +5578,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -5650,6 +5681,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -5710,6 +5742,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -5826,6 +5859,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -5942,6 +5976,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -6058,6 +6093,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -6160,6 +6196,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -6220,6 +6257,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -6322,6 +6360,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -6382,6 +6421,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -6688,6 +6728,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -6748,6 +6789,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -6850,6 +6892,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -6910,6 +6953,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -7083,6 +7127,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -7143,6 +7188,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -7203,6 +7249,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -7263,6 +7310,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -7520,6 +7568,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -7580,6 +7629,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -7693,6 +7743,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -7811,6 +7862,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -7872,6 +7924,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -7974,6 +8027,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8034,6 +8088,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8136,6 +8191,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8254,6 +8310,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8314,6 +8371,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8416,6 +8474,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8476,6 +8535,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8584,6 +8644,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8695,6 +8756,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8797,6 +8859,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8857,6 +8920,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -8965,6 +9029,7 @@
   "nasdaq_pct": 0.96,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -9133,6 +9198,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -9247,6 +9313,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -9349,6 +9416,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -9475,6 +9543,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -9577,6 +9646,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -9827,6 +9897,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -9929,6 +10000,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -10042,6 +10114,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -10223,6 +10296,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -10336,6 +10410,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -10449,6 +10524,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -10576,6 +10652,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -10692,6 +10769,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -10808,6 +10886,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -10910,6 +10989,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -11023,6 +11103,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -11340,6 +11421,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -11453,6 +11535,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -11593,6 +11676,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -11653,6 +11737,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -11713,6 +11798,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -11901,6 +11987,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -11961,6 +12048,7 @@
     }
    },
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -12088,6 +12176,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -12190,6 +12279,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -12304,6 +12394,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -12429,6 +12520,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -12531,6 +12623,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -12644,6 +12737,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -12763,6 +12857,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -12874,6 +12969,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -12976,6 +13072,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,
@@ -13095,6 +13192,7 @@
   "nasdaq_pct": 0.0,
   "new_picks": [
    {
+    "atr": 3.0,
     "composite_fetched_at": null,
     "composite_label": "Buy",
     "composite_score": 80.0,

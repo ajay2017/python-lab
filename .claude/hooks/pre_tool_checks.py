@@ -1375,6 +1375,11 @@ _GATE_FILES = {
     # at or after today's 09:30 ET open); a wrong call sizes picks off another
     # session's prices, or hides fresh ones.
     "stock_analyzer/scan_freshness.py",
+    # Added 2026-11-26 (beta gate C4, docs/plans/beta-gate-c4-spec.md): the 11:30
+    # pullback-entry decision: which morning go picks are emailed as an entry window
+    # (the dip trigger, the SPY guard and, from G-35, the pick's own stop); a wrong
+    # call emails a buy on a name already below the stop its own pick set.
+    "stock_analyzer/intraday_entry.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

@@ -412,8 +412,9 @@ def _run_intraday(monkeypatch, picks, *, allocations, save=_ok_save, trades="emp
                         lambda t: {x: {"current": 98.0, "open": 100.0} for x in t})
     monkeypatch.setattr(
         ie, "compute_intraday_entries",
-        lambda ps, *_a: [{**p, "intraday_drop_pct": -2.0, "current_price": 98.0,
-                          "open_price": 100.0} for p in ps])
+        lambda ps, *_a: {"entries": [{**p, "intraday_drop_pct": -2.0, "current_price": 98.0,
+                                      "open_price": 100.0} for p in ps],
+                         "excluded": [], "spy_guard": None})
     monkeypatch.setattr(cr.db, "load_alert_state", lambda *_a, **_k: None)
     monkeypatch.setattr(cr.db, "save_alert_state", lambda *_a, **_k: True)
     monkeypatch.setattr(cr, "_send_email",
@@ -472,6 +473,75 @@ def test_intraday_failed_allocation_save_fails_the_lane_after_the_email(monkeypa
     assert "later suggestions may not account for these" in emails["intraday-entry"].replace("&#39;", "'")
     assert rc == 1 and "budget_allocations" in cr._LAST_LANE_FAILURE_DETAIL
     assert notified == [("intraday", cr._LAST_LANE_FAILURE_DETAIL)]
+
+
+def _run_intraday_real(monkeypatch, picks, prices, spy=None):
+    """The intraday lane with the REAL compute_intraday_entries (G-35): the
+    pick's own stop decides; prices are {ticker: (current, open)}."""
+    import stock_analyzer.intraday_entry as ie
+    emails, logs = {}, []
+    now = cr._ET.localize(datetime.datetime(2026, 10, 16, 11, 35))
+    monkeypatch.setattr(cr, "is_trading_day", lambda _d: True)
+    monkeypatch.setattr(cr.db, "load_scanner_cache",
+                        lambda: {"df": pd.DataFrame({"Ticker": ["AAA"]}),
+                                 "scan_date": "2026-10-16",
+                                 "scanned_at": "2026-10-16T13:47:00+00:00"})
+    payload = {"picks": picks, "errors": [], "built_at": "x", "book_drift": None,
+               "macro_coverage": None, "budget_inputs": BUDGET_INPUTS}
+    monkeypatch.setattr(cr, "compute_morning_picks", lambda **_k: payload)
+    book = {t: {"current": c, "open": o} for t, (c, o) in prices.items()}
+    book["SPY"] = spy or {"current": 500.0, "open": 500.0}
+    monkeypatch.setattr(ie, "fetch_intraday_prices",
+                        lambda t: {x: book[x] for x in t if x in book})
+    monkeypatch.setattr(cr.db, "load_alert_state", lambda *_a, **_k: None)
+    monkeypatch.setattr(cr.db, "save_alert_state", lambda *_a, **_k: True)
+    monkeypatch.setattr(cr, "_log", lambda m, *a, **k: logs.append(m))
+    monkeypatch.setattr(cr, "_send_email",
+                        lambda label, subject, html: emails.__setitem__(label, html) or True)
+    monkeypatch.setattr(cr, "_notify_failure", lambda lane, detail: None)
+    monkeypatch.setattr(cr.db, "load_trades_or_none", lambda: pd.DataFrame(columns=_TRADE_COLS))
+    monkeypatch.setattr(cr.db, "load_budget_allocations_or_none", lambda day: {})
+    monkeypatch.setattr(cr.db, "save_budget_allocations", _ok_save)
+    rc = cr._run_intraday(now, force=False)
+    return rc, emails, logs
+
+
+def test_intraday_pick_below_its_stop_is_not_emailed_and_the_log_names_it(monkeypatch):
+    # _pick's stop is 94.0: AAA is at 93.0 (below it), BBB at 96.0 (above it).
+    rc, emails, logs = _run_intraday_real(
+        monkeypatch, [_pick("AAA", 80), _pick("BBB", 70)],
+        {"AAA": (93.0, 100.0), "BBB": (96.0, 100.0)})
+    assert rc == 0
+    html = emails["intraday-entry"]
+    assert "BBB" in html and "stop $94.00 (2.1% below now)" in html
+    assert "PULLBACK ENTRY WINDOW &nbsp;·&nbsp; <span style=\"color:#e5e7eb\">AAA" not in html
+    assert "Not an entry: AAA is now $93.00, below the $94.00 stop" in html.replace("&#x27;", "'")
+    assert any(l.startswith("intraday excluded:") and "AAA below_stop (now 93.00 ≤ stop 94.00)" in l
+               for l in logs)
+    assert any(l.startswith("intraday candidates:") and "AAA (drop -7.0%, n/a ATR" in l
+               and "BBB (drop -4.0%" in l for l in logs)
+
+
+def test_intraday_only_excluded_names_send_no_email(monkeypatch):
+    rc, emails, logs = _run_intraday_real(
+        monkeypatch, [_pick("AAA", 80)], {"AAA": (93.0, 100.0)})
+    assert rc == 0 and emails == {}
+    assert any("intraday excluded: AAA below_stop" in l for l in logs)
+    assert any("no tickers qualify (none pulled back enough (1 excluded))" in l for l in logs)
+
+
+def test_intraday_logs_the_excluded_line_even_when_nothing_dipped(monkeypatch):
+    rc, emails, logs = _run_intraday_real(
+        monkeypatch, [_pick("AAA", 80)], {"AAA": (99.5, 100.0)})
+    assert emails == {} and "intraday excluded: none" in logs
+    assert "intraday candidates: none" in logs
+
+
+def test_intraday_names_the_spy_guard_in_the_no_tickers_log(monkeypatch):
+    rc, emails, logs = _run_intraday_real(
+        monkeypatch, [_pick("AAA", 80)], {"AAA": (93.0, 100.0)},
+        spy={"current": 480.0, "open": 500.0})
+    assert emails == {} and any("no tickers qualify (SPY in freefall)" in l for l in logs)
 
 
 # ── 9. renderers: every marker rendered, every email carries the banner ─────

@@ -50,7 +50,7 @@ def test_grow_shown_lists_both_new_keys():
 
 
 def test_schema_version_bumped_to_23():
-    assert re.search(r"_SYNTH_SCHEMA_VER = 35\b", _SRC)  # 34 -> 35 by beta-gate C3
+    assert re.search(r"_SYNTH_SCHEMA_VER = 36\b", _SRC)  # 35 -> 36 by beta-gate C4
 
 
 def test_no_direct_nav_page_assignment_added():

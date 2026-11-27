@@ -206,8 +206,10 @@ def _run_intraday(monkeypatch, feed, picks):
     monkeypatch.setattr(ie, "fetch_intraday_prices",
                         lambda t: {x: {"current": 98.0, "open": 100.0} for x in t})
     monkeypatch.setattr(ie, "compute_intraday_entries",
-                        lambda ps, *_a: [{**p, "intraday_drop_pct": -2.0, "current_price": 98.0,
-                                          "open_price": 100.0} for p in ps])
+                        lambda ps, *_a: {"entries": [{**p, "intraday_drop_pct": -2.0,
+                                                      "current_price": 98.0,
+                                                      "open_price": 100.0} for p in ps],
+                                         "excluded": [], "spy_guard": None})
     monkeypatch.setattr(cr.db, "load_alert_state", lambda *_a, **_k: None)
     monkeypatch.setattr(cr.db, "save_alert_state", lambda *_a, **_k: True)
     monkeypatch.setattr(cr, "_send_email",

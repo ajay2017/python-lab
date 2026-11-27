@@ -2024,6 +2024,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 "day_change":      day_change,
                 "thesis":          thesis,
                 "sizing":          sizing,
+                # The ATR the stop was built from (None when unreadable): the 11:30
+                # lane logs the dip in ATRs from it (beta-gate C4, measurement only).
+                "atr":             _pick_atr if _pick_atr > 0 else None,
                 "xref":            xref,
                 "divergence":      _divergence,
                 # Elevated (not hard-capped) sector warning — see _elevated_sectors
@@ -2392,6 +2395,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     f"{_etf_rec.get('rationale', '')}"
                 ),
                 "sizing":               _etf_sizing,
+                "atr":                  _etf_atr if _etf_atr > 0 else None,   # beta-gate C4: logged only
                 "xref":                 _etf_xref,
                 "divergence":           None,   # momentum/composite divergence concept doesn't apply here
                 "sector_elevated_warning": None,   # "Other" is excluded from the elevated-sector map by construction

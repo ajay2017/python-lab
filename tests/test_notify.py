@@ -542,6 +542,75 @@ def test_render_intraday_entry_email_no_spy_drop_omits_spy_line():
     assert "SPY" not in body
 
 
+# ─── render_intraday_entry_email — G-35 stop distance + excluded footer ─────
+
+def test_intraday_card_shows_how_far_the_stop_is_below_now():
+    e = dict(_entry(current_price=96.0), stop_distance_pct=11.5)
+    _, body = notify.render_intraday_entry_email([e], None, "2026-01-15 08:00:00")
+    assert "stop $85.00 (11.5% below now)" in body
+
+
+def test_intraday_card_without_stop_distance_keeps_the_plain_stop():
+    _, body = notify.render_intraday_entry_email([_entry()], None, "2026-01-15 08:00:00")
+    assert "stop $85.00" in body and "below now" not in body
+
+
+def test_intraday_footer_names_each_exclusion_kind_with_escaped_tickers():
+    ex = [{"ticker": "BAD", "why": "below_stop", "current_price": 99.8, "stop": 101.2},
+          {"ticker": "NOS", "why": "stop_unknown", "current_price": 95.0, "stop": None},
+          {"ticker": "<b>X</b>", "why": "no_price", "current_price": None, "stop": None}]
+    _, body = notify.render_intraday_entry_email(
+        [_entry()], None, "2026-01-15 08:00:00", excluded=ex)
+    flat = body.replace("&#x27;", "'").replace("&#39;", "'")
+    assert "Not an entry: BAD is now $99.80, below the $101.20 stop this morning's pick set." in flat
+    assert "Not an entry: NOS has no stop from this morning's pick, so no entry is sent." in flat
+    assert "Not checked: &lt;b&gt;X&lt;/b&gt; had no live price at this run." in flat
+    assert "<b>X</b>" not in body
+
+
+def test_intraday_footer_has_no_exclusion_block_when_none_given():
+    for ex in (None, []):
+        _, body = notify.render_intraday_entry_email(
+            [_entry()], None, "2026-01-15 08:00:00", excluded=ex)
+        assert "Not an entry" not in body and "Not checked" not in body
+
+
+def test_intraday_footer_no_longer_claims_it_cleared_all_gates():
+    _, body = notify.render_intraday_entry_email([_entry()], None, "2026-01-15 08:00:00")
+    flat = " ".join(body.split())
+    assert "cleared all gates this morning (composite + tone + sector + macro)" not in flat
+    _flat = flat.replace("&#x27;", "'").replace("&#39;", "'")
+    assert "passed today's buy checks" in _flat
+    assert "portfolio beta" in _flat and "are still above each pick's stop" in _flat
+
+
+def test_intraday_card_prints_under_a_tenth_of_a_percent_stop_distance():
+    for sd, txt in ((0.0, "(&lt;0.1% below now)"), (0.09, "(&lt;0.1% below now)"),
+                    (0.1, "(0.1% below now)")):
+        e = dict(_entry(current_price=96.0), stop_distance_pct=sd)
+        _, body = notify.render_intraday_entry_email([e], None, "2026-01-15 08:00:00")
+        assert txt in body
+
+
+def test_intraday_card_prints_the_stop_the_check_used_not_the_sizing_stop():
+    e = dict(_entry(current_price=96.0), stop=92.5, stop_distance_pct=3.6)
+    _, body = notify.render_intraday_entry_email([e], None, "2026-01-15 08:00:00")
+    assert "stop $92.50 (3.6% below now)" in body and "stop $85.00" not in body
+
+
+def test_intraday_footer_open_based_no_size_and_unreadable_wording():
+    ex = [{"ticker": "ETF", "why": "below_stop", "current_price": 90.0, "stop": 92.0,
+           "stop_basis": "open"},
+          {"ticker": "NSZ", "why": "no_size", "current_price": 95.0, "stop": None},
+          {"ticker": "UNR", "why": "unreadable", "current_price": None, "stop": None}]
+    _, body = notify.render_intraday_entry_email(
+        [_entry()], None, "2026-01-15 08:00:00", excluded=ex)
+    flat = body.replace("&#x27;", "'").replace("&#39;", "'")
+    assert "Not an entry: ETF is now $90.00, below the $92.00 stop measured from today's open." in flat
+    assert "Not an entry: NSZ had no share size this morning, so no entry is sent." in flat
+    assert "Not checked: UNR's pick couldn't be read at this run." in flat
+
+
 # ─── _email_md_inline ─────────────────────────────────────────────────────────
 
 def test_email_md_inline_bold():

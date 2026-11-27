@@ -228,7 +228,8 @@ def test_intraday_lane_is_unaffected_by_the_new_entry_context_key(monkeypatch):
                         lambda tickers: {"AAA": {"current": 98.0, "open": 100.0},
                                          "SPY": None})
     monkeypatch.setattr(intraday_entry, "compute_intraday_entries",
-                        lambda *a, **k: [{"ticker": "AAA", "intraday_drop_pct": -2.0}])
+                        lambda *a, **k: {"entries": [{"ticker": "AAA", "intraday_drop_pct": -2.0}],
+                                         "excluded": [], "spy_guard": None})
     monkeypatch.setattr(cr, "run_daily_budget", lambda *a, **k: {
         "budget": {"state": "ok", "left": 1.0}, "written": 0})
     monkeypatch.setattr(cr, "render_intraday_entry_email", lambda **k: ("s", "h"))

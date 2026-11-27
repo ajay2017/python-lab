@@ -2775,6 +2775,7 @@ def _run_intraday(now_et, force: bool) -> int:
 
     # Fetch live intraday prices for the qualifying tickers + SPY.
     from stock_analyzer.intraday_entry import fetch_intraday_prices, compute_intraday_entries
+    from stock_analyzer import intraday_entry as _intraday_entry
     from stock_analyzer.constants import PULLBACK_ENTRY_DIP_PCT, PULLBACK_SPY_MAX_DOWN
 
     pick_tickers = [str(p.get("ticker")).upper() for p in go_picks]
@@ -2785,12 +2786,18 @@ def _run_intraday(now_et, force: bool) -> int:
          + (f" · SPY: cur={spy_data.get('current'):.2f} open={spy_data.get('open'):.2f}"
             if spy_data else " · SPY: unavailable"))
 
-    # Check qualifying pullback entries.
-    entries = compute_intraday_entries(go_picks, price_data, spy_data,
-                                       PULLBACK_ENTRY_DIP_PCT, PULLBACK_SPY_MAX_DOWN)
+    # Check qualifying pullback entries. A pick below its own stop, with no stop,
+    # or with no live price is excluded and named (G-35, beta-gate C4); the
+    # drop-in-ATRs on each candidate is logged measurement only.
+    _id_res  = compute_intraday_entries(go_picks, price_data, spy_data,
+                                        PULLBACK_ENTRY_DIP_PCT, PULLBACK_SPY_MAX_DOWN)
+    entries  = _id_res["entries"]
+    excluded = _id_res["excluded"]
+    _log(_intraday_entry.candidates_log_line(_id_res))
+    _log(_intraday_entry.excluded_log_line(_id_res))
     sent = False
     if not entries:
-        _log("intraday: no tickers qualify (none pulled back enough, or SPY in freefall).")
+        _log(f"intraday: no tickers qualify ({_intraday_entry.no_entry_reason(_id_res)}).")
     else:
         _log("intraday pullback entries: "
              + ", ".join(f"{e.get('ticker')} ({e.get('intraday_drop_pct'):+.1f}%)" for e in entries))
@@ -2827,6 +2834,7 @@ def _run_intraday(now_et, force: bool) -> int:
                 book_drift=payload.get("book_drift"),
                 macro_coverage_expired=payload.get("macro_coverage"),
                 budget=_id_b,
+                excluded=excluded,
             )
             sent = _send_email("intraday-entry", subject, html)
             if sent and db.save_alert_state(today_str, fp, _INTRADAY_ROW):
