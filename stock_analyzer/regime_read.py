@@ -109,9 +109,16 @@ def _unread_count(read) -> int:
 
 
 def posture_regime_state(read) -> str:
-    """"measured" (no leg unread) | "partial" (one) | "not_measured" (two or a bad read)."""
+    """"measured" (no leg unread, or any leg tripped) | "partial" (one unread, none
+    tripped) | "not_measured" (two unread, or a bad read).
+
+    A tripped leg means risk-off is KNOWN whatever the other leg read, so it is
+    "measured" (and agrees with `display_line`, which is None when a leg trips).
+    """
     if not isinstance(read, dict):
         return "not_measured"
+    if TRIPPED in (_leg(read, "trend"), _leg(read, "vix")):
+        return "measured"
     return ("measured", "partial", "not_measured")[_unread_count(read)]
 
 

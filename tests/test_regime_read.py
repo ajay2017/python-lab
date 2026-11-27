@@ -184,9 +184,32 @@ def test_posture_regime_state_mapping():
     assert posture_regime_state(_read(_rising(N), 18.0)) == "measured"
     assert posture_regime_state(_read(_rising(N), None)) == "partial"
     assert posture_regime_state(_read(None, None)) == "not_measured"
-    assert posture_regime_state(_read(_falling(N), None)) == "partial"
+    # Changed deliberately (sell-check-unread C6): a TRIPPED leg with the other leg unread
+    # used to read "partial"; risk-off is known whatever the other leg says, so it is
+    # "measured" (and matches display_line, which is None when a leg trips).
+    assert posture_regime_state(_read(_falling(N), None)) == "measured"
     assert posture_regime_state(None) == "not_measured"
     assert posture_regime_state("garbage") == "not_measured"
+
+
+def test_posture_regime_state_boundaries():
+    # tripped + unread, either leg
+    assert posture_regime_state(_read(_falling(N), None)) == "measured"
+    assert posture_regime_state(_read(None, T + 5)) == "measured"
+    # tripped + clear, tripped + tripped
+    assert posture_regime_state(_read(_falling(N), T - 0.01)) == "measured"
+    assert posture_regime_state(_read(_falling(N), T)) == "measured"
+    # clear + unread (either leg) stays partial
+    assert posture_regime_state(_read(_rising(N), None)) == "partial"
+    assert posture_regime_state(_read(None, T - 0.01)) == "partial"
+    # unread + unread
+    assert posture_regime_state(_read(None, None)) == "not_measured"
+    # non-dict / garbage dict
+    for bad in (None, "garbage", [1, 2], 3):
+        assert posture_regime_state(bad) == "not_measured"
+    assert posture_regime_state({}) == "not_measured"
+    # a hand-built dict with a tripped leg and a junk other leg
+    assert posture_regime_state({"trend": TRIPPED, "vix": "junk"}) == "measured"
 
 
 def test_signature():
@@ -333,3 +356,33 @@ def test_module_has_no_threshold_literals():
     src = (_REPO / "stock_analyzer" / "regime_read.py").read_text(encoding="utf-8")
     assert "200" not in src and "25" not in src
     assert regime_read.RISK_OFF_TREND_MA == RISK_OFF_TREND_MA
+
+
+def test_app_wiring_c6_summary_and_risk_analysis_use_the_per_leg_read():
+    """Sell-check-unread C6 (render-only wiring; app.py has no unit tests)."""
+    app = (_REPO / "app.py").read_text(encoding="utf-8")
+    assert "risk_off_state" not in app
+    assert app.count("regime_read.display_line(") == 2
+    assert app.count("regime_read.posture_regime_state(") == 2
+    # Arming still comes from risk_off_regime, never from the display read.
+    assert app.count("risk_off_regime as _sm_ro_regime") == 1
+    assert app.count("risk_off_regime as _ro_regime") == 1
+    # The Home memo signature carries the per-leg read (and the schema moved with it).
+    assert "regime_read.signature(regime_read.read_regime(_synth_regime_spy, _cached_vix()))" in app
+    # C6 review (blocking): _cached_spy raises on a failed Yahoo read, so every SPY
+    # fetch feeding the signature or a regime read sits inside a try (AST check).
+    import ast
+    from tests._ast_cache import parse_file_cached
+    tree = parse_file_cached(_REPO / "app.py")
+    guarded = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try):
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Assign) and isinstance(sub.value, ast.Call)
+                        and getattr(sub.value.func, "id", None) == "_cached_spy"):
+                    for t in sub.targets:
+                        if isinstance(t, ast.Name):
+                            guarded.add(t.id)
+    for name in ("_synth_regime_spy", "_ro_spy"):
+        assert name in guarded, f"{name} = _cached_spy(...) must sit inside a try"
+    assert "regime_read.read_regime(_ro_spy, _ro_vix)" in app

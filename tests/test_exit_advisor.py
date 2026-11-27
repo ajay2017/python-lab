@@ -320,6 +320,34 @@ def test_market_risk_posture_not_measured_never_says_calm():
     assert "not evaluated" in result["summary"]
 
 
+def test_market_risk_posture_partial_says_partly_known_never_calm():
+    # sell-check-unread C6 (RegimeOneLegMeasured): one leg unread, none tripped.
+    result = market_risk_posture({"severity": "calm"}, risk_off=False, regime_state="partial")
+    assert result is not None
+    assert "calm" not in result["summary"]
+    assert "only partly known" in result["summary"]
+    assert "not evaluated" not in result["summary"]
+    assert result["regime_state"] == "partial"
+    assert result["score"] == 0 and result["armed"] is False and result["risk_off"] is False
+
+
+def test_market_risk_posture_partial_leaves_score_armed_risk_off_unchanged():
+    base = market_risk_posture({"severity": "fragile"}, risk_off=True, regime_state="measured")
+    part = market_risk_posture({"severity": "fragile"}, risk_off=True, regime_state="partial")
+    for key in ("score", "label", "emoji", "armed", "risk_off", "severity"):
+        assert part[key] == base[key]
+    # a fragile book + partial regime with nothing tripped never arms
+    assert market_risk_posture(
+        {"severity": "fragile"}, risk_off=False, regime_state="partial")["armed"] is False
+
+
+def test_market_risk_posture_unrecognised_or_unusable_state_reads_not_evaluated():
+    for state in ("unusable", "garbage", None):
+        result = market_risk_posture({"severity": "calm"}, risk_off=False, regime_state=state)
+        assert "not evaluated" in result["summary"]
+        assert "calm" not in result["summary"]
+
+
 def test_market_risk_posture_redline_absent_data_never_arms():
     # THE REDLINE INVARIANT: fragile book + not-measured regime must NOT arm a trim.
     # risk_off upstream is already False on unmeasured data, so armed stays False

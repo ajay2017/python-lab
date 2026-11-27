@@ -563,8 +563,10 @@ def market_risk_posture(fragility, *, risk_off, reasons=None, regime_state="meas
         score = severity_rank(calm 0 / caution 1 / fragile 2) + (1 if risk_off else 0)   # 0..3
         armed = severity in {caution, fragile} AND risk_off   (the SAME gate assess_risk_off_derisk uses)
 
-    `regime_state` (from `risk_off_state`) is DISPLAY-ONLY — it changes the wording of
-    `summary` (never claims "calm" when the regime was never actually measured) but
+    `regime_state` (from `regime_read.posture_regime_state`: "measured" | "partial" |
+    "not_measured"; any other value reads as not evaluated) is DISPLAY-ONLY — it changes
+    the wording of `summary` (never claims "calm" when the regime was only partly or never
+    measured) but
     never touches `score`/`armed`/`risk_off`: on unmeasured data `risk_off` upstream is
     already `False`, so `armed` stays `False` regardless of `regime_state`. Absent data
     must never arm a trim.
@@ -581,7 +583,11 @@ def market_risk_posture(fragility, *, risk_off, reasons=None, regime_state="meas
     armed = rank >= 1 and ro
     label, emoji = _POSTURE_LABELS[score]
     measured = regime_state == "measured"
-    if not measured:
+    if regime_state == "partial":
+        # One leg unread and no leg tripped (a tripped leg is "measured" upstream):
+        # sell-check-unread C6 (RegimeOneLegMeasured). Never "calm".
+        regime_txt = "the market regime is only partly known"
+    elif not measured:
         regime_txt = "the market regime was not evaluated (VIX/SPY data unavailable)"
     elif ro:
         regime_txt = "the market is in a risk-off regime"

@@ -128,6 +128,7 @@ from stock_analyzer import market_trend
 from stock_analyzer import playbook_trend_view
 from stock_analyzer import brief_chips
 from stock_analyzer import act_trim_fold   # BriefSkipSizeBlind: the journal-context gate for a folded min_trim
+from stock_analyzer import regime_read   # sell-check-unread C6: per-leg risk-off regime read (Summary / Risk Analysis captions, Home memo signature)
 from stock_analyzer import buy_check_state   # entry-fail-closed C2b: Watchlist fit_state / beta_or_none
 from stock_analyzer import scan_freshness    # beta-gate C3: the one rule for whether the saved scan may size picks
 from stock_analyzer import session_label     # buy-check C4b: which session "now" belongs to (the Brief memo signature)
@@ -7574,7 +7575,14 @@ if page == "🏠 Home":
     # price history this signature already covers (the risk build is memoised WITH the
     # Brief), so they are not added to it; the schema version below invalidates a Brief
     # memoised before the G-06 holds existed.
-    _SYNTH_SCHEMA_VER = 38  # bumped: Grow Today entry_hold may now be macro_unread (the macro calendar couldn't be read) and the bundle's _macro_events may be None (buy-check C4m, G-07 / G-34); was 37: Grow Today carries entry_hold (None, or the strings of a hold) and holds every pick, ETF pick and add when the market move can't be read or isn't today's session; a bear message names the session (buy-check C4b, G-34 / G-23); was 36: new Grow Today picks carry atr, the ATR their stop was built from (IntradayBelowStop, beta-gate C4); was 35: Grow Today carries scan_hold and sizes no pick off a saved scan that isn't today's post-open scan (ScanCacheAnyAge, beta-gate C3); was 34: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 39  # bumped: the synth signature carries the per-leg regime read, since the Brief's risk_off_unchecked (regime_unread / both_unread) depends on which of the SPY-trend and VIX legs were read (sell-check-unread C6, RegimeOneLegMeasured); was 38: Grow Today entry_hold may now be macro_unread (the macro calendar couldn't be read) and the bundle's _macro_events may be None (buy-check C4m, G-07 / G-34); was 37: Grow Today carries entry_hold (None, or the strings of a hold) and holds every pick, ETF pick and add when the market move can't be read or isn't today's session; a bear message names the session (buy-check C4b, G-34 / G-23); was 36: new Grow Today picks carry atr, the ATR their stop was built from (IntradayBelowStop, beta-gate C4); was 35: Grow Today carries scan_hold and sizes no pick off a saved scan that isn't today's post-open scan (ScanCacheAnyAge, beta-gate C3); was 34: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    # C6 review (blocking): _cached_spy raises on a failed Yahoo read (st.cache_data
+    # doesn't cache exceptions), so it is guarded here; a failed fetch reads as an
+    # unread trend leg in the signature instead of crashing every Home run.
+    try:
+        _synth_regime_spy = _cached_spy("1y")
+    except Exception:
+        _synth_regime_spy = None
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -7604,6 +7612,12 @@ if page == "🏠 Home":
         # The cash record and the positions snapshot the net capital was built
         # from (U7 C3): a new sync rebuilds the Brief's F-255 sizes.
         str(_f255_nc["cash_as_of"]), str(_f255_nc["captured_at"]),
+        # Each regime leg's state (SPY trend, VIX: tripped / clear / unread): a leg that
+        # failed on one run and loaded on the next changes the Brief's de-risk-check
+        # verdict, and a leg that trips (e.g. VIX crossing its level) arms the risk-off
+        # trims on the next Home run (owner U-G), with no other input moving
+        # (sell-check-unread C6). read_regime never raises; the SPY fetch is guarded above.
+        regime_read.signature(regime_read.read_regime(_synth_regime_spy, _cached_vix())),
     )
     _synth_cache = st.session_state.get("_home_synth_cache")
     # A price move can breach an UNCHANGED stop, which the signature cannot see:
@@ -15733,18 +15747,25 @@ elif page == "🧾 Summary":
     # market_risk_posture() call + already-published fragility cache the
     # 🔗 Risk Analysis dial uses — never a second independent verdict.
     # Withholds (no card) when fragility isn't computed yet, mirroring the dial.
+    # The regime state comes from regime_read (per-leg: one unread leg reads "partly
+    # known", never "calm"; sell-check-unread C6, RegimeOneLegMeasured). Arming
+    # (risk_off / reasons) is still risk_off_regime, unchanged.
     from stock_analyzer.exit_advisor import (
         risk_off_regime as _sm_ro_regime,
-        risk_off_state as _sm_ro_state_fn,
         market_risk_posture as _sm_mk_posture,
     )
     from stock_analyzer.constants import RISK_OFF_TREND_MA as _SM_RO_MA
     _sm_posture = None
+    _sm_regime_read = None
     try:
+        # One fetch each, passed to both calls, so the display read and the arming
+        # can't see different inputs across a cache expiry (C6 review).
+        _sm_spy, _sm_vix = _cached_spy("1y"), _cached_vix()
+        _sm_regime_read = regime_read.read_regime(_sm_spy, _sm_vix)
         _sm_ro_armed, _sm_ro_reasons = _sm_ro_regime(
-            _cached_spy("1y"), _cached_vix(), trend_ma=_SM_RO_MA, vix_threshold=RISK_OFF_VIX_LEVEL,
+            _sm_spy, _sm_vix, trend_ma=_SM_RO_MA, vix_threshold=RISK_OFF_VIX_LEVEL,
         )
-        _sm_ro_state = _sm_ro_state_fn(_cached_spy("1y"), _cached_vix(), trend_ma=_SM_RO_MA)
+        _sm_ro_state = regime_read.posture_regime_state(_sm_regime_read)
         _sm_posture = _sm_mk_posture(
             st.session_state.get("_fragility_cache"), risk_off=_sm_ro_armed, reasons=_sm_ro_reasons,
             regime_state=_sm_ro_state,
@@ -16541,11 +16562,10 @@ elif page == "🧾 Summary":
                     f"{_safe_html(_sm_posture['summary'])}</div>",
                     unsafe_allow_html=True,
                 )
-                if _sm_posture["regime_state"] != "measured":
-                    st.caption(
-                        "⚠ Market regime not evaluated this session — reading covers your "
-                        "book only."
-                    )
+                # None = nothing hidden (both legs read, or a leg tripped): no caption.
+                _sm_regime_line = regime_read.display_line(_sm_regime_read)
+                if _sm_regime_line:
+                    st.caption(_sm_regime_line)
             elif _sm_act_bucket is None:
                 # No fragility dial AND no Brief — we genuinely cannot tell.
                 # Rendering a green all-clear here would be a safety claim on
@@ -19147,17 +19167,31 @@ elif page == "🔗 Risk Analysis":
             # severity (_fragility_cache) and risk_off_regime (SPY<200DMA or VIX≥level).
             # NOT a forecast, NOT a directive — when both legs are elevated it POINTS to the
             # Daily Brief's risk-off de-risk cards (single-surface), never duplicates them.
+            # regime_state is per-leg (regime_read): one unread leg reads "partly known",
+            # never "calm" (sell-check-unread C6, RegimeOneLegMeasured). Arming is
+            # still risk_off_regime, unchanged.
             from stock_analyzer.exit_advisor import (
                 risk_off_regime as _ro_regime,
-                risk_off_state as _ro_state_fn,
                 market_risk_posture as _mk_posture,
             )
             from stock_analyzer.constants import RISK_OFF_TREND_MA as _RO_MA, RISK_OFF_VIX_LEVEL as _RO_VIX
+            # C6 review: the SPY fetch is guarded OUTSIDE the arming try, so a failed
+            # S&P 500 read still gives a per-leg caption (VIX read) instead of "neither
+            # could be read". Arming is unchanged: a failed SPY fetch never arms here,
+            # and the posture then reads "not evaluated" (never "calm").
             try:
+                _ro_spy = _cached_spy("1y")
+            except Exception:
+                _ro_spy = None
+            _ro_vix = _cached_vix()
+            _ro_read = regime_read.read_regime(_ro_spy, _ro_vix)
+            try:
+                if _ro_spy is None:
+                    raise ValueError("S&P 500 1-year history unavailable")
                 _ro_armed, _ro_reasons = _ro_regime(
-                    _cached_spy("1y"), _cached_vix(), trend_ma=_RO_MA, vix_threshold=_RO_VIX,
+                    _ro_spy, _ro_vix, trend_ma=_RO_MA, vix_threshold=_RO_VIX,
                 )
-                _ro_state = _ro_state_fn(_cached_spy("1y"), _cached_vix(), trend_ma=_RO_MA)
+                _ro_state = regime_read.posture_regime_state(_ro_read)
             except Exception:
                 _ro_armed, _ro_reasons = False, []
                 _ro_state = "not_measured"
@@ -19205,19 +19239,10 @@ elif page == "🔗 Risk Analysis":
                         unsafe_allow_html=True,
                     )
                     st.markdown(_posture["summary"])
-                    if _posture["regime_state"] == "not_measured":
-                        st.caption(
-                            "⚠ Market-regime legs not evaluated — VIX and/or SPY history was "
-                            "unavailable this session, so the market half of this posture could "
-                            "not be read. The book half (fragility) is shown; no risk-off action "
-                            "is armed on absent data."
-                        )
-                    elif _posture["regime_state"] == "unusable":
-                        st.caption(
-                            "⚠ Market regime only partially evaluable — not enough SPY history "
-                            "for the trend check and VIX was unavailable. Treat the regime as "
-                            "unknown, not calm."
-                        )
+                    # None = nothing hidden (both legs read, or a leg tripped): no caption.
+                    _ro_line = regime_read.display_line(_ro_read)
+                    if _ro_line:
+                        st.caption(_ro_line)
                     if _posture["reasons"]:
                         st.caption("Regime legs: " + " · ".join(_posture["reasons"]))
                     if _posture["armed"]:
