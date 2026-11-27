@@ -351,9 +351,11 @@ def _app_src():
     return (ROOT / "app.py").read_text(encoding="utf-8")
 
 
-def test_synth_schema_version_is_33_and_keeps_the_fold_note_in_its_history():
+def test_synth_schema_version_keeps_the_tuneup_and_fold_notes_in_its_history():
     src = _app_src()
-    assert "_SYNTH_SCHEMA_VER = 33  # bumped: the Tune-up beta card carries subject / trim_shares" in src
+    # beta-gate C2 bumped 33 -> 34; the Tune-up note now sits in the "was 33:" clause.
+    assert "_SYNTH_SCHEMA_VER = 34  # bumped:" in src
+    assert "; was 33: the Tune-up beta card carries subject / trim_shares" in src
     assert "(BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim" in src
 
 

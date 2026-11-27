@@ -207,7 +207,10 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
     # and the cron emails apply the same predicate. Both legs are known readable
     # inside the branch; format the `beta_or_none` floats. A non-numeric string
     # beta used to raise TypeError at the `>`; it now reads as unread and falls
-    # to the C2a beta_unknown branch below.
+    # to the C2a beta_unknown branch below when the unread leg could bind. When
+    # it can't, the raw value still reaches the soft branch below, which compares
+    # `port_beta` / `ticker_beta` as-is (not hardened for a string; producers hand
+    # it a float or None). +inf also reads as unread now (it used to hard-block).
     if _beta_fit_gate.breached(port_beta, ticker_beta):
         port_beta = _buy_check_state.beta_or_none(port_beta)
         ticker_beta = _buy_check_state.beta_or_none(ticker_beta)

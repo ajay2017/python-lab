@@ -7492,7 +7492,21 @@ if page == "🏠 Home":
             st.session_state[_cluster_baseline_key] = _cbs
     _cluster_baseline_state = st.session_state.get(_cluster_baseline_key)
     _cluster_baseline_sig   = cluster_add_gate.baseline_signature(_cluster_baseline_state)
-    _SYNTH_SCHEMA_VER = 33  # bumped: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    def _brief_beta_fit(_pr) -> dict:
+        """Beta-gate C2 (G-06 on Grow Today): {"portfolio_beta", "fit_state"} for
+        build_daily_briefing, from the SAME `_port_risk` the Brief is memoised with
+        (so the Brief and the portfolio beta it was built on never disagree) and the
+        same fit_state read the Watchlist uses. `_get_or_offline` keeps a None
+        `_port_risk` as None (beta unread), never a collapsed {}."""
+        return {
+            "portfolio_beta": buy_check_state.beta_or_none(_get_or_offline(_pr, "beta")),
+            "fit_state": buy_check_state.fit_state(st.session_state.get("holdings_df"), port_df),
+        }
+    # The portfolio beta and fit state are derived from the holdings, the date and the
+    # price history this signature already covers (the risk build is memoised WITH the
+    # Brief), so they are not added to it; the schema version below invalidates a Brief
+    # memoised before the G-06 holds existed.
+    _SYNTH_SCHEMA_VER = 34  # bumped: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -7680,6 +7694,8 @@ if page == "🏠 Home":
                         # The bundle's own key: `_port_risk` has no "coverage" to read
                         # when it is None, which is exactly when the note matters.
                         risk_coverage   = _risk_coverage,
+                        # G-06 on Grow Today (beta-gate C2): the memoised risk build's beta.
+                        beta_fit        = _brief_beta_fit(_port_risk),
                     )
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
@@ -8133,6 +8149,8 @@ if page == "🏠 Home":
                     # The bundle's own key: `_port_risk` has no "coverage" to read
                     # when it is None, which is exactly when the note matters.
                     risk_coverage   = _risk_coverage,
+                    # G-06 on Grow Today (beta-gate C2): this build's own risk beta.
+                    beta_fit        = _brief_beta_fit(_port_risk),
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -10636,7 +10654,8 @@ if page == "🏠 Home":
                     "risk_blocked_adds", "sector_blocked_picks",
                     "sector_unknown_picks", "cluster_blocked_adds", "pair_blocked_adds",
                     "news_skipped", "earnings_waiting",
-                    "entry_held_adds", "card_blocked_adds", "room_blocked_adds"):
+                    "entry_held_adds", "card_blocked_adds", "room_blocked_adds",
+                    "beta_blocked_picks", "beta_unknown_picks", "beta_blocked_adds"):
             _gv = grow.get(_gk)
             if not isinstance(_gv, list):
                 continue
@@ -10783,6 +10802,12 @@ if page == "🏠 Home":
         # G-31 (S-D) -- adds with no room left under the whole-position caps.
         # Same "list in every return path" contract as conc_blocked above.
         room_blocked  = grow.get("room_blocked_adds", [])
+        # Beta-gate C2 (G-06 on Grow Today): lists on every return path of a fresh
+        # build; a key missing from a legacy cached brief is "not computed" and
+        # renders nothing.
+        beta_blocked  = (list(grow.get("beta_blocked_picks", []))
+                         + list(grow.get("beta_blocked_adds", [])))
+        beta_unknown_picks = list(grow.get("beta_unknown_picks", []))
         sector_blocked = (grow.get("sector_blocked_adds", []) or []) + (grow.get("sector_blocked_picks", []) or [])
         # D1 (sector_gate_spec.md, 2026-09-30) — distinct from sector_blocked
         # above (a KNOWN sector already over cap): this is "couldn't check,"
@@ -11113,16 +11138,27 @@ if page == "🏠 Home":
                 # F-302: a held-out Skip pick DID clear the buy bar, so it must
                 # not be folded into "none ... cleared the buy threshold".
                 # F-303: the same holds for an earnings-wait pick.
-                _news_skip_n = len(news_skipped) + len(earnings_waiting)
+                # Beta-gate C2 (Opus FIX-FIRST): a G-06 / beta-unchecked pick is held
+                # AFTER the composite gate, so it cleared the bar too; same for a
+                # sector-unknown pick (D1, pre-existing gap fixed with the class).
+                # Picks lists only: beta_blocked_adds are adds, not scored candidates.
+                _held_out_groups = (
+                    ("❌ Skip", news_skipped),
+                    ("⏳ earnings-wait", earnings_waiting),
+                    ("⛔ portfolio beta", grow.get("beta_blocked_picks", [])),
+                    ("⏸ beta couldn't be checked", grow.get("beta_unknown_picks", [])),
+                    ("sector couldn't be classified", sector_unknown),
+                )
+                _news_skip_n = sum(len(n) for _w, n in _held_out_groups if isinstance(n, list))
                 if _news_skip_n:
                     _ns_word = "pick" if _news_skip_n == 1 else "picks"
                     _ns_why = " / ".join(
-                        w for w, n in (("❌ Skip", news_skipped), ("⏳ earnings-wait", earnings_waiting)) if n
+                        w for w, n in _held_out_groups if isinstance(n, list) and n
                     )
                     _macro_note += (
                         f" {_news_skip_n} {_ns_word} that cleared it "
-                        f"{'was' if _news_skip_n == 1 else 'were'} held back on a "
-                        f"{_ns_why} verdict (see below)."
+                        f"{'was' if _news_skip_n == 1 else 'were'} held back "
+                        f"({_ns_why}; see below)."
                     )
                 # When the emptiness is macro-driven, a re-scan can't un-block
                 # the suppressed names — so don't suggest one (§2B calm).
@@ -11705,6 +11741,8 @@ if page == "🏠 Home":
                     "sector_unknown_picks":  sector_unknown,
                     "news_skipped":          news_skipped,
                     "earnings_waiting":      earnings_waiting,
+                    "beta_blocked_picks":    grow.get("beta_blocked_picks", []),
+                    "beta_unknown_picks":    grow.get("beta_unknown_picks", []),
                     "overflow_picks":        grow.get("overflow_picks", []),
                     "flat_day_held":         grow.get("flat_day_held", []),
                 }
@@ -11920,6 +11958,7 @@ if page == "🏠 Home":
         if isinstance(entry_held_adds, list) and entry_held_adds:
             _eh_rows = []
             _eh_corr_rows = []
+            _eh_beta_rows = []
             for _eh in entry_held_adds:
                 _eh_tk = str(_eh.get("ticker", "")).strip()
                 if not _eh_tk:
@@ -11943,11 +11982,23 @@ if page == "🏠 Home":
                     _eh_line += " Also: " + "; ".join(_eh_others) + "."
                 if _eh.get("check") == "corr_unmeasured":
                     _eh_corr_rows.append((_eh_tk, _eh_line))
+                elif _eh.get("check") == "beta_unknown":
+                    # Beta-gate C2: the reason is a full sentence that already says
+                    # "Add held — …" and clears_when reads "at the next …", so the
+                    # generic wrappers above would double up; reword this row.
+                    _eh_bu_reason = str(_eh.get("reason") or "").strip()
+                    if _eh_bu_reason.startswith("Add held — "):
+                        _eh_bu_reason = _eh_bu_reason[len("Add held — "):]
+                    _eh_bu_line = _eh_tk + " — would qualify as an add, but " + _eh_bu_reason
+                    if _eh.get("clears_when"):
+                        _eh_bu_line += f" Clears {str(_eh['clears_when']).rstrip('.')}."
+                    _eh_beta_rows.append((_eh_tk, _eh_bu_line))
                 else:
                     _eh_rows.append((_eh_tk, _eh_line))
             for _eh_head, _eh_group in (
                 ("📰 Adds held — entry check", _eh_rows),
                 ("🔗 Adds held — correlation couldn't be measured", _eh_corr_rows),
+                ("⏸ Adds held — beta couldn't be checked", _eh_beta_rows),
             ):
                 if not _eh_group:
                     continue
@@ -12223,6 +12274,30 @@ if page == "🏠 Home":
                 "</div></div>",
                 unsafe_allow_html=True,
             )
+
+        # G-06 portfolio beta (beta-gate C2) -- a high-beta buy onto a high-beta
+        # book is held, the same hold the 📋 Watchlist applies; and a buy whose
+        # beta couldn't be checked is held as "couldn't check", never passed.
+        for _bg_title, _bg_items in (
+            ("⛔ Portfolio beta", beta_blocked),
+            ("⏸ Beta couldn't be checked", beta_unknown_picks),
+        ):
+            if not _bg_items:
+                continue
+            st.markdown(
+                "<div style='background:#422006;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.84em'>"
+                f"{_safe_html(_bg_title)} ({_safe_html(str(len(_bg_items)))})</div></div>",
+                unsafe_allow_html=True,
+            )
+            for _bg in _bg_items[:4]:
+                _bg_line = f"**{_bg.get('ticker', '')}** — {_bg.get('reason', '')}"
+                if _bg.get("clears_when"):
+                    _bg_line += f" Clears {_bg['clears_when']}."
+                st.caption(_bg_line.replace("$", chr(92) + "$"))
+            if len(_bg_items) > 4:
+                st.caption(f"…and {len(_bg_items) - 4} more.")
 
         # Sector unknown (D1, sector_gate_spec.md, 2026-09-30) — a pick whose
         # sector couldn't be classified at all (not in TICKER_SECTORS, no

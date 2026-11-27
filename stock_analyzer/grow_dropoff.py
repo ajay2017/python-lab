@@ -69,6 +69,7 @@ def derive_dropoffs(
         read: ``composite_skipped``, ``sector_blocked_picks``,
         ``macro_blocked_picks``, ``composite_unavailable``,
         ``sector_unknown_picks``, ``news_skipped``, ``earnings_waiting``,
+        ``beta_blocked_picks``, ``beta_unknown_picks``,
         ``overflow_picks``, ``flat_day_held``.
     reduce_calls:
         Dict of {ticker_upper: item} from session_state["_reduce_calls"].
@@ -93,7 +94,8 @@ def derive_dropoffs(
                                     reduce_call | composite_below_bar |
                                     sector_blocked | macro_blocked |
                                     composite_unavailable | sector_unknown |
-                                    skip_verdict | earnings_wait | pacing |
+                                    skip_verdict | earnings_wait |
+                                    beta_blocked | beta_unknown | pacing |
                                     flat_day_hold | unattributed
             reason_text          (str)  — human-readable sentence
             has_confident_reason (bool) — False only on 'unattributed'
@@ -151,6 +153,18 @@ def derive_dropoffs(
     # check but lost to pacing (overflow_picks), or held by the flat-day check
     # (flat_day_held). Without these the trace would call them "re-priced below
     # the entry bar" while the overflow line beside it says they cleared.
+    _beta_blocked_map: dict[str, dict] = {}
+    for _item in grow_buckets.get("beta_blocked_picks", []):
+        _t = str(_item.get("ticker", "")).upper()
+        if _t:
+            _beta_blocked_map[_t] = _item
+
+    _beta_unknown_map: dict[str, dict] = {}
+    for _item in grow_buckets.get("beta_unknown_picks", []):
+        _t = str(_item.get("ticker", "")).upper()
+        if _t:
+            _beta_unknown_map[_t] = _item
+
     _overflow_map: dict[str, dict] = {}
     for _item in grow_buckets.get("overflow_picks", []):
         _t = str(_item.get("ticker", "")).upper()
@@ -199,8 +213,8 @@ def derive_dropoffs(
         # Reason attribution priority:
         # reduce_calls → composite_skipped → sector_blocked_picks
         # → macro_blocked_picks → composite_unavailable → sector_unknown_picks
-        # → news_skipped → earnings_waiting → overflow_picks → flat_day_held
-        # → unattributed
+        # → news_skipped → earnings_waiting → beta_blocked_picks
+        # → beta_unknown_picks → overflow_picks → flat_day_held → unattributed
         if reduce_calls is not None and _t in reduce_calls:
             _reason_code   = "reduce_call"
             _reason_text   = f"a Reduce/Exit call is now active on {_t}"
@@ -277,6 +291,21 @@ def derive_dropoffs(
                 f"earnings are now imminent — waiting for the post-print setup ({_lbl})" if _lbl
                 else "earnings are now imminent — waiting for the post-print setup"
             )
+            _has_confident = True
+
+        elif _t in _beta_blocked_map:
+            # G-06 (beta-gate C2): checked after the earnings hold in _grow_today.
+            _bi = _beta_blocked_map[_t]
+            _current_composite = _bi.get("composite_score")
+            _reason_code   = "beta_blocked"
+            _reason_text   = _bi.get("reason") or "portfolio beta hold"
+            _has_confident = True
+
+        elif _t in _beta_unknown_map:
+            _bi = _beta_unknown_map[_t]
+            _current_composite = _bi.get("composite_score")
+            _reason_code   = "beta_unknown"
+            _reason_text   = _bi.get("reason") or "portfolio beta couldn't be checked"
             _has_confident = True
 
         elif _t in _overflow_map:

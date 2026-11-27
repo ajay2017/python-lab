@@ -235,6 +235,9 @@ _HELD_BACK_OTHER = (
     ("sector_blocked_picks",  "sector cap"),
     ("sector_unknown_picks",  "sector unknown"),
     ("composite_unavailable", "couldn't be scored"),
+    # Beta-gate C2: G-06 holds on Grow Today (a hold, never silently dropped).
+    ("beta_blocked_picks",    "portfolio beta"),
+    ("beta_unknown_picks",    "beta couldn't be checked"),
 )
 
 

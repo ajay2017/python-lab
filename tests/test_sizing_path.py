@@ -362,6 +362,7 @@ _PAUSE_BUCKETS = [
     "card_blocked_adds", "deterioration_blocked_adds", "cooldown_adds",
     "sector_blocked_adds", "risk_blocked_adds", "concentration_blocked_adds",
     "pair_blocked_adds", "cluster_blocked_adds", "entry_held_adds", "room_blocked_adds",
+    "beta_blocked_adds",
 ]
 _TODAY = date(2026, 10, 19)
 

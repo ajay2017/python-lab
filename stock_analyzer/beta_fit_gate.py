@@ -8,8 +8,9 @@ THE SHAPE
     nothing else; `decide` wraps it with the "a leg or the book couldn't be
     read" outcome so every surface that applies G-06 reads one answer.
     Pure: no clock, no I/O, never raises. Callers: the 📋 Watchlist's
-    `watchlist_advisor._portfolio_risk_gate` (`breached`, C1); `decide` is the
-    shared decision for 🏠 Grow Today and the cron emails from C2.
+    `watchlist_advisor._portfolio_risk_gate` (`breached`, C1); 🏠 Grow Today
+    (`daily_briefing._grow_today`) and, through it, both cron pick emails call
+    `decide` + `hold_text` (beta-gate C2).
 
 THE FAIL DIRECTIONS
     - An unread beta leg (None / NaN / inf / bool / non-numeric, see
@@ -89,3 +90,68 @@ def decide(*, port_beta, ticker_beta, fit_state) -> dict:
         return _result(STATE_PASS, None, pb, tb)
     except Exception:
         return _result(STATE_UNKNOWN, "fit_unknown", None, None)
+
+
+def hold_text(decision: dict, ticker: str, *, lane: str) -> "dict | None":
+    """{"reason": str, "clears_when": str} for a blocked / unknown decision, None for
+    pass (or a non-dict / unrecognised state). lane: "pick" | "add" | "etf". Plain
+    text, no dollar signs. Never raises (on any exception: a generic unknown text,
+    never None for a non-pass decision)."""
+    try:
+        if not isinstance(decision, dict):
+            return None
+        state = decision.get("state")
+        if state not in (STATE_BLOCKED, STATE_UNKNOWN):
+            return None
+        t = str(ticker)
+        try:
+            if state == STATE_BLOCKED:
+                pb, tb = decision.get("port_beta"), decision.get("ticker_beta")
+                facts = (
+                    f"Your book's beta is {pb:.2f}, above the {PORTFOLIO_BETA_CEILING:.1f} "
+                    f"limit, and {t}'s beta is {tb:.2f} (over {TICKER_BETA_CRITICAL:.1f}), so "
+                )
+                if lane == "add":
+                    reason = ("Add paused — portfolio beta. " + facts
+                              + "adding would raise the book's market sensitivity further.")
+                else:
+                    reason = ("Not opened today — portfolio beta. " + facts
+                              + "this buy would add to the book's market sensitivity. "
+                              "The 📋 Watchlist applies the same check.")
+                return {
+                    "reason": reason,
+                    "clears_when": (f"when the book's beta is back at or under "
+                                    f"{PORTFOLIO_BETA_CEILING:.1f}"),
+                }
+            kind = decision.get("kind")
+            pb_read = beta_or_none(decision.get("port_beta")) is not None
+            tb_read = beta_or_none(decision.get("ticker_beta")) is not None
+            if kind == "beta_unknown":
+                if not pb_read and not tb_read:
+                    why = f"neither the book's beta nor {t}'s could be read"
+                elif not pb_read:
+                    why = "the book's beta couldn't be computed"
+                else:
+                    why = f"{t}'s beta couldn't be read"
+            else:
+                why = "your holdings couldn't be loaded and priced"
+            lead = ("Add held — portfolio beta couldn't be checked: " if lane == "add"
+                    else "Held — portfolio beta couldn't be checked: ")
+            return {
+                "reason": lead + why + ". That's a reason to pause, not a green light.",
+                "clears_when": "at the next Home build or scan that can read it",
+            }
+        except Exception:
+            lead = ("Add held — portfolio beta couldn't be checked: " if lane == "add"
+                    else "Held — portfolio beta couldn't be checked: ")
+            return {
+                "reason": lead + "the check couldn't be completed. That's a reason to "
+                                 "pause, not a green light.",
+                "clears_when": "at the next Home build or scan that can read it",
+            }
+    except Exception:
+        return {
+            "reason": ("Held — portfolio beta couldn't be checked. That's a reason to "
+                       "pause, not a green light."),
+            "clears_when": "at the next Home build or scan that can read it",
+        }

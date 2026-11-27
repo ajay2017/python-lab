@@ -15,6 +15,9 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -48,6 +51,9 @@
  "bear__earn_0d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -90,6 +96,9 @@
  "bear__earn_at_imminent": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -132,6 +141,9 @@
  "bear__earn_imminent_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -174,6 +186,9 @@
  "bear__earn_in_held_data_7d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -216,6 +231,9 @@
  "bear__earn_unknown": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -258,6 +276,9 @@
  "bear__etf_clean": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -291,6 +312,9 @@
  "bear__etf_macro_all": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -324,6 +348,9 @@
  "bear__etf_negative_news": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -357,6 +384,9 @@
  "bear__macro_3d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -399,6 +429,9 @@
  "bear__macro_3d_medium": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -441,6 +474,9 @@
  "bear__macro_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -483,6 +519,9 @@
  "bear__macro_all_sectors_2d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -525,6 +564,9 @@
  "bear__macro_all_sectors_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -567,6 +609,9 @@
  "bear__macro_day0_after_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -609,6 +654,9 @@
  "bear__macro_day0_at_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -651,6 +699,9 @@
  "bear__macro_day0_bad_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -693,6 +744,9 @@
  "bear__macro_day0_before_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -735,6 +789,9 @@
  "bear__macro_day0_no_time_unreleased": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -777,6 +834,9 @@
  "bear__macro_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -819,6 +879,9 @@
  "bear__macro_empty": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -861,6 +924,9 @@
  "bear__macro_fomc_day0_after": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -903,6 +969,9 @@
  "bear__macro_fomc_day0_before": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -945,6 +1014,9 @@
  "bear__macro_fomc_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -987,6 +1059,9 @@
  "bear__macro_none": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1029,6 +1104,9 @@
  "bear__macro_past_1d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1080,6 +1158,9 @@
     "ticker": "ZADDOK"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1151,6 +1232,9 @@
     "ticker": "ZADDOK"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1213,6 +1297,9 @@
  "bear__news_at_threshold": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1255,6 +1342,9 @@
  "bear__news_just_above": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1297,6 +1387,9 @@
  "bear__news_none": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1339,6 +1432,9 @@
  "bear__news_single_strong_neg": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1381,6 +1477,9 @@
  "bear__trust_fresh": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1423,6 +1522,9 @@
  "bear__trust_fund_age_at_max": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1465,6 +1567,9 @@
  "bear__trust_fund_age_max_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1507,6 +1612,9 @@
  "bear__trust_fundamentals_unavailable": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1549,6 +1657,9 @@
  "bear__trust_keys_absent": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1591,6 +1702,9 @@
  "bear__trust_stale_as_of": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1646,6 +1760,9 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1679,6 +1796,9 @@
  "boundary__bear_edge__clean": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1730,6 +1850,9 @@
     "ticker": "ZADDOK"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1805,6 +1928,9 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1842,6 +1968,9 @@
  "boundary__bear_edge_plus__clean": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -1960,6 +2089,9 @@
     "ticker": "ZADDOK"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -2296,6 +2428,9 @@
    }
   ],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [
    {
     "card_label": "Monitoring",
@@ -2493,6 +2628,9 @@
  "boundary__bull_edge__clean": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -2700,6 +2838,9 @@
    }
   ],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -3040,6 +3181,9 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -3077,6 +3221,9 @@
  "boundary__bull_edge_minus__clean": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -3195,6 +3342,9 @@
     "ticker": "ZADDOK"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -3531,6 +3681,9 @@
    }
   ],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [
    {
     "card_label": "Monitoring",
@@ -3728,6 +3881,9 @@
  "bull__earn_0d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -3837,6 +3993,9 @@
  "bull__earn_at_imminent": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -3946,6 +4105,9 @@
  "bull__earn_imminent_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -4105,6 +4267,9 @@
  "bull__earn_in_held_data_7d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -4214,6 +4379,9 @@
  "bull__earn_unknown": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -4372,6 +4540,9 @@
  "bull__etf_clean": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -4471,6 +4642,9 @@
  "bull__etf_macro_all": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -4515,6 +4689,9 @@
  "bull__etf_negative_news": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -4559,6 +4736,9 @@
  "bull__macro_3d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -4671,6 +4851,9 @@
  "bull__macro_3d_medium": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -4829,6 +5012,9 @@
  "bull__macro_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -4987,6 +5173,9 @@
  "bull__macro_all_sectors_2d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -5051,6 +5240,9 @@
  "bull__macro_all_sectors_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -5209,6 +5401,9 @@
  "bull__macro_day0_after_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -5367,6 +5562,9 @@
  "bull__macro_day0_at_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -5525,6 +5723,9 @@
  "bull__macro_day0_bad_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -5637,6 +5838,9 @@
  "bull__macro_day0_before_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -5749,6 +5953,9 @@
  "bull__macro_day0_no_time_unreleased": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -5861,6 +6068,9 @@
  "bull__macro_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -6019,6 +6229,9 @@
  "bull__macro_empty": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -6177,6 +6390,9 @@
  "bull__macro_fomc_day0_after": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -6241,6 +6457,9 @@
  "bull__macro_fomc_day0_before": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -6305,6 +6524,9 @@
  "bull__macro_fomc_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -6369,6 +6591,9 @@
  "bull__macro_none": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -6527,6 +6752,9 @@
  "bull__macro_past_1d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -6734,6 +6962,9 @@
    }
   ],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -7110,6 +7341,9 @@
    }
   ],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -7358,6 +7592,9 @@
  "bull__news_at_threshold": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -7472,6 +7709,9 @@
  "bull__news_just_above": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -7631,6 +7871,9 @@
  "bull__news_none": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -7789,6 +8032,9 @@
  "bull__news_single_strong_neg": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -7903,6 +8149,9 @@
  "bull__trust_fresh": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -8061,6 +8310,9 @@
  "bull__trust_fund_age_at_max": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -8219,6 +8471,9 @@
  "bull__trust_fund_age_max_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -8323,6 +8578,9 @@
  "bull__trust_fundamentals_unavailable": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -8430,6 +8688,9 @@
  "bull__trust_keys_absent": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -8588,6 +8849,9 @@
  "bull__trust_stale_as_of": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -8705,6 +8969,9 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -8742,6 +9009,9 @@
  "flat__earn_0d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -8852,6 +9122,9 @@
  "flat__earn_at_imminent": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -8962,6 +9235,9 @@
  "flat__earn_imminent_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9072,6 +9348,9 @@
  "flat__earn_in_held_data_7d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9182,6 +9461,9 @@
  "flat__earn_unknown": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9291,6 +9573,9 @@
  "flat__etf_clean": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9328,6 +9613,9 @@
  "flat__etf_macro_all": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9365,6 +9653,9 @@
  "flat__etf_negative_news": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9402,6 +9693,9 @@
  "flat__macro_3d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9514,6 +9808,9 @@
  "flat__macro_3d_medium": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9623,6 +9920,9 @@
  "flat__macro_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9732,6 +10032,9 @@
  "flat__macro_all_sectors_2d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9796,6 +10099,9 @@
  "flat__macro_all_sectors_4d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -9905,6 +10211,9 @@
  "flat__macro_day0_after_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10014,6 +10323,9 @@
  "flat__macro_day0_at_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10123,6 +10435,9 @@
  "flat__macro_day0_bad_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10235,6 +10550,9 @@
  "flat__macro_day0_before_time": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10347,6 +10665,9 @@
  "flat__macro_day0_no_time_unreleased": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10459,6 +10780,9 @@
  "flat__macro_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10568,6 +10892,9 @@
  "flat__macro_empty": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10677,6 +11004,9 @@
  "flat__macro_fomc_day0_after": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10741,6 +11071,9 @@
  "flat__macro_fomc_day0_before": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10805,6 +11138,9 @@
  "flat__macro_fomc_day0_released_flag": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10869,6 +11205,9 @@
  "flat__macro_none": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -10978,6 +11317,9 @@
  "flat__macro_past_1d": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -11096,6 +11438,9 @@
     "ticker": "ZADDOK"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -11365,6 +11710,9 @@
     "ticker": "ZADDOK"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -11589,6 +11937,9 @@
  "flat__news_at_threshold": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -11699,6 +12050,9 @@
  "flat__news_just_above": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -11809,6 +12163,9 @@
  "flat__news_none": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -11918,6 +12275,9 @@
  "flat__news_single_strong_neg": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -12028,6 +12388,9 @@
  "flat__trust_fresh": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -12137,6 +12500,9 @@
  "flat__trust_fund_age_at_max": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -12246,6 +12612,9 @@
  "flat__trust_fund_age_max_plus1": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -12350,6 +12719,9 @@
  "flat__trust_fundamentals_unavailable": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -12457,6 +12829,9 @@
  "flat__trust_keys_absent": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -12566,6 +12941,9 @@
  "flat__trust_stale_as_of": {
   "add_positions": [],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -12683,6 +13061,9 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,
@@ -12792,6 +13173,9 @@
    }
   ],
   "adds_paused": [],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [
    {
     "card_label": "Monitoring",
@@ -13002,6 +13386,9 @@
     "ticker": "ZNEWSMILD"
    }
   ],
+  "beta_blocked_adds": [],
+  "beta_blocked_picks": [],
+  "beta_unknown_picks": [],
   "card_blocked_adds": [],
   "cluster_blocked_adds": [],
   "cluster_gate_checked": false,

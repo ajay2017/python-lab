@@ -277,6 +277,7 @@ _PAUSE_BUCKETS = (
     "cluster_blocked_adds",
     "entry_held_adds",
     "room_blocked_adds",
+    "beta_blocked_adds",   # G-06 (beta-gate C2): reads the item's own `reason` sentence
 )
 
 _UNKNOWN_REASON = "Grow Today's add call for today isn't available — open 🏠 Home to build it."

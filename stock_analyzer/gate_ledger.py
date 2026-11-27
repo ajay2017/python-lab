@@ -70,6 +70,11 @@ _BUCKET_LANES: dict[str, str] = {
     # G-31 (S-D, 2026-10-19) -- the add leaves no room under the whole-position
     # single-name / net-capital cap. Flows through grow_today like G-25/G-26.
     "room_blocked_adds":         "add_winner",
+    # G-06 extended to Grow Today (beta-gate C2): a high-beta buy onto a high-beta
+    # book. `beta_unknown_picks` is deliberately NOT listed: no gate id, no ledger
+    # row (a "couldn't check" hold, not a measured breach).
+    "beta_blocked_picks":        "new_pick",
+    "beta_blocked_adds":         "add_winner",
 }
 
 _MAX_REASON_LEN = 300

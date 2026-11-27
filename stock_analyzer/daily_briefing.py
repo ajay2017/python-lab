@@ -110,6 +110,7 @@ from stock_analyzer import held_trim_owner
 from stock_analyzer import brief_trim_merge
 from stock_analyzer import act_trim_fold
 from stock_analyzer import breach_recovery
+from stock_analyzer import beta_fit_gate
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.text_fmt import share_word
 from stock_analyzer import g32_shadow
@@ -870,7 +871,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 cluster_add_blocks: dict | None = None,
                 pair_add_blocks: dict | None = None,
                 corr_unchecked: list | None = None,
-                corr_coverage: dict | None = None) -> dict:
+                corr_coverage: dict | None = None,
+                beta_fit: dict | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -978,6 +980,17 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  comes from the "sample" tag on the G-26 / G-25 block entries.
                  `None` (the default; the cron passes nothing) leaves every
                  key byte-identical.
+    beta_fit   : optional (beta-gate C2, G-06 on Grow Today) --
+                 {"portfolio_beta": float | None, "fit_state": the
+                 buy_check_state.fit_state result}. Read ONLY through
+                 beta_fit_gate.decide: a high-beta buy onto a high-beta book is
+                 held (`beta_blocked_picks` / `beta_blocked_adds`, ledgered as
+                 G-06), and a buy whose beta couldn't be checked, where the unread
+                 leg could bind, is held as "couldn't check" (`beta_unknown_picks`;
+                 an add rides `entry_held_adds`; an ETF rides `etf_screened_out`).
+                 `None` (the default: not wired, tests only) skips every beta
+                 check and leaves every pre-existing key byte-identical. A
+                 non-dict reads as {} (fit unknown -> hold).
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -1191,6 +1204,30 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "gate_value": None, "gate_threshold": _need}
         return None
 
+    def _beta_decision(_ticker_beta) -> "dict | None":
+        """The ONE G-06 / couldn't-check decision (beta_fit_gate.decide) for a
+        candidate with this beta. None when `beta_fit` is None (not wired)."""
+        if beta_fit is None:
+            return None
+        _bf = beta_fit if isinstance(beta_fit, dict) else {}
+        return beta_fit_gate.decide(
+            port_beta=_bf.get("portfolio_beta"),
+            ticker_beta=_ticker_beta,
+            fit_state=_bf.get("fit_state"),
+        )
+
+    def _bundle_beta(_b):
+        """A bundle's risk_metrics beta (the Watchlist's read), None when absent."""
+        if not isinstance(_b, dict):
+            return None
+        _rm = _b.get("risk_metrics")
+        return _rm.get("beta") if isinstance(_rm, dict) else None
+
+    def _add_beta_decision(_r) -> "dict | None":
+        """The G-06 decision for ONE held name's add (same held_data key lookup the
+        entry check and the add sizing use)."""
+        return _beta_decision(_bundle_beta((held_data or {}).get(str(_r["Ticker"]))))
+
     def _add_block_gate(_r) -> "str | None":
         """THE add-gate decision, in the order the bull loop applies it. Returns
         None (nothing blocks), "CARD" (a card in today's Brief or a sale today),
@@ -1199,9 +1236,12 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         danger pair, G-25 new cluster), "ENTRY" (the shared entry check:
         stale data / negative news / imminent earnings) -- checked after every
         existing gate so their buckets and ledger rows are unchanged -- or
-        "CORR_UNMEASURED" (CorrYoung C3b, after ENTRY: the correlation couldn't
+        "G-06" (beta-gate C2, after ENTRY: high book beta AND high ticker beta),
+        "CORR_UNMEASURED" (CorrYoung C3b, after G-06: the correlation couldn't
         be measured, either a thin G-26 / G-25 entry, which then does NOT bind
-        as the gate, or a left-out ticker, Q2; a hold, no ledger row). Shared by
+        as the gate, or a left-out ticker, Q2; a hold, no ledger row) or
+        "BETA_UNKNOWN" (beta-gate C2, last: the portfolio beta couldn't be
+        checked and the unread leg could bind; a hold, no ledger row). Shared by
         the bull add loop (which records the bucket per gate) and adds_paused,
         so the two cannot diverge."""
         _t = str(_r["Ticker"])
@@ -1226,8 +1266,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             return "G-25"
         if not _entry_verdict(_r)["eligible"]:
             return "ENTRY"
+        _bd = _add_beta_decision(_r)
+        if _bd is not None and _bd["state"] == beta_fit_gate.STATE_BLOCKED:
+            return "G-06"
         if _corr_unmeasured(_tu) is not None:
             return "CORR_UNMEASURED"
+        if _bd is not None and _bd["state"] == beta_fit_gate.STATE_UNKNOWN:
+            return "BETA_UNKNOWN"
         return None
 
     def _adds_paused_list() -> list[dict]:
@@ -1301,6 +1346,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "news_skipped":               [],
             "earnings_waiting":           [],
             "etf_screened_out":           [],
+            # Beta-gate C2: always present as lists; a bear day picks and adds nothing.
+            "beta_blocked_picks":         [],
+            "beta_unknown_picks":         [],
+            "beta_blocked_adds":          [],
             # Grow Today owns every buy (2026-10-15): on a bear day nothing is
             # picked, so nothing can be pacing-held or flat-day-held; the
             # scanner names are ALL unevaluated and the would-qualify adds are
@@ -1361,6 +1410,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # EARNINGS_IMMINENT_DAYS, "Wait for the post-print setup" (F-303). Held
     # out like news_skipped; they come back once the print has passed.
     earnings_waiting: list[dict] = []
+    # Beta-gate C2: G-06 on new picks (ledgered) and the "couldn't check" hold
+    # (no gate id, no ledger row).
+    beta_blocked_picks: list[dict] = []
+    beta_unknown_picks: list[dict] = []
 
     # Build ONE candidate pool from two sources so the user sees a single
     # "New Positions to Initiate" list regardless of where a ticker came from:
@@ -1798,6 +1851,42 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 })
                 continue
 
+            # G-06 portfolio beta (beta-gate C2) -- checked AFTER every policy and
+            # data-quality gate above so their buckets and ledger rows stay
+            # byte-identical, and BEFORE sizing. blocked: ledgered; unknown: a hold
+            # with no gate id. No sizing, no _g32_pick_src entry for either.
+            _bd = _beta_decision(_bundle_beta(_comp_data))
+            if _bd is not None and _bd["state"] != beta_fit_gate.STATE_PASS:
+                _bd_txt = beta_fit_gate.hold_text(_bd, ticker, lane="pick")
+                _bd_item = {
+                    "ticker":          ticker,
+                    "sector":          sector,
+                    "score":           _f(row.get("Score", 0)),
+                    "momentum_score":  _f(row.get("Score"), None),
+                    "composite_score": _composite_score,
+                    "is_mover":        is_mover,
+                    "reason":          _bd_txt["reason"],
+                    "clears_when":     _bd_txt["clears_when"],
+                    "gate_id":         None,
+                    "counterfactual":  True,
+                    "gate_value":      None,
+                    "gate_threshold":  None,
+                    "price":           price,
+                    "port_beta":       _bd["port_beta"],
+                    "ticker_beta":     _bd["ticker_beta"],
+                }
+                if _bd["state"] == beta_fit_gate.STATE_BLOCKED:
+                    _bd_item.update({
+                        "gate_id":        "G-06",
+                        "gate_value":     _bd["gate_value"],
+                        "gate_threshold": _bd["gate_threshold"],
+                    })
+                    beta_blocked_picks.append(_bd_item)
+                else:
+                    _bd_item["kind"] = _bd["kind"]
+                    beta_unknown_picks.append(_bd_item)
+                continue
+
             # Conviction tier: drives the label shown on the card.
             # "high" requires the same bar as Strong Buy (no looser tier here —
             # previously a custom 68 magic number existed that called scores
@@ -2160,6 +2249,20 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "reason": str(_etf_rv.get("label") or "⚠️ Caution"),
                 })
                 continue
+            # G-06 portfolio beta on the ETF lane (beta-gate C2, U2): after every
+            # existing screen-out. No ledger row for either outcome (ETF-lane
+            # precedent: an ETF's own alpha against itself would corrupt the math).
+            _etf_bd = _beta_decision(_bundle_beta(_ebundle))
+            if _etf_bd is not None and _etf_bd["state"] != beta_fit_gate.STATE_PASS:
+                _etf_bd_txt = beta_fit_gate.hold_text(_etf_bd, _et, lane="etf")
+                etf_screened_out.append({
+                    "ticker": _et,
+                    "group":  _ec.get("group"),
+                    "kind":   ("beta" if _etf_bd["state"] == beta_fit_gate.STATE_BLOCKED
+                               else "beta_unknown"),
+                    "reason": _etf_bd_txt["reason"],
+                })
+                continue
 
             # reconcile_signals()'s own momentum_available=False "go" wording
             # ("...there is no separate scanner momentum reading for a
@@ -2290,6 +2393,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     card_blocked_adds: list[dict] = []  # adds paused by a Brief card / sale today (chunk 7a, no ledger row)
     entry_held_adds:   list[dict] = []  # adds held by the shared entry check (stale / news / earnings)
     room_blocked_adds: list[dict] = []  # adds with no room left under the whole-position caps (G-31, S-D)
+    beta_blocked_adds: list[dict] = []  # adds held by G-06 portfolio beta (beta-gate C2)
 
     def _review_news_note(_t: str):
         """Note for an add card whose ticker has a Review news WATCH (which no
@@ -2649,6 +2753,55 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         "momentum_score":  None,
                     })
                     continue
+                # G-06 (beta-gate C2) -- AFTER the ENTRY check, so every earlier
+                # gate keeps its bucket and ledger row.
+                if _gate == "G-06":
+                    _abd = _add_beta_decision(row)
+                    _abd_txt = beta_fit_gate.hold_text(_abd, ticker, lane="add")
+                    beta_blocked_adds.append({
+                        "ticker":    ticker,
+                        "score":     scr,
+                        "pnl_pct":   _f(row.get("P&L (%)")),
+                        "gap":       gap,
+                        "sector":    sector,
+                        "reason":    _abd_txt["reason"],
+                        "clears_when": _abd_txt["clears_when"],
+                        "gate_id":        "G-06",
+                        "counterfactual": True,
+                        "gate_value":     _abd["gate_value"],
+                        "gate_threshold": _abd["gate_threshold"],
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
+                        "port_beta":       _abd["port_beta"],
+                        "ticker_beta":     _abd["ticker_beta"],
+                    })
+                    continue
+                # BETA_UNKNOWN (beta-gate C2) -- a hold, not a finding: shares the
+                # entry_held_adds bucket and renderer with no gate id (no ledger row).
+                if _gate == "BETA_UNKNOWN":
+                    _abd = _add_beta_decision(row)
+                    _abd_txt = beta_fit_gate.hold_text(_abd, ticker, lane="add")
+                    entry_held_adds.append({
+                        "ticker":    ticker,
+                        "score":     scr,
+                        "pnl_pct":   _f(row.get("P&L (%)")),
+                        "gap":       gap,
+                        "sector":    sector,
+                        "check":     "beta_unknown",
+                        "reason":    _abd_txt["reason"],
+                        "clears_when": _abd_txt["clears_when"],
+                        "holds":     [],
+                        "unchecked": [],
+                        "gate_id":        None,
+                        "counterfactual": True,
+                        "gate_value":     None,
+                        "gate_threshold": None,
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
+                    })
+                    continue
                 price   = _f(row.get("Price", 0))
                 # Same alias-aware match as _sector_bonus/is_leader above --
                 # this is the add-to-winner lane's own copy of the identical
@@ -2820,6 +2973,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "news_skipped":               news_skipped,
         "earnings_waiting":           earnings_waiting,
         "etf_screened_out":           etf_screened_out,
+        # Beta-gate C2 (G-06 on Grow Today): always lists, never omitted.
+        # beta-unknown ADDS ride entry_held_adds (check "beta_unknown").
+        "beta_blocked_picks":         beta_blocked_picks,
+        "beta_unknown_picks":         beta_unknown_picks,
+        "beta_blocked_adds":          beta_blocked_adds,
         # Grow Today owns every buy (2026-10-15, OP-07 "gate the call, never
         # the candidate"). None of these four is a gate: overflow_picks are
         # pacing-held (no size), flat_day_held names the flat-day holds,
@@ -4369,6 +4527,7 @@ def build_daily_briefing(
     news_feed: dict | None = None,
     risk_coverage: dict | None = None,
     corr_coverage: dict | None = None,
+    beta_fit: dict | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -4424,6 +4583,10 @@ def build_daily_briefing(
                      came from, passed straight through to _grow_today, which
                      reads only its `left_out` list (the Q2 add hold). None (the
                      default, and the cron) leaves every output byte-identical.
+    beta_fit:        optional (beta-gate C2, G-06 on Grow Today)
+                     {"portfolio_beta": float | None, "fit_state": dict}, passed
+                     straight through to _grow_today (see its docstring). None
+                     (the default: not wired, tests only) skips every beta check.
 
     Returns dict with: act_today, review_list, grow_today, portfolio_tuneup.
     Grow Today owns every new-position and add-to-winner suggestion (the
@@ -4573,7 +4736,8 @@ def build_daily_briefing(
                          cluster_add_blocks=cluster_add_blocks,
                          pair_add_blocks=pair_add_blocks,
                          corr_unchecked=corr_unchecked,
-                         corr_coverage=corr_coverage)
+                         corr_coverage=corr_coverage,
+                         beta_fit=beta_fit)
     # EW C3: a single-name card on a name the Brief SELLS defers to that sell (with a
     # visible caption via `portfolio_tuneup_deferred`); never raw reduce_call keys.
     # DeferSizeBlind: only to a sell that COVERS the card's own trim (sell_cover).

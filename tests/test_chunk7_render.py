@@ -27,7 +27,7 @@ def test_also_in_review_line_uses_the_constant_not_a_literal():
 
 def test_adds_held_block_iterates_entry_held_adds_with_clears_when_and_pending_page():
     i = _SRC.index("📰 Adds held — entry check")
-    block = _SRC[i - 1800:i + 2600]
+    block = _SRC[i - 3000:i + 2600]   # widened 2026-11-26: beta-gate C2's beta_unknown row branch
     assert "for _eh in entry_held_adds" in block
     assert "Clears when:" in block and "clears_when" in block
     assert "would qualify as an add; held:" in block
@@ -50,7 +50,7 @@ def test_grow_shown_lists_both_new_keys():
 
 
 def test_schema_version_bumped_to_23():
-    assert re.search(r"_SYNTH_SCHEMA_VER = 33\b", _SRC)  # 32 -> 33 by BriefSkipSizeBlind B-C3
+    assert re.search(r"_SYNTH_SCHEMA_VER = 34\b", _SRC)  # 33 -> 34 by beta-gate C2
 
 
 def test_no_direct_nav_page_assignment_added():

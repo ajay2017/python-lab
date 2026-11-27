@@ -2567,6 +2567,8 @@ def _run_scan(now_et, force: bool) -> int:
             if d.get("sector_unknown"):    _drop.append(f"{d['sector_unknown']} sector unknown")
             if d.get("news_skipped"):      _drop.append(f"{d['news_skipped']} signal-check skip")
             if d.get("earnings_waiting"):  _drop.append(f"{d['earnings_waiting']} waiting on earnings")
+            if d.get("beta_blocked"):      _drop.append(f"{d['beta_blocked']} portfolio-beta hold")
+            if d.get("beta_unknown"):      _drop.append(f"{d['beta_unknown']} beta couldn't be checked")
             if _drop:
                 _why += " · dropped: " + ", ".join(_drop)
         else:

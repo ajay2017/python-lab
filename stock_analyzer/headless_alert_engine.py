@@ -833,6 +833,15 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         errors.append(f"etf candidate resolution failed: {e}")
         etf_candidates_for_grow = None
 
+    # Beta-gate C2 (G-06 on Grow Today): the portfolio beta and fit state the
+    # Watchlist lane reads (compute_watchlist_entries), so both emails hold the
+    # same name for the same reason. ctx is ok here, so the book was non-empty.
+    _bf_port_risk = ctx.get("port_risk")
+    _beta_fit = {
+        "portfolio_beta": (_buy_check_state.beta_or_none(_bf_port_risk.get("beta"))
+                           if _bf_port_risk else None),
+        "fit_state": _buy_check_state.fit_state(holdings_df.to_dict("records") or [{}], port_df),
+    }
     try:
         brief = build_daily_briefing(
             port_df=port_df, alert_list=[], risk_recs=[], news_items=news_items,
@@ -856,6 +865,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
             # None trades_df is the documented "no history" input and yields an
             # empty sold-today set, exactly as on the app side.
             trades_df=ctx.get("trades_df"),
+            beta_fit=_beta_fit,
         )
     except Exception as e:
         return {"picks": [], "built_at": built_at,
@@ -920,6 +930,10 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         "news_skipped":     len(grow.get("news_skipped", [])),
         # F-303: earnings within days -- waits for the post-print setup.
         "earnings_waiting": len(grow.get("earnings_waiting", [])),
+        # Beta-gate C2: G-06 holds on Grow Today (blocked = ledgered hold,
+        # unknown = the beta check couldn't run and the unread leg could bind).
+        "beta_blocked":     len(grow.get("beta_blocked_picks", [])),
+        "beta_unknown":     len(grow.get("beta_unknown_picks", [])),
     }
     # Macro calendar coverage — passes through from _grow_today's LATE-built
     # "macro_coverage_expired" key so the email renderers can show the
