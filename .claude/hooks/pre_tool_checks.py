@@ -1417,6 +1417,13 @@ _GATE_FILES = {
     # off the real top-beta name, stacks a second sale on a name already being sold, or
     # leaves a Watch contradicting the trim.
     "stock_analyzer/risk_off_pool.py",
+    # Added 2026-11-27 (brief-consolidation C1b, docs/plans/brief-consolidation-spec.md
+    # section 1b, row SectorCapCardMerged): when a sector Hard Cap card counts a same-name
+    # exit / Sell toward its own trim (a member sold in full is netted out of the target,
+    # a partial seller is only named) and the line the card shows; a wrong call shrinks
+    # the sector trim for a sale that isn't a full exit, or leaves the user selling the
+    # same shares twice.
+    "stock_analyzer/sector_cap_cover.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

@@ -3631,6 +3631,10 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             _flag["sector"]             = rec.get("sector")
             _sm_raw = rec.get("sector_members")
             _flag["sector_members"]     = _sm_raw if isinstance(_sm_raw, list) else []
+            # C1b: the "🕐 Held back from today's plan" caption (app.py) reads this off
+            # the flag; it was never copied, so the caption was always empty.
+            _ter_raw = rec.get("trim_excluded_recent")
+            _flag["trim_excluded_recent"] = _ter_raw if isinstance(_ter_raw, list) else []
             _flag["trim_candidates"]    = rec.get("trim_candidates", []) or []
             _flag["redeploy_sectors"]   = rec.get("redeploy_sectors", []) or []
             _flag["trim_target_pp"]     = rec.get("trim_target_pp")

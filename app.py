@@ -389,6 +389,7 @@ from stock_analyzer import coord_freshness
 from stock_analyzer import held_trim_owner
 from stock_analyzer import act_sell_mention
 from stock_analyzer import act_sell_cover
+from stock_analyzer import sector_cap_cover
 from stock_analyzer import tuneup_cover
 from stock_analyzer import brief_trim_merge
 from stock_analyzer import home_risk_synthesis
@@ -12843,6 +12844,21 @@ if page == "🏠 Home":
                     f"<span style='color:#fbbf24;font-weight:600'>{_md_bold(_flag.get('title','Risk'))}</span><br>"
                     f"<span style='color:#d1d5db'>{_md_bold(_flag.get('recommendation',''))}</span></div>"
                 )
+            # Brief consolidation C1b: the sector Hard Cap card sits beside a same-name
+            # exit / Sell, so say what today's Act Today call already sells of that
+            # sector and net full exits out of the Rebalance plan below (pure decision in
+            # `sector_cap_cover`; `_db_view_cover` = the post-demotion view's sell cover).
+            _rebal_flag = next(
+                (f for f in _db_flags if f.get("rec_type") == "sector_concentration"),
+                None,
+            )
+            _sc = (sector_cap_cover.decide(_rebal_flag, _db_view_cover)
+                   if _rebal_flag is not None else None)
+            if _sc is not None and _sc["line"]:
+                _body += (
+                    f"<div style='color:#d1d5db;font-size:0.8em;margin-top:6px'>"
+                    f"{_md_bold(_sc['line'])}</div>"
+                )
             # Back-compat: anything without the new fields still shows reason.
             if not _body and _db_item.get("reason"):
                 _body = (
@@ -13097,10 +13113,7 @@ if page == "🏠 Home":
             # COMPOSITE_BUY are the SOLE ranker/gate; correlation-to-book and
             # saved analyst research only ANNOTATE (never reorder past the
             # composite, never gate).
-            _rebal_flag = next(
-                (f for f in _db_flags if f.get("rec_type") == "sector_concentration"),
-                None,
-            )
+            # (`_rebal_flag` / `_sc` are read once above, where the card body is built.)
             if _rebal_flag is not None:
                 _rebal_sfx  = _db_item["action"][:10]
                 _rebal_key  = f"_rebal_open_{_db_ticker}_{_rebal_sfx}"
@@ -13110,13 +13123,37 @@ if page == "🏠 Home":
                 ):
                     st.session_state[_rebal_key] = not st.session_state.get(_rebal_key, False)
                 if st.session_state.get(_rebal_key, False):
-                    _trim       = _rebal_flag.get("trim_candidates", []) or []
+                    # C1b: candidates / target are NET of any member Act Today already
+                    # sells in full (`sector_cap_cover.decide`); identical to the flag's
+                    # own when nothing is netted.
+                    _trim       = _sc["candidates"] or []
                     _redep_secs = _rebal_flag.get("redeploy_sectors", []) or []
 
+                    def _held_back_caption():
+                        # Same-day buys held out of the plan (never a name Act Today
+                        # exits in full: `sector_cap_cover` already removed those).
+                        _trim_recent = _sc["held_back"]
+                        if _trim_recent:
+                            _tr_names = ", ".join(
+                                f"**{r['ticker']}** (≈{_m_dol(r['market_value'], md=True)})"
+                                for r in _trim_recent
+                            )
+                            st.caption(
+                                f"🕐 Held back from today's plan — {_tr_names} "
+                                + ("was" if len(_trim_recent) == 1 else "were")
+                                + " opened today; giving same-day buys a day to settle before "
+                                "suggesting an exit. Reconsidered in tomorrow's brief."
+                            )
+
                     # ── Trim first: lowest-conviction names in the sector ──
-                    if _trim:
-                        _tt_dollar = _rebal_flag.get("trim_target_dollar")
-                        _tt_pp     = _rebal_flag.get("trim_target_pp")
+                    if _sc["covered"]:
+                        # The exits cover the whole trim target (fixed denominator): no
+                        # "Trim first" block (an empty allocation must not fall through
+                        # to the legacy priority list); say why, keep Redeploy.
+                        st.markdown(_sc["line"])
+                    elif _trim:
+                        _tt_dollar = _sc["net_target_dollar"]
+                        _tt_pp     = _sc["net_target_pp"]
                         _tt_denom  = _rebal_flag.get("trim_target_denom")
                         _tc_by_tkr = {c.get("ticker"): c for c in _trim}
 
@@ -13248,24 +13285,24 @@ if page == "🏠 Home":
                                     f"{_tc['weight']:.1f}% · P&L {_tc['pnl_pct']:+.1f}%"
                                 )
                                 _trim_basis(_t, _tc)
-                        _trim_recent = _rebal_flag.get("trim_excluded_recent") or []
-                        if _trim_recent:
-                            _tr_names = ", ".join(
-                                f"**{r['ticker']}** (≈{_m_dol(r['market_value'], md=True)})"
-                                for r in _trim_recent
-                            )
-                            st.caption(
-                                f"🕐 Held back from today's plan — {_tr_names} "
-                                + ("was" if len(_trim_recent) == 1 else "were")
-                                + " opened today; giving same-day buys a day to settle before "
-                                "suggesting an exit. Reconsidered in tomorrow's brief."
-                            )
+                        _held_back_caption()
                         st.caption(
                             "_Greedy: your weakest-conviction names are trimmed first (engine order — small "
                             "gaps are within scoring noise). Shares are approximate; the $/pp are the target. "
                             "Two honest schools when a sector MUST be cut: **trim the laggard** (momentum) or "
                             "**take profit on the runner** (rebalance) — the final call is yours._"
                         )
+                    elif _sc["netted"]:
+                        # Netted, target left over, but every other scored name was
+                        # an exit (or none is scored): never an empty plan with no why.
+                        st.markdown(_sc["line"])
+                        st.caption(
+                            f"⚠️ ~{_m_dol(_sc['net_target_dollar'], md=True)} of the target is left, "
+                            "but none of your other scored names in this sector can be "
+                            "trimmed from this plan — trim the remainder across the "
+                            "sector's other holdings."
+                        )
+                        _held_back_caption()
 
                     # ── Redeploy: engine-vetted candidates in under-rep sectors ──
                     if _redep_secs:
