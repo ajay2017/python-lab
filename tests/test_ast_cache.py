@@ -99,6 +99,58 @@ def test_stale_lock_is_broken(cache, tmp_path, monkeypatch):
     assert ast.dump(parse_file_cached(p)) == ast.dump(key_probe)
 
 
+def test_warm_fills_missing_entries_only(cache, tmp_path, monkeypatch):
+    p = _src(tmp_path)
+    missing = tmp_path / "nope.py"
+    assert _ast_cache.warm([p, missing]) == ["mod.py"]
+    assert len(list(cache.glob("mod.py-*.pkl"))) == 1
+
+    def boom(*a, **k):
+        raise AssertionError("warm re-parsed a file already in the cache")
+
+    monkeypatch.setattr(_ast_cache, "parse_file_cached", boom)
+    assert _ast_cache.warm([p]) == []          # existing entry: skipped
+
+
+def test_warm_never_raises(tmp_path, monkeypatch):
+    blocker = tmp_path / "afile"
+    blocker.write_text("x")
+    monkeypatch.setattr(_ast_cache, "_cache_dir", lambda: blocker / "sub")
+    monkeypatch.setattr(_ast_cache, "_MEMO", {})
+    p = _src(tmp_path)
+    _ast_cache.warm([p, 123])                  # unwritable dir + a bad path: no raise
+
+
+def test_prune_removes_only_old_entries(cache, tmp_path):
+    import os
+    old_p = _src(tmp_path, "a = 1\n")
+    parse_file_cached(old_p)
+    (old_f,) = cache.glob("*.pkl")
+    t = old_f.stat().st_mtime - 8 * 86400
+    os.utime(old_f, (t, t))
+    new_p = tmp_path / "other.py"
+    new_p.write_text("b = 2\n", encoding="utf-8")
+    parse_file_cached(new_p)
+    assert _ast_cache.prune(max_age_days=7) == 1
+    assert [f.name.split("-")[0] for f in cache.glob("*.pkl")] == ["other.py"]
+
+
+def test_conftest_warms_in_the_controller_only():
+    import tests.conftest as cf
+
+    class Worker:
+        workerinput = {"workerid": "gw0"}
+
+    calls = []
+    orig = _ast_cache.warm
+    _ast_cache.warm = lambda paths: calls.append(list(paths)) or []
+    try:
+        cf.pytest_configure(Worker())
+        assert calls == []                      # a worker never warms
+    finally:
+        _ast_cache.warm = orig
+
+
 # Deliberately NO "cached app.py == fresh parse of app.py" test: it would pay a
 # full uncached ~15-75s parse on EVERY run, re-proving what the tmp-file tests
 # above already prove generically (pickle round-trip fidelity + content-keyed

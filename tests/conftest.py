@@ -58,6 +58,28 @@ ast.parse = _guarded_parse
 ast.get_source_segment = _guarded_get_source_segment
 
 
+# ── Warm the AST cache once, before xdist workers start ─────────────────────
+# See tests/_ast_cache.warm: without this, every worker's first app.py test
+# raced a cold ~37 s parse, the losers parsed it themselves after _WAIT_S,
+# and 8 parallel 3 MB parses paged the laptop past the hook's timeout.
+# Controller (or plain single-process run) only; workers carry `workerinput`.
+_WARM_MIN_BYTES = 150_000   # app.py, cron_runner.py, db.py, daily_briefing.py …
+
+
+def pytest_configure(config):
+    if hasattr(config, "workerinput"):
+        return
+    try:
+        from tests import _ast_cache
+        root = _TESTS_DIR.parent
+        big = [p for d in ("stock_analyzer", "scripts") for p in sorted((root / d).glob("*.py"))
+               if p.stat().st_size >= _WARM_MIN_BYTES]
+        _ast_cache.prune()
+        _ast_cache.warm([root / "app.py", root / "cron_runner.py", *big])
+    except Exception:
+        pass   # best effort: workers fall back to parsing on demand
+
+
 # ── Guard: streamlit's one-time "run it with `streamlit run`" check ─────────
 # The first st.<element>() call in a bare-mode process runs
 # delta_generator._maybe_print_use_warning -> env_util.is_repl ->

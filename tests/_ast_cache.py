@@ -43,16 +43,71 @@ def _plain_parse(raw: bytes, path: Path) -> ast.Module:
 
 
 
+def _key(raw: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(raw)
+    h.update(sys.version.encode())
+    h.update(str(_CACHE_VERSION).encode())
+    return h.hexdigest()[:32]
+
+
+def _cache_file(path: Path, key: str) -> Path:
+    return _cache_dir() / f"{path.name}-{key}.pkl"
+
+
+def warm(paths) -> list[str]:
+    """Fill the on-disk cache for ``paths`` that have no entry yet; return
+    the names parsed.
+
+    Called once from conftest's pytest_configure in the xdist CONTROLLER,
+    before any worker starts. Why: a cold app.py parse takes ~37 s idle and
+    far longer under 8-worker load; waiters give up after _WAIT_S and each
+    parse it themselves, so several 3 MB parses ran at once and paged the
+    laptop (one 1.7 s test measured 594 s in the 2026-11-27 snapshot run).
+    Warmed first, every worker only unpickles (~1 s). Best effort: any error
+    leaves the old per-worker path in place.
+    """
+    done = []
+    for p in paths:
+        try:
+            p = Path(p)
+            if not p.is_file() or _cache_file(p, _key(p.read_bytes())).exists():
+                continue
+            parse_file_cached(p)
+            done.append(p.name)
+        except Exception:
+            continue
+    return done
+
+
+def prune(max_age_days: float = 7.0) -> int:
+    """Delete cache entries not written for ``max_age_days``; return the count.
+
+    Every app.py edit adds a ~9 MB pickle, so the folder had grown to 1.5 GB
+    (161 app.py versions) by 2026-11-27. A pruned entry that is still wanted
+    only costs one re-parse. Best effort.
+    """
+    n = 0
+    try:
+        cutoff = time.time() - max_age_days * 86400
+        for f in _cache_dir().glob("*.pkl"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    n += 1
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return n
+
+
 def parse_file_cached(path) -> ast.Module:
     """Return a fresh ``ast.Module`` for ``path``, via the on-disk cache."""
     path = Path(path)
     raw = path.read_bytes()
     try:
-        h = hashlib.sha256()
-        h.update(raw)
-        h.update(sys.version.encode())
-        h.update(str(_CACHE_VERSION).encode())
-        key = h.hexdigest()[:32]
+        key = _key(raw)
     except Exception:
         return _plain_parse(raw, path)
 
@@ -65,7 +120,7 @@ def parse_file_cached(path) -> ast.Module:
 
     try:
         cdir = _cache_dir()
-        cache_file = cdir / f"{path.name}-{key}.pkl"
+        cache_file = _cache_file(path, key)
         lock_file = cdir / f"{path.name}-{key}.lock"
 
         def _try_load():
