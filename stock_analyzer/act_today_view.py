@@ -55,12 +55,8 @@ from stock_analyzer.util import stop_recovery_state
 #   1. the stub carries an explicit marker (``offline_brief_stub``);
 #   2. ``act_today_view`` treats a marked brief as offline EVEN IF the flag
 #      says otherwise -- so no path, present or future, can make it read clear;
-#   3. the Lock button and both snapshot-serving sites refuse a marked brief,
-#      closing the laundering path itself.
-#
-# A snapshot locked BEFORE this fix carries no marker, but none can reach a
-# post-fix render: lock state lives in ``st.session_state`` and every Railway
-# redeploy starts a fresh process, so the deploy that ships this wipes it.
+#   3. (Brief Lock, the path that laundered the stub, was retired 2026-11-27;
+#      no snapshot of the Brief is stored or served any more.)
 OFFLINE_BRIEF_MARKER = "_brief_offline_stub"
 
 
@@ -86,39 +82,6 @@ def is_offline_brief(brief) -> bool:
     to carry some unrelated value under this key cannot read as offline.
     """
     return isinstance(brief, dict) and brief.get(OFFLINE_BRIEF_MARKER) is True
-
-
-def brief_lock_allowed(brief, brief_offline) -> bool:
-    """May this render's Brief be frozen by Brief Lock?
-
-    Only a genuinely built Brief. ``brief_offline`` must be EXPLICITLY False:
-    ``None`` means the offline state was never established this render, and
-    the safe answer to "freeze this for the whole day?" is no. Both the flag
-    and the marker are checked, so either alone is enough to refuse.
-    """
-    return (
-        brief is not None
-        and brief_offline is False
-        and not is_offline_brief(brief)
-    )
-
-
-def locked_snapshot_servable(snapshot) -> bool:
-    """May a stored Brief Lock snapshot be served in place of a fresh build?
-
-    Refuses a marked offline stub, so a stub can never be re-laundered as a
-    real Brief -- by the Lock serve path or by Evening Debrief's AM baseline.
-
-    Requires a NON-EMPTY dict. The two callers this replaced disagreed: the
-    Lock serve path tested ``is not None`` (accepting ``{}``) while Evening
-    Debrief tested truthiness (rejecting it). A shared helper takes the
-    stricter of the two, so neither caller loosens.
-    """
-    return (
-        isinstance(snapshot, dict)
-        and bool(snapshot)
-        and not is_offline_brief(snapshot)
-    )
 
 
 def act_today_view(

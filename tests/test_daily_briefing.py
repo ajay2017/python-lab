@@ -547,9 +547,9 @@ def test_build_daily_briefing_bear_tone_grow_today_carries_sp500_pct():
     """Pins a real asymmetry (2026-08-04 reviewer note): the bear-day early
     return in _grow_today omits nasdaq_pct/leading_sectors/cooldown_adds/
     deterioration_blocked_adds. 2026-10-30 (#20 review): it now carries
-    sp500_pct and tone_available so a Brief Lock's bear tone is readable by
-    entry_posture.stricter_tone_state; compute_morning_picks() still has its
-    own market_context fallback."""
+    sp500_pct and tone_available so the bear tone stays readable from the
+    Brief; compute_morning_picks() still has its own market_context
+    fallback."""
     port_df = make_port_df([{"ticker": "HELD", "weight": 10.0, "sector": "Tech"}])
     brief = build_daily_briefing(
         port_df=port_df, alert_list=[], risk_recs=[], news_items=[],

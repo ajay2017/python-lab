@@ -412,12 +412,10 @@ def test_postpass_runs_on_both_home_paths_before_the_rec_log_capture():
     assert _SRC.index("# Composite freshness check") < calls[0]
 
 
-def test_the_memo_and_the_lock_store_the_raw_brief_not_the_budgeted_one():
+def test_the_memo_stores_the_raw_brief_not_the_budgeted_one():
     assert re.search(r'"_daily_brief":\s*_daily_brief_raw,', _SRC)
     assert not re.search(r'"_daily_brief":\s*_daily_brief,', _SRC), \
         "the memoized brief must stay budget-free"
-    assert re.search(r'\["_brief_locked_snapshot"\]\s*=\s*_daily_brief_raw\b', _SRC)
-    assert not re.search(r'\["_brief_locked_snapshot"\]\s*=\s*_daily_brief\b(?!_)', _SRC)
 
 
 def test_rec_rows_carry_the_budget_state_of_the_shown_sizing():

@@ -12,8 +12,7 @@ from stock_analyzer.constants import (
 from stock_analyzer.daily_briefing import _grow_today, build_daily_briefing
 from stock_analyzer.entry_eligibility import resolve_tone_state
 from stock_analyzer.entry_posture import (
-    locked_snapshot_for_today, new_entry_posture, page_home_state,
-    redeploy_call, stricter_tone_state, tone_state_for_page,
+    new_entry_posture, page_home_state, redeploy_call, tone_state_for_page,
 )
 from stock_analyzer.rr_readout import fmt_ratio_vs, redeploy_headline
 from tests.conftest import find_item, make_port_df
@@ -338,7 +337,7 @@ def test_posture_agrees_with_grow_today_tone_gates():
     assert new_entry_posture(_live(MARKET_TONE_BULL_PCT))["posture"] == "open"
 
 
-# ── #20: Home-today-failed withholds; lock follows the stricter tone ─────────
+# ── #20: Home-today-failed withholds ─────────────────────────────────────────
 _BULL_CTX = {"tone": "bull", "sp500_pct": 1.0, "tone_available": True}
 
 
@@ -363,10 +362,6 @@ def test_home_not_today_still_uses_live():
     assert st["source"] == "live" and st["tone"] == "bull"
 
 
-def _lock(tone, pct):
-    return {"grow_today": {"tone": tone, "sp500_pct": pct}, "x": 1}
-
-
 def _cur(pct):
     return resolve_tone_state({"tone": classify(pct), "sp500_pct": pct, "tone_available": True},
                               True, None, None, False)
@@ -377,50 +372,19 @@ def classify(pct):
     return classify_tone(pct)
 
 
-def test_lock_bear_current_bull_follows_lock():
-    cur = _cur(MARKET_TONE_BULL_PCT)
-    out = stricter_tone_state(cur, _lock("bear", MARKET_TONE_BEAR_PCT), "9:45")
-    assert out == {"tone": "bear", "sp500_pct": MARKET_TONE_BEAR_PCT, "available": True,
-                   "source": "home_locked", "as_of": "9:45"}
-    assert new_entry_posture(out)["posture"] == "deferred"
-
-
-def test_lock_bull_current_bear_keeps_current():
-    cur = _cur(MARKET_TONE_BEAR_PCT)
-    assert stricter_tone_state(cur, _lock("bull", MARKET_TONE_BULL_PCT)) is cur
-
-
-def test_lock_flat_vs_bull_current_follows_lock_and_tie_keeps_current():
-    assert stricter_tone_state(_cur(MARKET_TONE_BULL_PCT), _lock("flat", 0.0))["tone"] == "flat"
-    cur = _cur(0.0)
-    assert stricter_tone_state(cur, _lock("flat", 0.1)) is cur
-
-
-def test_no_lock_returns_current():
-    cur = _cur(0.0)
-    assert stricter_tone_state(cur, None) is cur
-
-
-@pytest.mark.parametrize("snap", [
-    {}, {"grow_today": None}, {"grow_today": {"tone": "sideways", "sp500_pct": 0.0}},
-    {"grow_today": {"tone": "bull", "sp500_pct": float("nan")}},
-    {"grow_today": {"tone": "bull", "sp500_pct": None}}, "junk",
-])
-def test_malformed_lock_withholds(snap):
-    assert stricter_tone_state(_cur(0.0), snap) == _UNAVAIL
-
-
-def test_current_unavailable_stays_unavailable():
-    assert stricter_tone_state(_UNAVAIL, _lock("bull", 1.0)) == _UNAVAIL
-
-
-def test_deferred_from_lock_says_matching_home():
-    out = stricter_tone_state(_cur(MARKET_TONE_BULL_PCT), _lock("bear", MARKET_TONE_BEAR_PCT), "9:45")
-    call = redeploy_call(_headline("entry"), new_entry_posture(out))
+def test_deferred_from_home_read_says_matching_home():
+    home = _cur(MARKET_TONE_BEAR_PCT)
+    call = redeploy_call(_headline("entry"), new_entry_posture(home))
     assert "matching 🏠 Home" in call["text"]
-    assert call["source_line"].startswith("Market read from Home's locked Brief")
+    assert call["source_line"].startswith("Market read from Home's Brief")
     live = redeploy_call(_headline("entry"), _post("deferred"))
     assert "matching 🏠 Home" not in live["text"]
+
+
+def test_bear_home_read_is_protect_not_unknown():
+    cur = _cur(MARKET_TONE_BEAR_PCT - 0.2)
+    call = redeploy_call(_headline("entry"), new_entry_posture(cur))
+    assert "Protect Mode" in call["text"]
 
 
 def test_redeploy_call_passes_home_state_to_live_caption():
@@ -430,41 +394,9 @@ def test_redeploy_call_passes_home_state_to_live_caption():
     assert "isn't built today" in call["source_line"]
 
 
-def test_locked_snapshot_for_today():
-    snap = {"grow_today": {"tone": "flat"}}
-    d = date(2026, 10, 29)
-    assert locked_snapshot_for_today(True, d, d, snap) is snap
-    assert locked_snapshot_for_today(False, d, d, snap) is None
-    assert locked_snapshot_for_today(True, date(2026, 10, 28), d, snap) is None
-    assert locked_snapshot_for_today(True, d, d, {}) is None
-    assert locked_snapshot_for_today(True, d, d, None) is None
-    from stock_analyzer.act_today_view import OFFLINE_BRIEF_MARKER
-    assert locked_snapshot_for_today(True, d, d, {OFFLINE_BRIEF_MARKER: True, "k": 1}) is None
-
-
-# ── #20 review fix-first: locks built from REAL _grow_today output ───────────
+# ── #20 review fix-first: states built from REAL _grow_today output ──────────
 def _real_gt(ctx):
     return _grow_today(make_port_df([_winner()]), None, [], {}, _TODAY, 100_000.0, ctx)
-
-
-def _real_lock(ctx):
-    return {"grow_today": _real_gt(ctx), "x": 1}
-
-
-def test_real_bear_lock_follows_lock_and_says_protect():
-    ctx = {"tone": "bear", "sp500_pct": MARKET_TONE_BEAR_PCT - 0.5, "tone_available": True}
-    out = stricter_tone_state(_cur(MARKET_TONE_BULL_PCT), _real_lock(ctx), "9:45")
-    assert out["source"] == "home_locked" and out["tone"] == "bear"
-    assert new_entry_posture(out)["posture"] == "deferred"
-
-
-def test_real_bear_lock_with_bear_current_is_protect_not_unknown():
-    ctx = {"tone": "bear", "sp500_pct": MARKET_TONE_BEAR_PCT - 0.5, "tone_available": True}
-    cur = _cur(MARKET_TONE_BEAR_PCT - 0.2)
-    out = stricter_tone_state(cur, _real_lock(ctx))
-    assert out is cur
-    call = redeploy_call(_headline("entry"), new_entry_posture(out))
-    assert "Protect Mode" in call["text"]
 
 
 def test_grow_today_carries_tone_available_on_both_paths():
@@ -478,16 +410,6 @@ def test_grow_today_carries_tone_available_on_both_paths():
             # C4b: a failed read holds every entry and carries NO made-up %.
             assert gt["sp500_pct"] == (None if ta is False else ctx["sp500_pct"])
             assert (gt["entry_hold"] is not None) is (ta is False)
-
-
-def test_failed_read_lock_withholds_but_missing_key_keeps_behaviour():
-    cur = _cur(MARKET_TONE_BULL_PCT)
-    failed = {"grow_today": {"tone": "flat", "sp500_pct": 0.0, "tone_available": False}}
-    assert stricter_tone_state(cur, failed) == _UNAVAIL
-    ok = {"grow_today": {"tone": "flat", "sp500_pct": 0.0, "tone_available": True}}
-    assert stricter_tone_state(cur, ok)["source"] == "home_locked"
-    legacy = {"grow_today": {"tone": "flat", "sp500_pct": 0.0}}
-    assert stricter_tone_state(cur, legacy)["source"] == "home_locked"
 
 
 def test_unknown_posture_retry_wording_by_site():

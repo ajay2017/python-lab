@@ -600,7 +600,7 @@ def test_trade_journal_confirm_notes_a_held_name_after_the_budget_line():
 
 
 def test_home_brief_crash_keeps_an_already_read_market_context():
-    i = APP.index("_daily_brief    = None\n                # Keep the market context")
+    i = APP.index("_daily_brief    = None\n            # Keep the market context")
     seg = APP[i:i + 900]
     # the flat fallback is reachable only under an `if not isinstance(...)` guard
     assert "if not isinstance(_market_context, dict):" in seg

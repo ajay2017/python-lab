@@ -317,13 +317,11 @@ def test_rescore_failure_status():
     assert st["selected"] == 4 and st["sent"] == 0 and st["unfiltered_negative"] == 2
 
 
-def test_stale_rebuild_and_lock_status_wiring():
+def test_stale_rebuild_status_wiring():
     assert "_rs_status_live = None" in _APP
     tail = _APP.split('["bundle"]["_daily_brief"] = _daily_brief' + chr(10))[1][:700]
     assert 'st.session_state["_brief_news_rescore_status"] = _rs_status_live' in tail
     assert '["bundle"]["_brief_news_rescore_status"] = _rs_status_live' in tail
-    lock = _APP.split("_daily_brief = _brief_snapshot")[1][:400]
-    assert '= None' not in lock.split("_brief_built_at")[0]
     assert "_rs_status_live = _rs_status" in _APP
     assert (_APP.index("_rescore_brief(")
             < _APP.index("_rs_status_live = _rs_status")
@@ -338,12 +336,3 @@ def test_caption_gated_on_negative_and_not_offline():
     cap = _APP[i - 700:i + 200]
     assert '_rs_n = int(_rs_note.get("unfiltered_negative") or 0)' in cap
     assert '.get("unfiltered")' not in cap
-
-
-def test_lock_status_store_restore_and_pops():
-    assert re.search(r'\["_brief_locked_rescore_status"\] = st\.session_state\.get\("_brief_news_rescore_status"\)', _APP)
-    lock = _APP.split("_daily_brief = _brief_snapshot")[1][:500]
-    assert 'st.session_state["_brief_news_rescore_status"] = st.session_state.get("_brief_locked_rescore_status")' in lock
-    n_snap_pops = len(re.findall(r'pop\("_brief_locked_snapshot", None\)', _APP))
-    n_stat_pops = len(re.findall(r'pop\("_brief_locked_rescore_status", None\)', _APP))
-    assert n_snap_pops >= 2 and n_stat_pops == n_snap_pops

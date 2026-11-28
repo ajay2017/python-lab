@@ -323,8 +323,6 @@ from stock_analyzer.act_today_view import (
     act_today_view,
     is_offline_brief,
     offline_brief_stub,
-    brief_lock_allowed,
-    locked_snapshot_servable,
 )
 from stock_analyzer import summary_view
 from stock_analyzer.signal_hysteresis import apply_hysteresis
@@ -7520,10 +7518,10 @@ if page == "🏠 Home":
     # ── Synthesis memoization (perf) ─────────────────────────
     # The heavy synthesis below (alerts -> risk -> grow-composites -> Daily
     # Brief -> rec-log) used to re-run top-to-bottom on EVERY rerun (every tab
-    # click / button press), even though the Brief is a stable once-per-AM read
-    # (see the Lock feature). Memoize it behind an input signature: recompute
+    # click / button press), even though the Brief is a stable once-per-AM read.
+    # Memoize it behind an input signature: recompute
     # ONLY on an explicit trigger — holdings change, a new trading day, a fresh
-    # scanner run (_scanner_ver), or a Refresh / Lock / Unlock click
+    # scanner run (_scanner_ver), or a Refresh click
     # (_brief_refresh_nonce). The live metric row (Portfolio Value / Total P&L /
     # Today's P&L / Best / Worst) is computed ABOVE this block and stays live
     # every rerun. On a cache hit we restore the bundled locals AND re-publish
@@ -7723,93 +7721,89 @@ if page == "🏠 Home":
         # Composite freshness check: if any Grow Today bundle is stale (older than
         # load_all's 30-min TTL), refresh via load_all() and rebuild the brief so
         # the card and Analysis always agree.
-        _brief_locked = (
-            st.session_state.get("_brief_locked_for_date") == _today_et()
-        )
-        if not _brief_locked:
-            _now_utc = datetime.now(timezone.utc)
-            _refreshed_composites: dict = {}
-            _any_stale = False
-            for _tc, _snap_bundle in _grow_composites.items():
-                _fat = _snap_bundle.get("fetched_at")
-                if _fat and (_now_utc - datetime.fromisoformat(_fat)).total_seconds() > 1800:
-                    _live = load_all(_tc)
-                    _refreshed_composites[_tc] = _live if _live is not None else _snap_bundle
-                    if _live is not None:
-                        _any_stale = True
-                else:
-                    _refreshed_composites[_tc] = _snap_bundle
+        _now_utc = datetime.now(timezone.utc)
+        _refreshed_composites: dict = {}
+        _any_stale = False
+        for _tc, _snap_bundle in _grow_composites.items():
+            _fat = _snap_bundle.get("fetched_at")
+            if _fat and (_now_utc - datetime.fromisoformat(_fat)).total_seconds() > 1800:
+                _live = load_all(_tc)
+                _refreshed_composites[_tc] = _live if _live is not None else _snap_bundle
+                if _live is not None:
+                    _any_stale = True
+            else:
+                _refreshed_composites[_tc] = _snap_bundle
 
-            if _any_stale:
-                _grow_composites = _refreshed_composites
-                st.session_state["_grow_composites"] = _grow_composites
-                try:
-                    _daily_brief = build_daily_briefing(
-                        port_df         = port_df,
-                        alert_list      = alert_list,
-                        risk_recs       = _risk_advisor_recs,
-                        news_items      = curate_brief_news(
-                            held_data, _grow_composites,
-                            held_news=st.session_state.get("_brief_held_news"),
-                        ),
-                        macro_events    = _macro_events,
-                        held_data       = held_data,
-                        scanner_results = st.session_state.get("scanner_results"),
-                        portfolio_value = total_val,
-                        today           = _today_et(),
-                        market_context  = _market_context,
-                        grow_composites = _grow_composites,
-                        movers          = st.session_state.get("_movers_candidates", []),
-                        spy_df          = _cached_spy("6mo"),
-                        fragility       = st.session_state.get("_fragility_cache"),
-                        spy_trend_df    = _cached_spy("1y"),
-                        vix_level       = _cached_vix(),
-                        winner_profile  = _compute_winner_profile(),
-                        trades_df       = st.session_state.get("trades_df"),
-                        net_capital     = _f255_net_cap,
-                        etf_candidates  = _etf_candidates_for_grow(),
-                        cluster_add_blocks = _cluster_add_blocks,
-                        pair_add_blocks = _pair_add_blocks,
-                        corr_unchecked  = _corr_unchecked,
-                        # CorrYoung C4 (Q2): the coverage of the SAME correlation read
-                        # (the memoised one on this hit path), so a left-out holding's
-                        # own add is held here exactly as on the MISS build.
-                        corr_coverage   = _corr_cov,
-                        # The refreshed bundles this build actually used.
-                        news_feed       = _news_feed.home_feed_state(
-                            _grow_composites, held_data),
-                        # RiskOffUnchecked (C4): the coverage of the SAME risk build
-                        # `_fragility_cache` came from (wording of the disclosure only).
-                        # The bundle's own key: `_port_risk` has no "coverage" to read
-                        # when it is None, which is exactly when the note matters.
-                        risk_coverage   = _risk_coverage,
-                        # G-06 on Grow Today (beta-gate C2): the memoised risk build's beta.
-                        beta_fit        = _brief_beta_fit(_port_risk),
-                        # ScanCacheAnyAge (beta-gate C3): the saved scan sizes picks only when fresh.
-                        scan_state      = _scan_decision,
-                    )
-                    # Update snapshot so next HIT reads fresh fetched_at values
-                    st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
-                    st.session_state["_home_synth_cache"]["bundle"]["_daily_brief"] = _daily_brief
-                    # The rebuild used THIS render's held-news list, so the
-                    # caption status must be this render's too, not the memoized one.
-                    st.session_state["_brief_news_rescore_status"] = _rs_status_live
-                    st.session_state["_home_synth_cache"]["bundle"]["_brief_news_rescore_status"] = _rs_status_live
-                    # Mirror MISS-path _grow_today_sectors_cache update
-                    _gt_today_fresh = (_daily_brief or {}).get("grow_today") or {}
-                    _grow_today_sectors_cache = sorted({
-                        str(p.get("sector", "")).strip()
-                        for p in (_gt_today_fresh.get("new_picks") or []) + (_gt_today_fresh.get("add_positions") or [])
-                        if str(p.get("sector", "")).strip()
-                    })
-                    st.session_state["_grow_today_sectors_cache"] = _grow_today_sectors_cache
-                    st.session_state["_home_synth_cache"]["bundle"]["_grow_today_sectors_cache"] = _grow_today_sectors_cache
-                    # Mirror the MISS path: the rebuilt brief's reduce calls and
-                    # news flags replace the ones the earlier build published.
-                    _publish_brief_coord_caches(_daily_brief)
-                except Exception as _e:
-                    import logging
-                    logging.warning("Composite freshness rebuild failed: %s", _e)
+        if _any_stale:
+            _grow_composites = _refreshed_composites
+            st.session_state["_grow_composites"] = _grow_composites
+            try:
+                _daily_brief = build_daily_briefing(
+                    port_df         = port_df,
+                    alert_list      = alert_list,
+                    risk_recs       = _risk_advisor_recs,
+                    news_items      = curate_brief_news(
+                        held_data, _grow_composites,
+                        held_news=st.session_state.get("_brief_held_news"),
+                    ),
+                    macro_events    = _macro_events,
+                    held_data       = held_data,
+                    scanner_results = st.session_state.get("scanner_results"),
+                    portfolio_value = total_val,
+                    today           = _today_et(),
+                    market_context  = _market_context,
+                    grow_composites = _grow_composites,
+                    movers          = st.session_state.get("_movers_candidates", []),
+                    spy_df          = _cached_spy("6mo"),
+                    fragility       = st.session_state.get("_fragility_cache"),
+                    spy_trend_df    = _cached_spy("1y"),
+                    vix_level       = _cached_vix(),
+                    winner_profile  = _compute_winner_profile(),
+                    trades_df       = st.session_state.get("trades_df"),
+                    net_capital     = _f255_net_cap,
+                    etf_candidates  = _etf_candidates_for_grow(),
+                    cluster_add_blocks = _cluster_add_blocks,
+                    pair_add_blocks = _pair_add_blocks,
+                    corr_unchecked  = _corr_unchecked,
+                    # CorrYoung C4 (Q2): the coverage of the SAME correlation read
+                    # (the memoised one on this hit path), so a left-out holding's
+                    # own add is held here exactly as on the MISS build.
+                    corr_coverage   = _corr_cov,
+                    # The refreshed bundles this build actually used.
+                    news_feed       = _news_feed.home_feed_state(
+                        _grow_composites, held_data),
+                    # RiskOffUnchecked (C4): the coverage of the SAME risk build
+                    # `_fragility_cache` came from (wording of the disclosure only).
+                    # The bundle's own key: `_port_risk` has no "coverage" to read
+                    # when it is None, which is exactly when the note matters.
+                    risk_coverage   = _risk_coverage,
+                    # G-06 on Grow Today (beta-gate C2): the memoised risk build's beta.
+                    beta_fit        = _brief_beta_fit(_port_risk),
+                    # ScanCacheAnyAge (beta-gate C3): the saved scan sizes picks only when fresh.
+                    scan_state      = _scan_decision,
+                )
+                # Update snapshot so next HIT reads fresh fetched_at values
+                st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
+                st.session_state["_home_synth_cache"]["bundle"]["_daily_brief"] = _daily_brief
+                # The rebuild used THIS render's held-news list, so the
+                # caption status must be this render's too, not the memoized one.
+                st.session_state["_brief_news_rescore_status"] = _rs_status_live
+                st.session_state["_home_synth_cache"]["bundle"]["_brief_news_rescore_status"] = _rs_status_live
+                # Mirror MISS-path _grow_today_sectors_cache update
+                _gt_today_fresh = (_daily_brief or {}).get("grow_today") or {}
+                _grow_today_sectors_cache = sorted({
+                    str(p.get("sector", "")).strip()
+                    for p in (_gt_today_fresh.get("new_picks") or []) + (_gt_today_fresh.get("add_positions") or [])
+                    if str(p.get("sector", "")).strip()
+                })
+                st.session_state["_grow_today_sectors_cache"] = _grow_today_sectors_cache
+                st.session_state["_home_synth_cache"]["bundle"]["_grow_today_sectors_cache"] = _grow_today_sectors_cache
+                # Mirror the MISS path: the rebuilt brief's reduce calls and
+                # news flags replace the ones the earlier build published.
+                _publish_brief_coord_caches(_daily_brief)
+            except Exception as _e:
+                import logging
+                logging.warning("Composite freshness rebuild failed: %s", _e)
         # Daily new-position budget post-pass (docs/plans/daily-new-position-
         # budget.md). `_daily_brief` above is the RAW memoized brief; budget it
         # into a NEW brief for this render only. `_home_synth_cache` keeps the
@@ -8180,98 +8174,70 @@ if page == "🏠 Home":
             st.session_state.pop("_movers_checked", None)
 
         # Build Daily Briefing (synthesises all intelligence — computed once before tabs).
-        #
-        # Lock semantics: when the user has clicked "Lock Today's Setup", we serve
-        # the cached snapshot instead of rebuilding. This freezes the AM read so
-        # mid-day data drift can't shift recommendations under the user after they
-        # already decided. Lock auto-expires next trading day (different _today_et()).
-        _brief_locked_for = st.session_state.get("_brief_locked_for_date")
-        _brief_snapshot   = st.session_state.get("_brief_locked_snapshot")
-        _brief_use_lock   = (
-            st.session_state.get("_brief_locked", False)
-            and _brief_locked_for == _today_et()
-            # Not merely `is not None`: an offline stub is a dict, so it passed
-            # that test and was served as a real Brief (audit B-H2).
-            and locked_snapshot_servable(_brief_snapshot)
-        )
-        if _brief_use_lock:
-            _daily_brief = _brief_snapshot
-            # The status stored beside the snapshot at lock time (None if none) --
-            # never the current render's, which describes a different list.
-            st.session_state["_brief_news_rescore_status"] = st.session_state.get("_brief_locked_rescore_status")
-            # _brief_built_at was set at the time of the original build (preserved)
-        else:
-            # Lock from a previous trading day — clear it so the new day's Brief builds fresh
-            if st.session_state.get("_brief_locked") and _brief_locked_for != _today_et():
-                st.session_state["_brief_locked"] = False
-                st.session_state.pop("_brief_locked_snapshot", None)
-                st.session_state.pop("_brief_locked_rescore_status", None)
-                st.session_state.pop("_brief_locked_for_date", None)
-                st.session_state.pop("_brief_locked_at", None)
-            try:
-                _daily_brief = build_daily_briefing(
-                    port_df         = port_df,
-                    alert_list      = alert_list,
-                    risk_recs       = _risk_advisor_recs,
-                    # Held news under its own cap + every candidate's own
-                    # headlines (B-M7): the SAME helper the cron's build uses.
-                    news_items      = curate_brief_news(
-                        held_data, st.session_state.get("_grow_composites", {}),
-                        held_news=st.session_state.get("_brief_held_news"),
-                    ),
-                    macro_events    = _macro_events,
-                    held_data       = held_data,
-                    scanner_results = st.session_state.get("scanner_results"),
-                    portfolio_value = total_val,
-                    today           = _today_et(),
-                    market_context  = _market_context,
-                    grow_composites = st.session_state.get("_grow_composites", {}),
-                    movers          = st.session_state.get("_movers_candidates", []),
-                    spy_df          = _cached_spy("6mo"),
-                    # Risk-off de-risk (Phase 2): fragile-book gate + regime legs.
-                    # spy_trend_df needs ~1y for the 200-DMA; vix is the vol leg.
-                    fragility       = st.session_state.get("_fragility_cache"),
-                    spy_trend_df    = _cached_spy("1y"),
-                    vix_level       = _cached_vix(),
-                    winner_profile  = _compute_winner_profile(),
-                    trades_df       = st.session_state.get("trades_df"),
-                    net_capital     = _f255_net_cap,
-                    etf_candidates  = _etf_candidates_for_grow(),
-                    cluster_add_blocks = _cluster_add_blocks,
-                    pair_add_blocks = _pair_add_blocks,
-                    corr_unchecked  = _corr_unchecked,
-                    # CorrYoung C4 (Q2): this run's own correlation coverage.
-                    corr_coverage   = _corr_cov,
-                    news_feed       = _news_feed.home_feed_state(
-                        st.session_state.get("_grow_composites", {}), held_data),
-                    # RiskOffUnchecked (C4): the coverage of the SAME risk build
-                    # `_fragility_cache` came from (wording of the disclosure only).
-                    # The bundle's own key: `_port_risk` has no "coverage" to read
-                    # when it is None, which is exactly when the note matters.
-                    risk_coverage   = _risk_coverage,
-                    # G-06 on Grow Today (beta-gate C2): this build's own risk beta.
-                    beta_fit        = _brief_beta_fit(_port_risk),
-                    # ScanCacheAnyAge (beta-gate C3): the saved scan sizes picks only when fresh.
-                    scan_state      = _scan_decision,
-                )
-                # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
-                # the Brief header so the user can see how fresh the data is.
-                st.session_state["_brief_built_at"] = datetime.now(_pytz.timezone("America/New_York"))
-            except Exception:
-                _daily_brief    = None
-                # Keep the market context the build already READ (set just above
-                # on this MISS path): overwriting it with the flat fallback
-                # fabricated a +0.00% S&P and made the "tone couldn't be read"
-                # caption false after a brief crash (shared-entry-check chunk-2
-                # follow-up 5). Fall back only when it never became a dict.
-                if not isinstance(_market_context, dict):
-                    _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "leading_checked": False, "tone_available": False}
+        try:
+            _daily_brief = build_daily_briefing(
+                port_df         = port_df,
+                alert_list      = alert_list,
+                risk_recs       = _risk_advisor_recs,
+                # Held news under its own cap + every candidate's own
+                # headlines (B-M7): the SAME helper the cron's build uses.
+                news_items      = curate_brief_news(
+                    held_data, st.session_state.get("_grow_composites", {}),
+                    held_news=st.session_state.get("_brief_held_news"),
+                ),
+                macro_events    = _macro_events,
+                held_data       = held_data,
+                scanner_results = st.session_state.get("scanner_results"),
+                portfolio_value = total_val,
+                today           = _today_et(),
+                market_context  = _market_context,
+                grow_composites = st.session_state.get("_grow_composites", {}),
+                movers          = st.session_state.get("_movers_candidates", []),
+                spy_df          = _cached_spy("6mo"),
+                # Risk-off de-risk (Phase 2): fragile-book gate + regime legs.
+                # spy_trend_df needs ~1y for the 200-DMA; vix is the vol leg.
+                fragility       = st.session_state.get("_fragility_cache"),
+                spy_trend_df    = _cached_spy("1y"),
+                vix_level       = _cached_vix(),
+                winner_profile  = _compute_winner_profile(),
+                trades_df       = st.session_state.get("trades_df"),
+                net_capital     = _f255_net_cap,
+                etf_candidates  = _etf_candidates_for_grow(),
+                cluster_add_blocks = _cluster_add_blocks,
+                pair_add_blocks = _pair_add_blocks,
+                corr_unchecked  = _corr_unchecked,
+                # CorrYoung C4 (Q2): this run's own correlation coverage.
+                corr_coverage   = _corr_cov,
+                news_feed       = _news_feed.home_feed_state(
+                    st.session_state.get("_grow_composites", {}), held_data),
+                # RiskOffUnchecked (C4): the coverage of the SAME risk build
+                # `_fragility_cache` came from (wording of the disclosure only).
+                # The bundle's own key: `_port_risk` has no "coverage" to read
+                # when it is None, which is exactly when the note matters.
+                risk_coverage   = _risk_coverage,
+                # G-06 on Grow Today (beta-gate C2): this build's own risk beta.
+                beta_fit        = _brief_beta_fit(_port_risk),
+                # ScanCacheAnyAge (beta-gate C3): the saved scan sizes picks only when fresh.
+                scan_state      = _scan_decision,
+            )
+            # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
+            # the Brief header so the user can see how fresh the data is.
+            st.session_state["_brief_built_at"] = datetime.now(_pytz.timezone("America/New_York"))
+        except Exception:
+            _daily_brief    = None
+            # Keep the market context the build already READ (set just above
+            # on this MISS path): overwriting it with the flat fallback
+            # fabricated a +0.00% S&P and made the "tone couldn't be read"
+            # caption false after a brief crash (shared-entry-check chunk-2
+            # follow-up 5). Fall back only when it never became a dict.
+            if not isinstance(_market_context, dict):
+                _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": [], "leading_checked": False, "tone_available": False}
 
         # Daily new-position budget post-pass — BEFORE the rec-log capture below,
         # so the app-written new_pick / add_winner rows carry the budget-adjusted
         # `rec_shares` (+ version 4 + `rec_budget_state`) exactly like the cron's.
-        # `_daily_brief_raw` stays budget-free: it is what `_home_synth_cache` and
-        # the Lock Setup snapshot store. A None brief (build crashed) still
+        # `_daily_brief_raw` stays budget-free: it is what `_home_synth_cache`
+        # stores. A None brief (build crashed) still
         # publishes the budget cache for the other surfaces.
         _daily_brief_raw = _daily_brief
         _daily_brief = _publish_new_position_budget(
@@ -8298,9 +8264,9 @@ if page == "🏠 Home":
             # session_state flag tells consumers to render the offline UI state.
             # Built by offline_brief_stub() so the dict ITSELF carries an
             # offline marker -- the flag alone could be flipped back to False by
-            # a path that serves this stub (2026-10-11 audit B-H2, Brief Lock).
+            # a path that serves this stub (2026-10-11 audit B-H2).
             _daily_brief = offline_brief_stub()
-            _daily_brief_raw = _daily_brief   # the memo/lock store the stub itself
+            _daily_brief_raw = _daily_brief   # the memo stores the stub itself
             # No reduce calls known while the Brief is offline — consumers fail
             # open (show sizing), consistent with the Brief itself being offline.
             st.session_state["_reduce_calls"] = {}
@@ -8352,9 +8318,7 @@ if page == "🏠 Home":
             # (ticker, rec_date, rec_type) means the same ticker re-surfacing
             # across Brief rebuilds within the same day is a no-op — only the
             # first surface gets a row, and that row's surfaced_at is what we
-            # display on the card. Locked Briefs skip the write (the snapshot's
-            # surfaced_at was captured at lock time) but still get decorated
-            # on read.
+            # display on the card.
             #
             # No once-per-session guard: db.save_recommendations is idempotent
             # via the unique constraint + ignore_duplicates, so writing on every
@@ -8365,7 +8329,7 @@ if page == "🏠 Home":
             # not WRITE the owner's recommendation log. The db-layer _READONLY flag
             # also no-ops this, but it's a process-global; the per-session flag here
             # closes the cross-session race (a concurrent owner session flipping it).
-            if db.has_db() and not _brief_use_lock and not st.session_state.get("_readonly", False):
+            if db.has_db() and not st.session_state.get("_readonly", False):
                 _rec_save_result = {"attempted": 0, "saved": 0, "error": None}
                 try:
                     # Price snapshot resolver: each pick type stores price differently,
@@ -8594,10 +8558,10 @@ if page == "🏠 Home":
 
             # ── Gate Suppression Ledger (W5 capture — app source) ─────────────
             # Persists which gates fired this build so restraint can be graded.
-            # Under the SAME triple guard as the rec-log write above (has_db,
-            # not locked, not read-only). Own try/except — a failure here must
+            # Under the SAME guard as the rec-log write above (has_db,
+            # not read-only). Own try/except — a failure here must
             # not disturb the brief render or _rec_log_save_result.
-            if db.has_db() and not _brief_use_lock and not st.session_state.get("_readonly", False):
+            if db.has_db() and not st.session_state.get("_readonly", False):
                 _gate_ledger_save_result: dict = {"attempted": 0, "saved": 0, "error": None}
                 try:
                     from stock_analyzer.gate_ledger import build_suppression_rows as _bsr
@@ -8622,7 +8586,7 @@ if page == "🏠 Home":
             # Decorate each pick with its first-seen surfaced_at so the card
             # render can show "Recommended at HH:MM ET" without an extra round-trip
             # per card. Single fetch for today; build (ticker, rec_type) → ts map.
-            if db.has_db() and not _brief_use_lock:
+            if db.has_db():
                 _rec_load_count = 0
                 _rec_load_error: str | None = None
                 try:
@@ -8740,10 +8704,9 @@ if page == "🏠 Home":
             # Mark Grow-Today picks that are "steady vs yesterday" so the user reads
             # a persistent pick as continuity, not a fresh daily call to re-litigate
             # (§2B medium-term posture). ANNOTATE-ONLY — never adds/removes/re-orders
-            # a pick, so it can't fight the buy gates. Skipped under the AM lock (we
-            # don't re-annotate the frozen snapshot) and when there's no DB to read
+            # a pick, so it can't fight the buy gates. Skipped when there's no DB to read
             # yesterday's surface from. A weekend/holiday with no prior rows → no-op.
-            if db.has_db() and not _brief_use_lock:
+            if db.has_db():
                 try:
                     from datetime import timedelta as _hys_td
                     _hys_today = _today_et()
@@ -9632,13 +9595,11 @@ if page == "🏠 Home":
         )
     from datetime import datetime as _dt
 
-    # ── Freshness strip — captured-at timestamp + Lock/Unlock control ─────
+    # ── Freshness strip — captured-at timestamp ─────
     # The Brief is designed for one-time AM decision-making, not a streaming
-    # ticker. Surfacing the build time (and offering a freeze) closes the
+    # ticker. Surfacing the build time closes the
     # "I acted on a card that disappeared 30 min later" trust gap.
     _b_built_at = st.session_state.get("_brief_built_at")
-    _b_locked   = bool(st.session_state.get("_brief_locked", False))
-    _b_locked_at = st.session_state.get("_brief_locked_at")
     _b_now_et   = datetime.now(_pytz.timezone("America/New_York"))
 
     def _fmt_et(_d):
@@ -9665,22 +9626,12 @@ if page == "🏠 Home":
         except Exception:
             return ""
 
-    # ── Status bar — built-at chip + refresh controls + lock, single row ──
-    _sb_c1, _sb_c2, _sb_c3, _sb_c4 = st.columns([6, 2, 2, 2])
+    # ── Status bar — built-at chip + refresh controls, single row ──
+    _sb_c1, _sb_c2, _sb_c3 = st.columns([6, 2, 2])
 
-    # Col 1 — built-at / locked chip (dark-bordered, same style as before)
+    # Col 1 — built-at chip (dark-bordered, same style as before)
     with _sb_c1:
-        if _b_locked and _b_locked_at:
-            st.markdown(
-                f"<div style='background:#172554;border:1px solid #3b82f6;"
-                f"border-radius:8px;padding:8px 14px;color:#bfdbfe'>"
-                f"🔒 <b>Today's Setup Locked</b> at {_fmt_et(_b_locked_at)} "
-                f"<span style='color:#93c5fd;font-size:0.85em'>({_fmt_age(_b_locked_at)})</span> — "
-                f"recommendations frozen for the day."
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        elif _db_offline:
+        if _db_offline:
             # A prior successful build can leave a stale _brief_built_at in
             # session_state even though THIS run's build crashed — showing
             # that stale timestamp here would misleadingly imply the Brief
@@ -9717,7 +9668,7 @@ if page == "🏠 Home":
     # Watchdog — makes the "auto-refreshes in N min" promise above real. Ticks
     # every 60s (same pattern as the live-price strip fragment) but only forces
     # a full-app rerun once the Brief is actually past BRIEF_AUTO_REFRESH_MINUTES
-    # AND the market is open AND Setup isn't Locked. The rerun re-bumps
+    # AND the market is open. The rerun re-bumps
     # _brief_auto_refresh_nonce (part of _synth_sig) so the memoized synthesis
     # rebuilds against whatever load_all()'s own 30-min TTL cache already has —
     # it deliberately never calls st.cache_data.clear() or scan_sectors(), so it
@@ -9725,7 +9676,7 @@ if page == "🏠 Home":
     @st.fragment(run_every=60)
     def _brief_freshness_watchdog():
         _wd_built_at = st.session_state.get("_brief_built_at")
-        if _wd_built_at is None or st.session_state.get("_brief_locked", False):
+        if _wd_built_at is None:
             return
         _wd_age_min = (
             datetime.now(_pytz.timezone("America/New_York")) - _wd_built_at
@@ -9795,53 +9746,6 @@ if page == "🏠 Home":
             disabled=_rs_locked,
             help=_rs_help,
         )
-
-    # Col 4 — Lock Setup / Unlock
-    with _sb_c4:
-        if _b_locked:
-            if st.button(
-                "🔓 Unlock",
-                key="_brief_unlock_btn",
-                help="Resume live Brief updates. Recommendations will refresh on the next render.",
-                width="stretch",
-            ):
-                st.session_state["_brief_locked"] = False
-                st.session_state.pop("_brief_locked_snapshot", None)
-                st.session_state.pop("_brief_locked_rescore_status", None)
-                st.session_state.pop("_brief_locked_for_date", None)
-                st.session_state.pop("_brief_locked_at", None)
-                st.session_state["_brief_refresh_nonce"] = \
-                    st.session_state.get("_brief_refresh_nonce", 0) + 1
-                st.rerun()
-        else:
-            # `_daily_brief is None` alone let an OFFLINE Brief be locked: by here
-            # the crash path has already swapped None for the stub (audit B-H2).
-            # Raw .get() on purpose -- None must refuse. Computed ONCE and used
-            # for both the disabled state and the click guard below, because a
-            # Streamlit button that triggered a rerun still returns True on that
-            # rerun even if it now renders disabled -- so a click whose rerun is
-            # a crashed build would otherwise store the stub regardless.
-            _brief_lock_ok = brief_lock_allowed(
-                _daily_brief, st.session_state.get("_daily_brief_offline")
-            )
-            if st.button(
-                "🔒 Lock Setup",
-                key="_brief_lock_btn",
-                help="Freeze today's recommendations. Lock expires at end of trading day.",
-                width="stretch",
-                disabled=not _brief_lock_ok,
-            ) and _brief_lock_ok:
-                st.session_state["_brief_locked"]          = True
-                # RAW brief: the budget post-pass re-runs on a locked snapshot
-                # too (sizes always reflect today's logged buys, never a frozen
-                # budget).
-                st.session_state["_brief_locked_snapshot"] = _daily_brief_raw
-                st.session_state["_brief_locked_rescore_status"] = st.session_state.get("_brief_news_rescore_status")
-                st.session_state["_brief_locked_for_date"] = _today_et()
-                st.session_state["_brief_locked_at"]       = _b_now_et
-                st.session_state["_brief_refresh_nonce"] = \
-                    st.session_state.get("_brief_refresh_nonce", 0) + 1
-                st.rerun()
 
     if _do_refresh:
         _refresh_gate_arm("data")
@@ -10193,7 +10097,7 @@ if page == "🏠 Home":
     _db_grow   = _daily_brief.get("grow_today", {})
     _db_tuneup = _daily_brief.get("portfolio_tuneup", []) or []
     # EW C3: single-name Tune-up cards deferred to a Brief sell ({TICKER: {"text",
-    # "card"}}); an older locked / memoized Brief without the key reads {} (nothing
+    # "card"}}); an older memoized Brief without the key reads {} (nothing
     # extra). The deferral is settled against `_act_view` (the post-demotion Act
     # Today this page renders), so a stop breach that has since recovered no longer
     # hides the card: the pure `reconcile_tuneup` restores it (R3-B1).
@@ -10732,7 +10636,7 @@ if page == "🏠 Home":
         """Grow Today's no-verdict / no-size disclosure blocks (OP-07, "gate the
         call, never the candidate"): scanner leads Grow Today did not check, and
         held names whose add is paused on a non-bull day. NO share size and NO
-        trade button anywhere here. A key MISSING from a legacy cached/locked
+        trade button anywhere here. A key MISSING from a legacy cached
         brief means "not computed" -> render nothing for that block; it is never
         read as "none". Called on every tone, including the bear early return."""
         # A name already shown in another Grow Today section is not repeated as a
@@ -12681,8 +12585,7 @@ if page == "🏠 Home":
 
     # News-feed outage disclosure (news-feed-restore chunk 3b): the Brief's
     # critical-news / warning-news / negative-news checks read "no news" when
-    # the feed is down, so say so above the cards. A Brief served from Brief
-    # Lock carries whatever disclosure it had when it was locked.
+    # the feed is down, so say so above the cards.
     _nf_disc = (_daily_brief or {}).get("news_feed_disclosure")
     if isinstance(_nf_disc, dict) and _nf_disc.get("text"):
         st.warning(_nf_disc["text"])
@@ -13457,16 +13360,6 @@ if page == "🏠 Home":
                                   "source": None, "as_of": None, "why": "live_failed",
                                   "home_read_at": None}
                         )
-                        # Brief locked: Grow Today shows the locked morning tone;
-                        # follow the stricter of it and the current read.
-                        _hm_tone = _entry_posture.stricter_tone_state(
-                            _hm_tone,
-                            _entry_posture.locked_snapshot_for_today(
-                                st.session_state.get("_brief_locked", False),
-                                st.session_state.get("_brief_locked_for_date"),
-                                _today_et(),
-                                st.session_state.get("_brief_locked_snapshot")),
-                            st.session_state.get("_brief_locked_at"))
                         _hl_bundle = next(
                             (_c.get("_bundle") for _c in _display
                              if _c.get("ticker") == _hl.get("ticker")), None)
@@ -14260,19 +14153,15 @@ if page == "🏠 Home":
     _ed_hour   = _ed_now_et.hour + _ed_now_et.minute / 60
     _ed_full   = _ed_hour >= 15.5   # 3:30 PM ET — switch from preview to full debrief
 
-    # ── Choose AM baseline: prefer the locked snapshot ──────────────────────
+    # ── Choose AM baseline: the latest live Brief build ─────────────────────
+    # (owner 2026-11-27, LockBreach option A: no morning snapshot of any kind.)
+    # An offline stub must never become the AM baseline the debrief compares
+    # against (audit B-H2), hence the offline-flag guard.
     _ed_baseline_brief: dict | None
     _ed_baseline_source = "none"
     _ed_baseline_at     = None
-    # locked_snapshot_servable: an offline stub must never become the AM
-    # baseline the debrief compares against (audit B-H2 -- the `elif` below
-    # already guarded the LIVE brief on the offline flag; this branch didn't).
-    if locked_snapshot_servable(st.session_state.get("_brief_locked_snapshot")) and \
-            st.session_state.get("_brief_locked_for_date") == _today_et():
-        _ed_baseline_brief  = st.session_state.get("_brief_locked_snapshot")
-        _ed_baseline_source = "locked"
-        _ed_baseline_at     = st.session_state.get("_brief_locked_at")
-    elif _daily_brief and not st.session_state.get("_daily_brief_offline"):
+    if (_daily_brief and not st.session_state.get("_daily_brief_offline")
+            and not is_offline_brief(_daily_brief)):
         _ed_baseline_brief  = _daily_brief
         _ed_baseline_source = "live"
         _ed_baseline_at     = st.session_state.get("_brief_built_at")
@@ -14341,8 +14230,7 @@ if page == "🏠 Home":
     )
 
     _ed_source_chip = {
-        "locked": "🔒 AM plan: <b>Locked snapshot</b> — your actual baseline",
-        "live":   "📌 AM plan: <b>Live Brief</b> (no lock) — may have drifted from open",
+        "live":   "📌 AM plan: <b>Live Brief</b> (latest build) — may have drifted from open",
         "none":   "⚠ AM plan: <b>Unavailable</b> — no Brief built today",
     }.get(_ed_baseline_source, "")
 
@@ -14369,9 +14257,9 @@ if page == "🏠 Home":
 
         st.markdown("### 📋 Plan vs Reality")
         st.caption(
-            "⏱ These verdicts reflect the AM snapshot — the composite, momentum, "
-            "and sector context as of when the Brief was built (Lock the Brief in "
-            "the morning to freeze this read deterministically). "
+            "⏱ These verdicts reflect the latest Brief build (the time shown above) — "
+            "the composite, momentum and sector context as of that build, which can be "
+            "from later in the day than the morning plan. "
             "**A Go signal here doesn't mean it still holds now** — composites "
             "drift through the day. Always re-run Analysis before acting "
             "post-AM."
@@ -18610,16 +18498,6 @@ elif page == "📡 Signals & Advice":
                         _sg_syn, _today_et().isoformat(), _sg_live_pct,
                         _sg_live_pct is not None, now_et=_sg_now,
                         live_read_at=_sg_live_at)
-                # Brief locked: Grow Today shows the locked morning tone; follow
-                # the stricter of it and the current read.
-                _sg_tone = _entry_posture.stricter_tone_state(
-                    _sg_tone,
-                    _entry_posture.locked_snapshot_for_today(
-                        st.session_state.get("_brief_locked", False),
-                        st.session_state.get("_brief_locked_for_date"),
-                        _today_et(),
-                        st.session_state.get("_brief_locked_snapshot")),
-                    st.session_state.get("_brief_locked_at"))
                 for rec in add_recs:
                     with st.container(border=True):
                         ac1, ac2 = st.columns([3, 1])
@@ -47444,7 +47322,7 @@ The footer line beneath the cards states **risk, not capital** — "if every sto
 
 **🧾 Tax note on exit cards:** when an Act Today **EXIT** or Review Before Close **TRIM** lands on a position that's within ~30 days of long-term-capital-gains eligibility, the card shows an amber note flagging how soon it turns long-term and that waiting can cut the tax rate *if* you'd be selling at a gain. It's **context only — the recommendation itself doesn't change**. Separately, logging a **SELL at a loss** within 30 days of a recent buy on the same ticker surfaces a **wash-sale** heads-up on the confirm step (the sale isn't blocked). For the full per-position picture, see the 💰 Tax Efficiency Advisor.
 
-**Freshness:** the "📌 Built at HH:MM ET" chip auto-refreshes the Brief roughly every 30 minutes on its own during market hours — you don't need to click "Refresh Signals" just to keep it current. It re-checks whatever's already scanned rather than running a brand-new scan, so it won't pick up a stock that was never scanned in the first place (see *how the app finds candidates* below). Click **🔒 Lock Setup** to freeze the Brief for the day if you don't want it changing under you after you've decided what to do.
+**Freshness:** the "📌 Built at HH:MM ET" chip auto-refreshes the Brief roughly every 30 minutes on its own during market hours — you don't need to click "Refresh Signals" just to keep it current. It re-checks whatever's already scanned rather than running a brand-new scan, so it won't pick up a stock that was never scanned in the first place (see *how the app finds candidates* below).
 """
             )
 

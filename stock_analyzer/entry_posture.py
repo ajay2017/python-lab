@@ -20,7 +20,6 @@ from __future__ import annotations
 import math
 
 from stock_analyzer import entry_eligibility
-from stock_analyzer.act_today_view import locked_snapshot_servable
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     MARKET_TONE_BEAR_PCT,
@@ -41,11 +40,8 @@ _UNAVAILABLE = {"tone": None, "sp500_pct": None, "available": False, "source": N
 
 _TONE_TO_POSTURE = {"bull": "open", "flat": "confirmed_only", "bear": "deferred"}
 
-# Strictness of a tone for a new entry: bear > flat > bull.
-_TONE_STRICTNESS = {"bull": 0, "flat": 1, "bear": 2}
-
-# Sources meaning "this read is Home's" (live Brief or its locked snapshot).
-_HOME_SOURCES = ("home", "home_locked")
+# Sources meaning "this read is Home's" (its live Brief).
+_HOME_SOURCES = ("home",)
 
 
 def _finite(x) -> bool:
@@ -145,47 +141,6 @@ def page_needs_live(state) -> bool:
     if not isinstance(state, dict):
         return True
     return state.get("available") is not True and state.get("why") != WHY_HOME_FAILED
-
-
-def locked_snapshot_for_today(locked_flag, locked_for_date, today, snapshot):
-    """The Brief Lock snapshot when it is servable for ``today``, else None."""
-    try:
-        if locked_flag and locked_for_date == today and locked_snapshot_servable(snapshot):
-            return snapshot
-    except Exception:
-        pass
-    return None
-
-
-def stricter_tone_state(current, locked_snapshot, locked_at=None) -> dict:
-    """While the Brief is locked, Grow Today shows the locked morning tone; use
-    the STRICTER of it and ``current`` (bear > flat > bull) so following the
-    lock can never loosen the call.  ``locked_snapshot`` None (no servable lock
-    for today) -> ``current``.  An unavailable ``current`` stays unavailable; a
-    malformed lock withholds.  A tie returns ``current``."""
-    if locked_snapshot is None:
-        return current
-    try:
-        gt = locked_snapshot.get("grow_today") if isinstance(locked_snapshot, dict) else None
-        gt = gt if isinstance(gt, dict) else {}
-        l_tone = gt.get("tone")
-        l_pct = gt.get("sp500_pct")
-        if (l_tone not in _TONE_STRICTNESS or not _finite(l_pct)
-                or gt.get("tone_available") is False):
-            # A lock written while Home's index read failed carries a made-up
-            # flat 0.0: withhold rather than quote it.
-            return dict(_UNAVAILABLE)
-        if not isinstance(current, dict) or current.get("available") is not True:
-            return current if isinstance(current, dict) else dict(_UNAVAILABLE)
-        c_rank = _TONE_STRICTNESS.get(current.get("tone"))
-        if c_rank is None:
-            return dict(_UNAVAILABLE)
-        if _TONE_STRICTNESS[l_tone] > c_rank:
-            return {"tone": l_tone, "sp500_pct": l_pct, "available": True,
-                    "source": "home_locked", "as_of": locked_at}
-        return current
-    except Exception:
-        return dict(_UNAVAILABLE)
 
 
 def _fmt_pct(posture: dict) -> str:
