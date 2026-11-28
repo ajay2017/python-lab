@@ -115,11 +115,14 @@ def test_critical_news_act_card_on_non_risk_off_name_is_kept(monkeypatch):
     assert [i.get("kind") for i in zzz] == ["critical_news"]
 
 
-def test_earnings_watch_on_top_contributor_still_excludes(monkeypatch):
+def test_earnings_watch_on_top_contributor_no_longer_excludes_it(monkeypatch):
+    # H6 reversed by owner 2026-11-27 (brief-consolidation Q5): a non-news Watch no
+    # longer moves the risk-off trim to a lower-beta name; the Watch reads "covered by".
     earn = {"ticker": "AAA", "action": {"type": "WATCH"}, "headline": "earnings soon"}
     brief = _build(monkeypatch, [], [earn])
-    assert _ro_tickers(brief) == ["BBB", "CCC", "DDD"]
+    assert _ro_tickers(brief) == ["AAA", "BBB", "CCC"]
     assert [r["ticker"] for r in brief["review_list"]] == ["AAA"]
+    assert brief["review_list"][0]["action"]["covered_by"] == "AAA"
 
 
 def test_critical_news_act_card_folds_into_risk_off_reduce(monkeypatch):

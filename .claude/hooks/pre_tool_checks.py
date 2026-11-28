@@ -1397,6 +1397,20 @@ _GATE_FILES = {
     # types), which cards the news fold drops and annotates, and the Act / Aware bucket
     # split; a wrong call hides a real sell behind a "hold" card or drops a risk flag.
     "stock_analyzer/decision_bucket.py",
+    # Added 2026-11-27 (brief-consolidation C3, docs/plans/brief-consolidation-spec.md
+    # row MacroTrimDefer): which affected holding the macro pre-event trim lands on
+    # (passed over only when today's Act Today call sells at least as much of it) and
+    # how many shares it sells; a wrong call trims the wrong name, stacks a second sale
+    # on a name already being sold, or drops the pre-event trim with no line saying why.
+    "stock_analyzer/macro_trim_target.py",
+    # Added 2026-11-27 (brief-consolidation C2, docs/plans/brief-consolidation-spec.md
+    # row RiskOffTrimShift): which names the risk-off de-risk skips (only a name whose
+    # whole position is already sold: stop breach, deterioration EXIT; the one rule for
+    # Home, the 08:00 email and the forward simulator) and how a kept risk-off trim is
+    # reconciled with the same name's other sells and Watch; a wrong call moves the trim
+    # off the real top-beta name, stacks a second sale on a name already being sold, or
+    # leaves a Watch contradicting the trim.
+    "stock_analyzer/risk_off_pool.py",
     # Added 2026-11-25 (RiskListwiseYoung C1, docs/plans/risk-young-holding.md):
     # which holdings count in the book's risk series and when portfolio risk reads
     # unknown; a wrong call understates the book's beta / VaR or shrinks the window

@@ -106,6 +106,8 @@ from stock_analyzer import macro_sector_gate as _macro_sector_gate
 from stock_analyzer.analyst_intel import trustworthy_composite
 from stock_analyzer import held_news_check
 from stock_analyzer import act_sell_cover
+from stock_analyzer import risk_off_pool
+from stock_analyzer import macro_trim_target
 from stock_analyzer import held_trim_owner
 from stock_analyzer import brief_trim_merge
 from stock_analyzer import act_trim_fold
@@ -3719,6 +3721,26 @@ def _under_reduce_tighten(ticker, gap, pnl_pct, new_stop) -> tuple[dict, str]:
     return action, why
 
 
+def _macro_trim_rows(rows_df) -> list[dict]:
+    """The affected holdings as plain rows for `macro_trim_target.pick` (data prep only)."""
+    has_avail = "Score Available" in rows_df.columns
+    out = []
+    for _, r in rows_df.iterrows():
+        sc = r["Score"]
+        avail = True
+        if has_avail:
+            v = r["Score Available"]
+            avail = False if pd.isna(v) else bool(v)
+        out.append({
+            "ticker": str(r["Ticker"]),
+            "score": None if pd.isna(sc) else _f(sc),
+            "score_available": avail,
+            "weight": _f(r["Weight (%)"]),
+            "price": _f(r["Price"]),
+        })
+    return out
+
+
 def _review_list(port_df, news_items, macro_events, held_data, today,
                  portfolio_value: float = 0.0,
                  act_today: list | None = None,
@@ -3751,7 +3773,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     as `act_today`; it is only written when the fold ran and chose a payload.
 
     macro_exclude (BriefBreachRestore): an optional set of upper-cased tickers the macro
-    pre-event trim must not pick, added to the Act Today names it already skips. Only
+    pre-event trim must not pick, on top of the names whose Act Today sale already covers
+    the trim (brief-consolidation C3). Only
     `_breach_alternate_pass` passes it; None (the default) leaves the output
     byte-identical.
     """
@@ -4225,6 +4248,49 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "news_window_label": news_window_label,
         })
 
+    # BriefSkipSizeBlind: settle the tagged Review trims on names under a PARTIAL Act
+    # reduce into that Act card's `min_trim` (the largest sale wins), before U6 so the
+    # merge sees one sell per name. Q7: the deterioration TRIM floor that `_act_today`
+    # drops under a Sell rides along as a candidate. On any failure every Review trim
+    # is kept (carriers stripped), so every sell stays visible.
+    _fold_extra: dict = {}
+    try:
+        for _ft in sorted(_fold_tickers):
+            _fa = act_trim_fold.act_item_for(act_today, _ft)
+            if _fa is None or _fa.get("kind") != "sell_signal":
+                continue
+            _fd = next((d for d in (deterioration or [])
+                        if d.get("tier") == "TRIM"
+                        and str(d.get("ticker", "")).upper() == _ft), None)
+            if _fd is None:
+                continue
+            _fd_sh = _f(_fd.get("shares"))
+            _fd_n = _trim_sizing.fraction_trim_shares(_fd_sh, DETERIORATION_TRIM_SUGGESTED_PCT)
+            if not (_fd_sh > 0 and _fd_n >= 1):
+                continue
+            _fd_px = _fd.get("price")
+            if not (isinstance(_fd_px, (int, float)) and math.isfinite(_fd_px) and _fd_px > 0):
+                _fpr = _port_rows(port_df, _ft)
+                _fd_px = _f(_fpr["Price"].iloc[0], None) if not _fpr.empty else None
+            _fold_extra[_ft] = [{
+                "reason_key": "deterioration_floor",
+                "trim_shares": _fd_n,
+                "trim_dollars": (round(_fd_n * _fd_px, 0)
+                                 if _fd_px is not None and math.isfinite(_fd_px) else None),
+                "from_weight": _fd.get("weight_pct"),
+                "target_weight": None,
+                "_fold_dd": _fd.get("dd_from_peak_pct"),
+            }]
+        items, _fold_payloads = act_trim_fold.fold(
+            items, act_today, extra_candidates=_fold_extra)
+    except Exception as _e:  # noqa: BLE001 — fail toward showing every sell
+        _log.warning("brief act-trim fold failed, keeping every Review trim: %s: %s",
+                     type(_e).__name__, _e)
+        items = act_trim_fold.strip_carriers(items)
+        _fold_payloads = {}
+    for _ft, _fp in _fold_payloads.items():
+        act_trim_fold.apply_payload(act_trim_fold.act_item_for(act_today, _ft), _fp)
+
     # 5 — Upcoming macro events (1–3 days)
     # Action policy:
     #   - Compute user's exposure to affected sectors from port_df.
@@ -4233,6 +4299,12 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     #     one when no affected score is measured -- audit B-M6) by
     #     MACRO_AFFECTED_TRIM_REDUCTION_PP percentage points of portfolio.
     #   - Else → WATCH (exposure within tolerance).
+    # Brief consolidation C3 (MacroTrimDefer, owner 2026-11-27): this section runs
+    # AFTER the BriefSkipSizeBlind fold above, so the Act cover it reads already
+    # carries a folded `min_trim`, and `macro_trim_target.pick` passes a name over
+    # only when today's Act Today call sells at least as much of it as the trim
+    # would (the card names each name it passed over).
+    _macro_cover = act_sell_cover.sell_cover_summary(act_today, [])
     for ev in (macro_events or []):
         ev_date = ev.get("date")
         if not ev_date or ev.get("impact") != MC_HIGH:
@@ -4254,24 +4326,30 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         affected_tickers_str = _affected_text(ev.get("affected_tickers", [])) or "macro-sensitive"
         playbook = ev.get("playbook_note") or ""
 
-        # Don't pre-trim a name that already carries its own Act Today decision
-        # (a critical-news hold, a stop breach, a sell signal, a risk trim). That
-        # name is already being acted on; a second "trim ahead of the macro event"
-        # card on the SAME ticker is the contradictory double-surface §2B kills
-        # (AVGO: critical-news "hold & tighten" vs NFP "trim"). Trim the weakest
-        # affected name NOT already spoken for; if every affected holding is, the
-        # event downgrades to WATCH (awareness), not a conflicting trim.
-        _macro_eligible = sector_rows[
-            ~sector_rows["Ticker"].astype(str).str.upper().isin(
-                _act_tickers | {str(t).upper() for t in (macro_exclude or ())})
-        ] if not sector_rows.empty else sector_rows
-
         # Broad macro print (NFP / CPI / Fed) — the affected sectors cover most
         # of the book, so a bounded single-name trim wouldn't meaningfully cut
         # the exposure; it just reads as pre-event churn (§2B). Downgrade to a
         # "hold through, mind your stops" awareness WATCH. The sized trim is
         # reserved for sector-CONCENTRATED events below.
         _is_broad = exposure_pct >= MACRO_BROAD_EXPOSURE_PCT
+
+        # Pick the trim target. A name already being SOLD in full (or by at least
+        # the trim's own size) in Act Today is passed over; any other Act card on
+        # the name (critical news, premortem, the sector card's attribution, a
+        # smaller sell) leaves it eligible, and the trim says so. If the pick
+        # itself raises, no trim is shown and the card says it couldn't be sized.
+        _pick = None
+        _pick_failed = False
+        if (not _is_broad and exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT
+                and not sector_rows.empty and portfolio_value > 0):
+            try:
+                _pick = macro_trim_target.pick(
+                    _macro_trim_rows(sector_rows), _macro_cover, portfolio_value,
+                    exclude=macro_exclude or ())
+            except Exception as _e:  # noqa: BLE001 — fail toward no trade, said out loud
+                _log.warning("brief macro trim target failed: %s: %s",
+                             type(_e).__name__, _e)
+                _pick_failed = True
 
         if _is_broad:
             action = {
@@ -4287,53 +4365,27 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 "sized; your stops stay in place. Sized de-risking is reserved for "
                 "events that hit a concentrated sector you can actually prune."
             )
-        elif exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not _macro_eligible.empty and portfolio_value > 0:
-            # Find lowest-conviction-score holding in the affected sectors
-            # (or, with none measured, the largest -- see below).
+        elif _pick is not None and _pick["target"] is not None:
+            # The weakest affected name not already sold in Act Today (or, with no
+            # measured score among them, the largest -- see macro_trim_target).
             # 2026-10-11 audit B-M6: rank ONLY measured scores. A withheld
             # score is NaN (fundamentals unavailable -- see
-            # portfolio.build_portfolio_df's "Score Available"); sort_values
-            # puts NaN last, so a partly-withheld sector already picked a
-            # measured name, but an ALL-withheld one picked an arbitrary row
-            # and _f(NaN) rendered it as a measured "score 0". With no
+            # portfolio.build_portfolio_df's "Score Available"). With no
             # measured name the trim still fires (protection must not go
             # quiet mid-outage, same posture as the H3 concentration card),
             # on the LARGEST affected position, and says why (owner decision
             # 2026-10-12).
-            _measured_mask = _macro_eligible["Score"].notna()
-            if "Score Available" in _macro_eligible.columns:
-                _measured_mask &= _macro_eligible["Score Available"].fillna(False).astype(bool)
-            _macro_measured = _macro_eligible[_measured_mask]
-            _conviction_unmeasured = _macro_measured.empty
-            if _conviction_unmeasured:
-                # Ticker as the tie-break so the same book always gets the
-                # same call (weights are rounded to 0.1, so ties are real).
-                weakest = _macro_eligible.sort_values(
-                    ["Weight (%)", "Ticker"], ascending=[False, True], kind="stable",
-                ).iloc[0]
-            else:
-                weakest = _macro_measured.sort_values(
-                    ["Score", "Ticker"], ascending=[True, True], kind="stable",
-                ).iloc[0]
-            weak_ticker = str(weakest["Ticker"])
-            weak_score  = None if _conviction_unmeasured else _f(weakest["Score"])
-            weak_weight = _f(weakest["Weight (%)"])
-            weak_price  = _f(weakest["Price"])
-            # Trim by MACRO_AFFECTED_TRIM_REDUCTION_PP percentage points of portfolio
-            # — but cap at the position's own weight so we don't try to trim more
-            # than the position holds.
-            reduction_pp = min(MACRO_AFFECTED_TRIM_REDUCTION_PP, weak_weight)
-            trim_dollars = round(portfolio_value * (reduction_pp / 100), 0)
-            # Floored (owner 2026-10-23: never round a sub-share excess up to 1).
-            trim_shares  = _trim_sizing.shares_for_dollars(trim_dollars, weak_price)
-            # Reconcile the displayed dollars + pp with the ROUNDED whole-share
-            # count so "trim N shares (~$X)" is internally consistent (X = N ×
-            # price). The pp-target alone diverges badly on small portfolios /
-            # high-priced shares — the "1 share (~$571)" false-precision artifact.
-            if weak_price > 0 and trim_shares > 0:
-                trim_dollars = round(trim_shares * weak_price, 0)
-                reduction_pp = (round(trim_dollars / portfolio_value * 100, 1)
-                                if portfolio_value > 0 else reduction_pp)
+            _conviction_unmeasured = _pick["conviction_unmeasured"]
+            weakest     = _pick["target"]
+            weak_ticker = str(weakest["ticker"])
+            weak_score  = None if _conviction_unmeasured else _f(weakest["score"])
+            weak_price  = _f(weakest["price"])
+            # Trim by MACRO_AFFECTED_TRIM_REDUCTION_PP percentage points of portfolio,
+            # capped at the position's own weight, floored to whole shares, dollars
+            # reconciled to shares x price (macro_trim_target.size_trim).
+            reduction_pp = _pick["sizing"]["reduction_pp"]
+            trim_dollars = _pick["sizing"]["trim_dollars"]
+            trim_shares  = _pick["sizing"]["trim_shares"]
             new_exposure = max(0.0, exposure_pct - reduction_pp)
             if weak_price <= 0 or trim_shares < 1:
                 # No whole-share trim can be sized (price unavailable, or the
@@ -4381,17 +4433,37 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                     f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% trim threshold. "
                     + (
                         "Conviction is unmeasured for every affected holding not "
-                        "already in Act Today (fundamentals unavailable), so the "
-                        "weakest name can't be ranked — trimming the largest "
-                        "remaining affected position instead."
+                        "already sold in today's Act Today call (fundamentals "
+                        "unavailable), so the weakest name can't be ranked — "
+                        "trimming the largest remaining affected position instead."
                         if _conviction_unmeasured else
                         "Trimming weakest holding first preserves higher-conviction names."
                     )
                 )
-        elif (exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not sector_rows.empty
-              and _macro_eligible.empty):
+                # Say which names were passed over (their Act sale already covers
+                # this trim) and, if the target is itself sold in Act Today but not
+                # by enough, how the two sales relate (macro_trim_target wording).
+                _extra = [macro_trim_target.skipped_sentence(_s["ticker"], _s["reason"])
+                          for _s in _pick["skipped_ahead"]]
+                _beside = act_sell_cover.beside_note(
+                    _pick["beside"], weak_ticker, "pre-event trim")
+                if _beside:
+                    _extra.append(_beside)
+                if _extra:
+                    why = why + " " + " ".join(_extra)
+        elif _pick is not None and _pick["all_covered"]:
             # Over threshold, but every affected holding already has an Act Today
-            # decision — defer to those instead of issuing a contradictory trim.
+            # sale at least as large as this trim — defer to those instead of
+            # issuing a second sale on the same name.
+            action = {
+                "type":          "WATCH",
+                "from_exposure": exposure_pct,
+                "threshold":     MACRO_AFFECTED_TRIM_THRESHOLD_PCT,
+            }
+            why = macro_trim_target.all_covered_why(
+                exposure_pct,
+                _affected_text(sorted(str(t) for t in sector_rows["Ticker"])))
+        elif _pick_failed:
             action = {
                 "type":          "WATCH",
                 "from_exposure": exposure_pct,
@@ -4399,9 +4471,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             }
             why = (
                 f"Affected-sector exposure {exposure_pct:.1f}% > "
-                f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% threshold, but the affected "
-                "holdings already carry their own Act Today decision — no separate "
-                "pre-event trim (avoids a contradictory double-call on one name)."
+                f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% trim threshold, but the "
+                "pre-event trim couldn't be sized today, so none is shown."
             )
         else:
             action = {
@@ -4439,49 +4510,6 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "_headline_head": f"{ev.get('event','Macro event')} in {days}d ({ev_date})",
             "_u6_event_date": str(ev_date),
         })
-
-    # BriefSkipSizeBlind: settle the tagged Review trims on names under a PARTIAL Act
-    # reduce into that Act card's `min_trim` (the largest sale wins), before U6 so the
-    # merge sees one sell per name. Q7: the deterioration TRIM floor that `_act_today`
-    # drops under a Sell rides along as a candidate. On any failure every Review trim
-    # is kept (carriers stripped), so every sell stays visible.
-    _fold_extra: dict = {}
-    try:
-        for _ft in sorted(_fold_tickers):
-            _fa = act_trim_fold.act_item_for(act_today, _ft)
-            if _fa is None or _fa.get("kind") != "sell_signal":
-                continue
-            _fd = next((d for d in (deterioration or [])
-                        if d.get("tier") == "TRIM"
-                        and str(d.get("ticker", "")).upper() == _ft), None)
-            if _fd is None:
-                continue
-            _fd_sh = _f(_fd.get("shares"))
-            _fd_n = _trim_sizing.fraction_trim_shares(_fd_sh, DETERIORATION_TRIM_SUGGESTED_PCT)
-            if not (_fd_sh > 0 and _fd_n >= 1):
-                continue
-            _fd_px = _fd.get("price")
-            if not (isinstance(_fd_px, (int, float)) and math.isfinite(_fd_px) and _fd_px > 0):
-                _fpr = _port_rows(port_df, _ft)
-                _fd_px = _f(_fpr["Price"].iloc[0], None) if not _fpr.empty else None
-            _fold_extra[_ft] = [{
-                "reason_key": "deterioration_floor",
-                "trim_shares": _fd_n,
-                "trim_dollars": (round(_fd_n * _fd_px, 0)
-                                 if _fd_px is not None and math.isfinite(_fd_px) else None),
-                "from_weight": _fd.get("weight_pct"),
-                "target_weight": None,
-                "_fold_dd": _fd.get("dd_from_peak_pct"),
-            }]
-        items, _fold_payloads = act_trim_fold.fold(
-            items, act_today, extra_candidates=_fold_extra)
-    except Exception as _e:  # noqa: BLE001 — fail toward showing every sell
-        _log.warning("brief act-trim fold failed, keeping every Review trim: %s: %s",
-                     type(_e).__name__, _e)
-        items = act_trim_fold.strip_carriers(items)
-        _fold_payloads = {}
-    for _ft, _fp in _fold_payloads.items():
-        act_trim_fold.apply_payload(act_trim_fold.act_item_for(act_today, _ft), _fp)
 
     # U6: one Act trim per name. The sections above size independently, so one
     # name can carry several Act trims (or an Act trim beside a Watch that says
@@ -4585,8 +4613,9 @@ def _rewrite_macro_affected(act: list[dict], reduced: set[str],
     own SELL/TRIM card elsewhere in Act Today — read together, "hold through
     the print" for a ticker with a same-day mechanical stop-breach SELL looks
     like a contradictory second opinion rather than the same call (2026-07-29
-    audit follow-up). `reduced` is the act+review reduce-ticker set computed by
-    the caller via `decision_bucket._ticker()`.
+    audit follow-up). `reduced` is the act+review set of names with a real sale,
+    computed by the caller via `act_sell_cover.sell_cover_summary` (brief-
+    consolidation C3: a sector-attribution card no longer counts).
 
     This is a deliberate enumeration-level trim, not a full single-surface
     dedup (memory feedback_single_surface_priority): macro exposure and a
@@ -4829,24 +4858,32 @@ def build_daily_briefing(
                           news_window_label=_news_label)
 
     # Risk-off protective de-risk (exit-discipline Phase 2) — computed AFTER act +
-    # review so we can exclude any ticker already carrying a higher-priority reduce
-    # (single-surface: never double-reduce a name). Only arms when the book is
-    # fragile AND the market is in a risk-off regime; otherwise returns []. These
-    # are the lowest-priority reduce, so they append to the end of Act Today.
-    # _grow_today runs after this block so it sees the complete act list and
-    # cannot surface an ADD for a ticker that risk-off just flagged for TRIM.
-    # Exclude every ticker carrying ANY review card (not just the 3 TRIM types) —
-    # a WATCH-type review card ("not an action yet") must never coexist with a
-    # same-render risk-off "Trim now" Act Today card for the same name (2026-07-29
-    # audit H6; the prior narrower TRIM-only filter let that contradiction through).
-    # H6 still holds for non-news WATCH kinds. News-only cards (critical_news /
-    # news WATCH) are exempt (D-D, docs/plans/held-news-coverage.md): a mild
-    # headline must not move the protective TRIM off the biggest beta contributor.
+    # review. Only arms when the book is fragile AND the market is in a risk-off
+    # regime; otherwise returns []. These are the lowest-priority reduce, so they
+    # append to the end of Act Today. _grow_today runs after this block so it sees
+    # the complete act list and cannot surface an ADD for a ticker that risk-off just
+    # flagged for TRIM.
+    # Brief consolidation C2 (RiskOffTrimShift; owner 2026-11-27, Q4): the pool skips
+    # ONLY names whose whole position is already being sold (a stop breach, a
+    # deterioration EXIT: `risk_off_pool.full_exit_names`), the same set as the 08:00
+    # email, so Home and the email name the same top-beta names. A smaller sell or a
+    # Watch no longer moves the trim to a lower-beta name; `settle_brief` below
+    # reconciles the two cards on the name instead.
+    # H6 reversed by owner 2026-11-27 (brief-consolidation Q5): the 2026-07-29 audit's
+    # H6 kept the trim off any name with a Watch card; now the Watch reads "covered by
+    # today's Act Today trim of T" and the trim stays on the real top-beta name.
     _risk_off = exit_advisor.assess_risk_off_derisk(
         port_df, held_data,
         fragility=fragility, spy_trend_df=spy_trend_df, vix_level=vix_level,
-        exclude_tickers=decision_bucket.all_flagged_tickers(act, review, ignore_news=True),
+        exclude_tickers=risk_off_pool.full_exit_names(act, deterioration),
     )
+    # Reconcile each kept risk-off card with its name's other sells / Watch, before the
+    # news folds below. Any failure keeps the unsettled lists (never drops a card).
+    if _risk_off:
+        try:
+            _risk_off, review = risk_off_pool.settle_brief(_risk_off, act, review)
+        except Exception as _ro_settle_e:   # noqa: BLE001 - fail-safe: keep every card
+            _log.warning("risk-off settle failed, keeping unsettled cards: %s", _ro_settle_e)
     # RiskOffUnchecked: a None fragility on a risk-off day made the call above
     # return [] silently; disclose it (never changes a card). Never raises. An
     # empty book has nothing to de-risk, so nothing was missed.
@@ -4902,7 +4939,10 @@ def build_daily_briefing(
     # and `review` are final. A WATCH-only name stays listed: the macro card is
     # its only mention of the print (2026-10-29 live check, GDP card hid ~10
     # Watch-only names).
-    _reduced = decision_bucket.reduce_call_tickers(act, review)
+    # Brief consolidation C3: the SAME "sells" canon as the macro trim target (a risk
+    # attribution / news hold / Watch is no sale), so a name whose only Act card is the
+    # sector card's attribution stays listed.
+    _reduced = set(act_sell_cover.sell_cover_summary(act, review))
     _rewrite_macro_affected(act, _reduced, review)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, review_list=review, composites=grow_composites or {},

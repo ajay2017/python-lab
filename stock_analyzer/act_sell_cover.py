@@ -15,6 +15,7 @@ no I/O; inputs are never mutated).
   cover_for(cover, ticker)       -> one ticker's entry | None  (None = not sold)
   cover_state(entry, need)       -> "show" | "covered" | "partial" | "unknown"
   cover_note(state, ticker, noun) -> str | None
+  beside_note(state, ticker, noun) -> str | None  (a Brief card kept beside an Act sell)
 
 THE SHAPE: absent from the map = the name is not sold. `exit` True = the whole
 position goes (stop breach, deterioration exit). `shares` = the largest whole-share
@@ -241,4 +242,29 @@ def cover_note(state, ticker, noun, tail=None) -> str | None:
     if state == STATE_UNKNOWN:
         return (f"🏠 Today's Act Today call also sells {t} (🏠 Home), and its size couldn't "
                 f"be compared with this {noun}. Do that sale first; {tail}")
+    return None
+
+
+def beside_note(state, ticker, noun) -> str | None:
+    """The sentence a Brief sell card carries when the same name ALSO has a sell in
+    today's Act Today call that does not cover it (brief-consolidation C2 / C3, docs/plans/
+    brief-consolidation-spec.md). `noun` = "trim" (risk-off) or "pre-event trim" (macro).
+
+    covered -> the Act sale already counts as this card (so it is not a second sale);
+    partial -> sell this card's size in total, not the two added together;
+    unknown -> the Act sale's size couldn't be compared: treat this card as the minimum.
+    `show` (the name has no Act sell) and any other state -> None. Unlike `cover_note`,
+    which words a standing surface, this words a Brief card, so it carries no "🏠".
+    No `$`, `**` or share count."""
+    t = _norm(ticker) or "that name"
+    if state == STATE_COVERED:
+        return (f"{t} also has a sell at least this large in today's Act Today call; "
+                f"that sale counts as this {noun}, so don't add this one on top of it.")
+    if state == STATE_PARTIAL:
+        return (f"{t} also has a smaller sell in today's Act Today call; sell this "
+                f"{noun}'s size in total, not the two added together.")
+    if state == STATE_UNKNOWN:
+        return (f"{t} also has its own sell in today's Act Today call, and its size "
+                f"couldn't be compared with this {noun}; treat this {noun} as the minimum, "
+                "not an extra sale on top.")
     return None

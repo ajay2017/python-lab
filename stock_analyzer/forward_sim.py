@@ -13,7 +13,9 @@ FAITHFUL BY CONSTRUCTION — the single most important property here. Every tier
 decision comes from `exit_advisor.classify_deterioration_tier` (the same pure
 scalar core the Daily Brief uses); the risk-off overlay comes from
 `exit_advisor.risk_off_regime` + `assess_risk_off_derisk` verbatim; the shock
-model comes from `stress_test.run_scenario`. This module only does the *scalar
+model comes from `stress_test.run_scenario`; the overlay's exclusion (which names are
+already being sold in full) is `risk_off_pool.full_exit_names`, the same rule 🏠 Home
+and the 08:00 email use. This module only does the *scalar
 extraction* at a substituted price — it never re-implements a tier rule. The
 `test_forward_sim.py` zero-shock identity test pins that extraction against
 `exit_advisor.assess_holding` so it cannot drift.
@@ -36,7 +38,7 @@ See docs/plans/forward-portfolio-simulator.md.
 
 from __future__ import annotations
 
-from stock_analyzer import exit_advisor, stress_test
+from stock_analyzer import exit_advisor, risk_off_pool, stress_test
 from stock_analyzer.constants import (
     DETERIORATION_CONFIRM_DAYS,
     DETERIORATION_TREND_MA,
@@ -519,19 +521,22 @@ def simulate(
         risk_off["armed"] = armed
         risk_off["reasons"] = reasons
         if armed and frag_ok:
-            # Exclude EVERY name already carrying any mechanical flag, in either
-            # column. The live path passes decision_bucket.all_flagged_tickers()
-            # — every ticker with a card in Act Today OR Review, deliberately
-            # INCLUDING WATCH — because the 2026-07-29 audit (H6) found that a
-            # narrower TRIM-only filter let a WATCH card and a same-render
-            # risk-off "Trim now" card coexist for one ticker. A TRIM/EXIT-only
-            # filter here would have re-opened exactly that contradiction.
-            already = {
-                p["ticker"] for p in positions
+            # Exclude only the names whose WHOLE position the rules already sell: a
+            # stop-out, or a deterioration EXIT in either column. The same shared rule
+            # (`risk_off_pool.full_exit_names`) 🏠 Home and the 08:00 email use, so the
+            # simulator replays the live exclusion. A WATCH / TRIM tier no longer
+            # excludes a name: H6 reversed by owner 2026-11-27 (brief-consolidation Q5);
+            # on Home that name's Watch reads "covered by" the trim instead.
+            _stop_items = [
+                {"kind": "stop_breach", "ticker": p["ticker"]} for p in positions
                 if p.get("stop_breached") is True
-                or p.get(TIER_DAY1) is not None
-                or p.get(TIER_CONFIRMED) is not None
-            }
+            ]
+            _exit_tiers = [
+                {"ticker": p["ticker"], "tier": p.get(col)}
+                for p in positions for col in (TIER_DAY1, TIER_CONFIRMED)
+                if p.get(col) == exit_advisor.EXIT
+            ]
+            already = risk_off_pool.full_exit_names(_stop_items, _exit_tiers)
             risk_off["cards"] = exit_advisor.assess_risk_off_derisk(
                 shock_port_df(port_df, moves), held_data,
                 fragility=fragility, spy_trend_df=shocked_spy,

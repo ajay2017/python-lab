@@ -520,15 +520,27 @@ def test_protective_alerts_risk_off_excludes_already_reduced_tickers():
         captured["exclude_tickers"] = set(exclude_tickers)
         return risk_off
 
+    # A WATCH / TRIM-tier name is not excluded; the EXIT-tier name NVDA is.
+    det = [{"ticker": "NVDA", "tier": "EXIT", "dd_from_peak_pct": -30, "trend_ma": 200,
+            "exit_floor": -20, "pnl_pct": -28, "weight_pct": 12},
+           {"ticker": "TSLA", "tier": "TRIM", "dd_from_peak_pct": -15, "trend_ma": 200,
+            "exit_floor": -20, "pnl_pct": -5, "weight_pct": 9},
+           {"ticker": "AMD", "tier": "WATCH", "dd_from_peak_pct": -8, "trend_ma": 50,
+            "exit_floor": -20, "pnl_pct": 1, "weight_pct": 7}]
     with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
-         patch("stock_analyzer.headless_alert_engine.deterioration_signals", return_value=[]), \
+         patch("stock_analyzer.headless_alert_engine.deterioration_signals", return_value=det), \
          patch("stock_analyzer.exit_advisor.assess_risk_off_derisk", side_effect=_fake_risk_off):
         result = hae.compute_protective_alerts(TODAY)
 
-    assert captured["exclude_tickers"] == {"AAPL"}
+    # Brief consolidation C2: the exclusion is the shared `risk_off_pool.full_exit_names`
+    # (the stop breach + the deterioration EXIT), the same rule Home uses.
+    from stock_analyzer import risk_off_pool
+    full_exits = risk_off_pool.full_exit_names(
+        [a for a in result["alerts"] if a["kind"] != "risk_off_derisk"], det)
+    assert captured["exclude_tickers"] == set(full_exits) == {"AAPL", "NVDA"}
     kinds = [a["kind"] for a in result["alerts"]]
-    assert kinds == ["stop_breach", "risk_off_derisk"]
-    assert result["alerts"][1]["ticker"] == "MSFT"
+    assert kinds == ["stop_breach", "deterioration_exit", "risk_off_derisk"]
+    assert result["alerts"][2]["ticker"] == "MSFT"
 
 
 # ── split-safety gate (D1) — integration, real column names ────────────────

@@ -628,9 +628,11 @@ def assess_risk_off_derisk(
          (already encodes elevated portfolio beta, so no separate beta knob).
       2. The market is in a risk-off regime (`risk_off_regime`).
     Then rank holdings by beta-contribution (β × weight), keep those with
-    β ≥ `name_min_beta`, take the top `top_n`, and EXCLUDE any ticker already
-    carrying a higher-priority reduce (passed in `exclude_tickers`) so a name is
-    never double-surfaced. Each card suggests a modest trim OR a stop-tighten
+    β ≥ `name_min_beta`, take the top `top_n`, and EXCLUDE any ticker the caller passes
+    in `exclude_tickers`. Callers pass only FULL exits (stop breach, deterioration
+    EXIT: `risk_off_pool.full_exit_names`), the names whose whole position is already
+    being sold; a name with a smaller sell or a Watch stays a candidate and the
+    Brief reconciles it afterwards (`risk_off_pool.settle_brief`). Each card suggests a modest trim OR a stop-tighten
     ("don't sell into weakness" option) — directives only, the user decides.
     """
     if port_df is None or getattr(port_df, "empty", True):
@@ -712,6 +714,10 @@ def assess_risk_off_derisk(
             "kind": "risk_off_derisk",
             "action": "TRIM — Risk-Off",
             "directive": f"{trim_clause}{tighten_txt}.",
+            # Additive (brief-consolidation C2): the same int the directive prints, so
+            # `risk_off_pool.settle_brief` compares the card against another same-name
+            # Act sell without re-parsing text.
+            "trim_shares": trim_shares,
             "why": (
                 f"Your book is {sev} and the market is risk-off ({reason_txt}). "
                 f"{t} is a top risk driver (β {c['beta']:.2f} · {c['weight']:.1f}% of book)."

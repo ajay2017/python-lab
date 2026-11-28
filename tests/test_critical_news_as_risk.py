@@ -165,7 +165,7 @@ def _brief(monkeypatch, act):
 def test_risk_off_fold_keeps_the_sector_flag(monkeypatch):
     # Hand-built pre-C1 shape (flag merged onto the news card): unreachable from a fresh
     # build since brief-consolidation C1 (_act_today no longer merges a risk card); the
-    # fold branch is kept until C2 rewrites the risk-off exclusion.
+    # fold branch is kept for a legacy memoized Brief (C2 did not remove it).
     brief = _brief(monkeypatch, [_news(flags=[dict(_FLAG)])])
     aaa = [i for i in brief["act_today"] if i.get("ticker") == "AAA"]
     assert sorted(i["kind"] for i in aaa) == ["risk", "risk_off_derisk"]
@@ -191,3 +191,18 @@ def test_flagless_news_card_is_still_dropped_by_the_risk_off_fold(monkeypatch):
     brief = _brief(monkeypatch, [_news()])
     aaa = [i for i in brief["act_today"] if i.get("ticker") == "AAA"]
     assert [i["kind"] for i in aaa] == ["risk_off_derisk"]
+
+
+def test_news_only_card_plus_standalone_sector_card_keeps_the_top_beta_name_in_the_pool(monkeypatch):
+    # The C1 interim moved the risk-off pick to BBB here (the sector card's attribution
+    # ticker counted as "flagged"). Brief consolidation C2 (owner 2026-11-27, Q4) flips
+    # that on purpose: only a FULL exit (stop breach / deterioration EXIT) leaves the
+    # pool, so AAA stays the top risk-off name; its news hold folds into the trim and
+    # the sector card stays beside it.
+    brief = _brief(monkeypatch, [_news(), _risk()])
+    ro = [i["ticker"] for i in brief["act_today"] if i.get("kind") == "risk_off_derisk"]
+    assert ro[0] == "AAA" and "BBB" in ro
+    aaa = [i for i in brief["act_today"] if i.get("ticker") == "AAA"]
+    assert sorted(i["kind"] for i in aaa) == ["risk", "risk_off_derisk"]
+    assert "recent negative headlines" in next(
+        i for i in aaa if i["kind"] == "risk_off_derisk")["why"]

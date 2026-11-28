@@ -697,7 +697,7 @@ def test_synth_schema_version_keeps_the_fold_note_in_its_history():
     # B-C3 bumped 32 -> 33; the fold note sits in the "was 32:" clause.
     assert "; was 32: a larger same-name Review trim" in _app_src()
     assert "reason_key (BriefSkipSizeBlind)" in _app_src()
-    assert "_SYNTH_SCHEMA_VER = 40  # bumped:" in _app_src()   # 39 -> 40 by brief-consolidation C1
+    assert "_SYNTH_SCHEMA_VER = 42  # bumped:" in _app_src()   # 40 -> 41 by brief-consolidation C3
 
 
 def test_min_trim_is_not_written_by_the_exit_signals_capture():

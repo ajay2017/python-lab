@@ -26,6 +26,7 @@ from stock_analyzer import db
 from stock_analyzer import broker_sync
 from stock_analyzer import exit_advisor
 from stock_analyzer import risk_off_check as _risk_off_check
+from stock_analyzer import risk_off_pool as _risk_off_pool
 from stock_analyzer import protective_coverage
 from stock_analyzer import regime_read
 from stock_analyzer import split_detector
@@ -558,11 +559,14 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         })
         reduced.add(t)
 
-    # 3. Risk-off de-risk (lowest priority; excludes already-reduced tickers).
+    # 3. Risk-off de-risk (lowest priority). Brief consolidation C2: the exclusion is
+    # the ONE shared rule Home uses (`risk_off_pool.full_exit_names`: a stop breach or
+    # a deterioration EXIT; = `reduced` above plus any EXIT-tier name), so the email
+    # and 🏠 Home name the same top-beta names.
     try:
         risk_off = exit_advisor.assess_risk_off_derisk(
             port_df, held_data, fragility=fragility, spy_trend_df=spy_1y,
-            vix_level=vix, exclude_tickers=reduced,
+            vix_level=vix, exclude_tickers=_risk_off_pool.full_exit_names(alerts, det),
         )
     except Exception as e:
         risk_off = []

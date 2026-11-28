@@ -566,27 +566,58 @@ def test_simulate_excludes_already_reducing_names_from_the_risk_off_overlay():
     assert "AAA" not in [c["ticker"] for c in out["risk_off"]["cards"]]
 
 
-def test_risk_off_overlay_never_coexists_with_a_watch_on_the_same_name():
-    """The H6 invariant: a WATCH card and a risk-off 'trim now' card must not pair.
+@pytest.mark.parametrize("day1, confirmed, stop_out, excluded", [
+    (WATCH, WATCH, False, False),
+    (TRIM, TRIM, False, False),
+    (WATCH, TRIM, False, False),
+    (None, None, False, False),
+    (EXIT, None, False, True),
+    (None, EXIT, False, True),
+    (TRIM, EXIT, False, True),
+    (None, None, True, True),
+    (WATCH, WATCH, True, True),
+])
+def test_risk_off_overlay_excludes_only_full_exits_the_shared_live_rule(
+        monkeypatch, day1, confirmed, stop_out, excluded):
+    """H6 reversed by owner 2026-11-27 (brief-consolidation Q5): a WATCH / TRIM tier no
+    longer keeps a name out of the risk-off overlay (on Home that name's Watch reads
+    "covered by" the trim instead); only a name the rules sell IN FULL (a stop-out, a
+    deterioration EXIT in either column) is excluded, the same
+    `risk_off_pool.full_exit_names` rule Home and the 08:00 email use."""
+    def _fake_replay(*, ticker, **kw):
+        return {"ticker": ticker, "stop_breached": stop_out, "stop_available": True,
+                "rel_strength_live": True,
+                forward_sim.TIER_DAY1: day1, forward_sim.TIER_CONFIRMED: confirmed}
+    seen = {}
 
-    The live path passes `decision_bucket.all_flagged_tickers()`, which
-    deliberately includes WATCH-tier names — the 2026-07-29 audit found a
-    narrower TRIM/EXIT-only filter let exactly this contradiction through. The
-    simulator must use the same breadth, or it reproduces the bug on one screen.
-    """
-    port_df = pd.DataFrame([_port_row(Ticker="AAA", Stop=1.0)])
+    def _fake_assess(port_df, held, **kw):
+        seen["exclude"] = set(kw["exclude_tickers"])
+        return []
+    monkeypatch.setattr(forward_sim, "replay_position", _fake_replay)
+    monkeypatch.setattr(forward_sim.exit_advisor, "assess_risk_off_derisk", _fake_assess)
     out = forward_sim.simulate(
-        _scenario(-20.0), port_df, {"AAA": _held(beta=1.5)},
+        _scenario(-20.0), pd.DataFrame([_port_row(Ticker="AAA")]),
+        {"AAA": _held(beta=1.5)}, spy_trend_df=_flat_frame(n=250),
+        fragility={"severity": "fragile", "implied_move": -14.0, "pullback_pct": -10.0},
+    )
+    assert out["risk_off"]["armed"] is True
+    assert seen["exclude"] == ({"AAA"} if excluded else set())
+
+
+def test_risk_off_overlay_end_to_end_keeps_a_non_exit_name_a_candidate():
+    """No fake: a name with no flag at all stays in the overlay's pool (the unflagged
+    BBB), while the stopped-out AAA stays excluded (test above)."""
+    port_df = pd.DataFrame([_port_row(Ticker="BBB", Stop=1.0)])
+    out = forward_sim.simulate(
+        _scenario(-20.0), port_df, {"BBB": _held(beta=1.5)},
         spy_trend_df=_flat_frame(n=250),
         fragility={"severity": "fragile", "implied_move": -14.0, "pullback_pct": -10.0},
     )
-    flagged = {
-        p["ticker"] for p in out["positions"]
-        if p[forward_sim.TIER_DAY1] is not None
-        or p[forward_sim.TIER_CONFIRMED] is not None
-    }
-    assert flagged, "fixture must produce at least one flagged name"
-    assert not (flagged & {c["ticker"] for c in out["risk_off"]["cards"]})
+    exits = {p["ticker"] for p in out["positions"]
+             if EXIT in (p[forward_sim.TIER_DAY1], p[forward_sim.TIER_CONFIRMED])}
+    cards = {c["ticker"] for c in out["risk_off"]["cards"]}
+    assert not (exits & cards)
+    assert cards == ({"BBB"} - exits)
 
 
 @pytest.mark.parametrize("frag", [None, {}, {"severity": None}, {"severity": "unknown"}])
