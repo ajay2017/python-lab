@@ -113,6 +113,7 @@ from stock_analyzer import brief_trim_merge
 from stock_analyzer import act_trim_fold
 from stock_analyzer import breach_recovery
 from stock_analyzer import beta_fit_gate
+from stock_analyzer import sector_unpriced
 from stock_analyzer import scan_freshness
 from stock_analyzer import tone_freshness
 from stock_analyzer import macro_read
@@ -1011,6 +1012,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  `None` (the default: not wired, tests only) skips every beta
                  check and leaves every pre-existing key byte-identical. A
                  non-dict reads as {} (fit unknown -> hold).
+                 `fit_state["unpriced"]` (buy-check C5, chunk A) is also read, ONLY
+                 through sector_unpriced.decide: a pick or add in the sector of a
+                 holding the frame left out for want of a price (or in ANY classified
+                 sector when that holding's sector can't be named) is held as
+                 "couldn't check" (`fit_unpriced_picks`; an add rides
+                 `entry_held_adds` with check "fit_unpriced"). It runs after every
+                 policy gate (a real G-16 breach binds first, with its ledger row),
+                 has no gate id and writes no ledger row; an ETF pick is never
+                 held by it. An absent / None / empty `unpriced` changes nothing.
     scan_state : optional (beta-gate C3, ScanCacheAnyAge) -- a
                  scan_freshness.decide result for the saved scan that feeds
                  `scanner_results`. Anything but "fresh" (stale, unknown, or a
@@ -1250,6 +1260,21 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             fit_state=_bf.get("fit_state"),
         )
 
+    # buy-check C5 (chunk A): the unpriced-holdings map the book was built with
+    # (`fit_state["unpriced"]`), or None when beta_fit isn't wired / carries no map.
+    _unpriced = None
+    if isinstance(beta_fit, dict):
+        _bf_fs = beta_fit.get("fit_state")
+        if isinstance(_bf_fs, dict) and isinstance(_bf_fs.get("unpriced"), dict):
+            _unpriced = _bf_fs["unpriced"]
+
+    def _unpriced_decision(_sector, lane: str) -> "dict | None":
+        """The C5 hold (sector_unpriced.decide) for a candidate in `_sector`, or
+        None. An abstention: callers run it after every policy gate."""
+        if not _unpriced:
+            return None
+        return sector_unpriced.decide(_sector, _unpriced, lane=lane)
+
     def _bundle_beta(_b):
         """A bundle's risk_metrics beta (the Watchlist's read), None when absent."""
         if not isinstance(_b, dict):
@@ -1274,10 +1299,12 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "CORR_UNMEASURED" (CorrYoung C3b, after G-06: the correlation couldn't
         be measured, either a thin G-26 / G-25 entry, which then does NOT bind
         as the gate, or a left-out ticker, Q2; a hold, no ledger row) or
-        "BETA_UNKNOWN" (beta-gate C2, last: the portfolio beta couldn't be
-        checked and the unread leg could bind; a hold, no ledger row). Shared by
-        the bull add loop (which records the bucket per gate) and adds_paused,
-        so the two cannot diverge."""
+        "BETA_UNKNOWN" (beta-gate C2: the portfolio beta couldn't be
+        checked and the unread leg could bind; a hold, no ledger row) or
+        "FIT_UNPRICED" (buy-check C5, last: a holding in this name's sector
+        couldn't be priced, so the sector cap can't be trusted; a hold, no ledger
+        row). Shared by the bull add loop (which records the bucket per gate) and
+        adds_paused, so the two cannot diverge."""
         _t = str(_r["Ticker"])
         _tu = _t.upper()
         if _tu in _add_cards:
@@ -1307,6 +1334,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             return "CORR_UNMEASURED"
         if _bd is not None and _bd["state"] == beta_fit_gate.STATE_UNKNOWN:
             return "BETA_UNKNOWN"
+        if _unpriced_decision(str(_r.get("Sector", "")), "add") is not None:
+            return "FIT_UNPRICED"
         return None
 
     def _adds_paused_list() -> list[dict]:
@@ -1409,6 +1438,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "beta_blocked_picks":         [],
             "beta_unknown_picks":         [],
             "beta_blocked_adds":          [],
+            "fit_unpriced_picks":         [],
             "scan_hold":                  _scan_hold_out(),
             "overflow_picks":             [],
             "flat_day_held":              [],
@@ -1471,6 +1501,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "beta_blocked_picks":         [],
             "beta_unknown_picks":         [],
             "beta_blocked_adds":          [],
+            # Buy-check C5: always present as a list; a bear day picks nothing.
+            "fit_unpriced_picks":         [],
             # Beta-gate C3: always present (None when not wired or fresh).
             "scan_hold":                  _scan_hold_out(),
             # Grow Today owns every buy (2026-10-15): on a bear day nothing is
@@ -1549,6 +1581,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # (no gate id, no ledger row).
     beta_blocked_picks: list[dict] = []
     beta_unknown_picks: list[dict] = []
+    # Buy-check C5 (chunk A): a pick in the sector of a holding the frame left out
+    # for want of a price (no gate id, no ledger row, never an ETF pick).
+    fit_unpriced_picks: list[dict] = []
 
     # Build ONE candidate pool from two sources so the user sees a single
     # "New Positions to Initiate" list regardless of where a ticker came from:
@@ -2024,6 +2059,34 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 else:
                     _bd_item["kind"] = _bd["kind"]
                     beta_unknown_picks.append(_bd_item)
+                continue
+
+            # Buy-check C5 (chunk A): a holding in this pick's sector (or one whose
+            # sector can't be named) couldn't be priced, so the sector weight the
+            # G-16 check read is low. LAST of the policy gates (a real G-16 breach
+            # above binds first with its ledger row; the beta hold above binds
+            # first), before sizing. No gate id, no ledger row, no sizing, no
+            # _g32_pick_src entry. An ETF pick never reaches this lane (it left the
+            # stock lane at the ETF exclusion above).
+            _up = _unpriced_decision(sector, "pick")
+            if _up is not None:
+                fit_unpriced_picks.append({
+                    "ticker":          ticker,
+                    "sector":          sector,
+                    "score":           _f(row.get("Score", 0)),
+                    "momentum_score":  _f(row.get("Score"), None),
+                    "composite_score": _composite_score,
+                    "is_mover":        is_mover,
+                    "reason":          _up["reason"],
+                    "clears_when":     _up["clears_when"],
+                    "kind":            sector_unpriced.CHECK,
+                    "unpriced":        list(_up["tickers"]),
+                    "gate_id":         None,
+                    "counterfactual":  True,
+                    "gate_value":      None,
+                    "gate_threshold":  None,
+                    "price":           price,
+                })
                 continue
 
             # Conviction tier: drives the label shown on the card.
@@ -2945,6 +3008,32 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         "momentum_score":  None,
                     })
                     continue
+                # FIT_UNPRICED (buy-check C5, chunk A) -- LAST of the add holds: a
+                # holding in this name's sector couldn't be priced, so the sector cap
+                # can't be trusted for it. A hold, not a finding: shares the
+                # entry_held_adds bucket and renderer with no gate id (no ledger row).
+                if _gate == "FIT_UNPRICED":
+                    _fu = _unpriced_decision(sector, "add")
+                    entry_held_adds.append({
+                        "ticker":    ticker,
+                        "score":     scr,
+                        "pnl_pct":   _f(row.get("P&L (%)")),
+                        "gap":       gap,
+                        "sector":    sector,
+                        "check":     sector_unpriced.CHECK,
+                        "reason":    _fu["reason"],
+                        "clears_when": _fu["clears_when"],
+                        "holds":     [],
+                        "unchecked": [],
+                        "gate_id":        None,
+                        "counterfactual": True,
+                        "gate_value":     None,
+                        "gate_threshold": None,
+                        "price":          _f(row.get("Price"), None),
+                        "composite_score": _f(row.get("Score"), None),
+                        "momentum_score":  None,
+                    })
+                    continue
                 price   = _f(row.get("Price", 0))
                 # Same alias-aware match as _sector_bonus/is_leader above --
                 # this is the add-to-winner lane's own copy of the identical
@@ -3122,6 +3211,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "beta_blocked_picks":         beta_blocked_picks,
         "beta_unknown_picks":         beta_unknown_picks,
         "beta_blocked_adds":          beta_blocked_adds,
+        # Buy-check C5 (chunk A): always a list, never omitted. A held name's add
+        # in the unpriced sector rides entry_held_adds (check "fit_unpriced").
+        "fit_unpriced_picks":         fit_unpriced_picks,
         # Beta-gate C3: always present (None when not wired or fresh).
         "scan_hold":                  _scan_hold_out(),
         # Grow Today owns every buy (2026-10-15, OP-07 "gate the call, never

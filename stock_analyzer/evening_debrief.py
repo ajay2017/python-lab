@@ -238,6 +238,8 @@ _HELD_BACK_OTHER = (
     # Beta-gate C2: G-06 holds on Grow Today (a hold, never silently dropped).
     ("beta_blocked_picks",    "portfolio beta"),
     ("beta_unknown_picks",    "beta couldn't be checked"),
+    # Buy-check C5 (chunk A): a holding in the pick's sector couldn't be priced.
+    ("fit_unpriced_picks",    "sector weight incomplete"),
 )
 
 

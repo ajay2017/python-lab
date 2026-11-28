@@ -69,7 +69,7 @@ def derive_dropoffs(
         read: ``composite_skipped``, ``sector_blocked_picks``,
         ``macro_blocked_picks``, ``composite_unavailable``,
         ``sector_unknown_picks``, ``news_skipped``, ``earnings_waiting``,
-        ``beta_blocked_picks``, ``beta_unknown_picks``,
+        ``beta_blocked_picks``, ``beta_unknown_picks``, ``fit_unpriced_picks``,
         ``overflow_picks``, ``flat_day_held``.
     reduce_calls:
         Dict of {ticker_upper: item} from session_state["_reduce_calls"].
@@ -95,8 +95,8 @@ def derive_dropoffs(
                                     sector_blocked | macro_blocked |
                                     composite_unavailable | sector_unknown |
                                     skip_verdict | earnings_wait |
-                                    beta_blocked | beta_unknown | pacing |
-                                    flat_day_hold | unattributed
+                                    beta_blocked | beta_unknown | fit_unpriced |
+                                    pacing | flat_day_hold | unattributed
             reason_text          (str)  — human-readable sentence
             has_confident_reason (bool) — False only on 'unattributed'
 
@@ -165,6 +165,14 @@ def derive_dropoffs(
         if _t:
             _beta_unknown_map[_t] = _item
 
+    # Buy-check C5 (chunk A): held because a holding in the pick's sector couldn't
+    # be priced (absent on a bucket dict built before C5 -> no names).
+    _fit_unpriced_map: dict[str, dict] = {}
+    for _item in grow_buckets.get("fit_unpriced_picks", []):
+        _t = str(_item.get("ticker", "")).upper()
+        if _t:
+            _fit_unpriced_map[_t] = _item
+
     _overflow_map: dict[str, dict] = {}
     for _item in grow_buckets.get("overflow_picks", []):
         _t = str(_item.get("ticker", "")).upper()
@@ -214,7 +222,8 @@ def derive_dropoffs(
         # reduce_calls → composite_skipped → sector_blocked_picks
         # → macro_blocked_picks → composite_unavailable → sector_unknown_picks
         # → news_skipped → earnings_waiting → beta_blocked_picks
-        # → beta_unknown_picks → overflow_picks → flat_day_held → unattributed
+        # → beta_unknown_picks → fit_unpriced_picks → overflow_picks
+        # → flat_day_held → unattributed
         if reduce_calls is not None and _t in reduce_calls:
             _reason_code   = "reduce_call"
             _reason_text   = f"a Reduce/Exit call is now active on {_t}"
@@ -306,6 +315,15 @@ def derive_dropoffs(
             _current_composite = _bi.get("composite_score")
             _reason_code   = "beta_unknown"
             _reason_text   = _bi.get("reason") or "portfolio beta couldn't be checked"
+            _has_confident = True
+
+        elif _t in _fit_unpriced_map:
+            # Buy-check C5: the last policy hold in _grow_today, after the beta hold.
+            _fi = _fit_unpriced_map[_t]
+            _current_composite = _fi.get("composite_score")
+            _reason_code   = "fit_unpriced"
+            _reason_text   = (_fi.get("reason")
+                              or "a holding in its sector couldn't be priced")
             _has_confident = True
 
         elif _t in _overflow_map:

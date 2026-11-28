@@ -135,6 +135,7 @@ from stock_analyzer import session_label     # buy-check C4b: which session "now
 from stock_analyzer import tone_freshness    # buy-check C4b: Grow Today's hold + the pure tone / header views
 from stock_analyzer import macro_read        # buy-check C4m: an unreadable macro calendar holds new buys
 from stock_analyzer import watchlist_fit_source   # entry-fail-closed C2b: which frame the Watchlist's sector / beta checks read
+from stock_analyzer import sector_unpriced   # buy-check C5: a partly priced book (unpriced holding's sector) holds buys
 from stock_analyzer import effective_capital as _effective_capital
 from stock_analyzer.valuation_target import pt_label as _pt_label
 # Note markers imported from the module that DETECTS them, so a reworded
@@ -7573,7 +7574,7 @@ if page == "🏠 Home":
     # price history this signature already covers (the risk build is memoised WITH the
     # Brief), so they are not added to it; the schema version below invalidates a Brief
     # memoised before the G-06 holds existed.
-    _SYNTH_SCHEMA_VER = 42  # bumped: the risk-off trim skips only full exits (risk_off_pool.full_exit_names), a kept risk-off card carries a same-name beside line and trim_shares, and a same-name non-news Watch carries covered_by (brief-consolidation C2, RiskOffTrimShift; H6 reversed); was 41: the macro pre-event trim skips a name only when its own Act Today sale covers the trim, its why names the skipped names / a smaller or unsized same-name sell, and the macro Affected list counts only real sales (brief-consolidation C3, MacroTrimDefer); was 40: a sector Hard Cap card is its own Act Today card beside a same-name stop breach / Sell / deterioration / critical-news card (never merged as risk_flags), and its flag carries sector / sector_members (brief-consolidation C1, SectorCapCardMerged; F-22a reversed by the owner); was 39: the synth signature carries the per-leg regime read, since the Brief's risk_off_unchecked (regime_unread / both_unread) depends on which of the SPY-trend and VIX legs were read (sell-check-unread C6, RegimeOneLegMeasured); was 38: Grow Today entry_hold may now be macro_unread (the macro calendar couldn't be read) and the bundle's _macro_events may be None (buy-check C4m, G-07 / G-34); was 37: Grow Today carries entry_hold (None, or the strings of a hold) and holds every pick, ETF pick and add when the market move can't be read or isn't today's session; a bear message names the session (buy-check C4b, G-34 / G-23); was 36: new Grow Today picks carry atr, the ATR their stop was built from (IntradayBelowStop, beta-gate C4); was 35: Grow Today carries scan_hold and sizes no pick off a saved scan that isn't today's post-open scan (ScanCacheAnyAge, beta-gate C3); was 34: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 43  # bumped: Grow Today carries fit_unpriced_picks and holds a pick or add whose sector a holding that couldn't be priced understates, and the memo signature carries the unpriced-holdings map (buy-check C5 A1 + A2, partial-book hold); was 42: the risk-off trim skips only full exits (risk_off_pool.full_exit_names), a kept risk-off card carries a same-name beside line and trim_shares, and a same-name non-news Watch carries covered_by (brief-consolidation C2, RiskOffTrimShift; H6 reversed); was 41: the macro pre-event trim skips a name only when its own Act Today sale covers the trim, its why names the skipped names / a smaller or unsized same-name sell, and the macro Affected list counts only real sales (brief-consolidation C3, MacroTrimDefer); was 40: a sector Hard Cap card is its own Act Today card beside a same-name stop breach / Sell / deterioration / critical-news card (never merged as risk_flags), and its flag carries sector / sector_members (brief-consolidation C1, SectorCapCardMerged; F-22a reversed by the owner); was 39: the synth signature carries the per-leg regime read, since the Brief's risk_off_unchecked (regime_unread / both_unread) depends on which of the SPY-trend and VIX legs were read (sell-check-unread C6, RegimeOneLegMeasured); was 38: Grow Today entry_hold may now be macro_unread (the macro calendar couldn't be read) and the bundle's _macro_events may be None (buy-check C4m, G-07 / G-34); was 37: Grow Today carries entry_hold (None, or the strings of a hold) and holds every pick, ETF pick and add when the market move can't be read or isn't today's session; a bear message names the session (buy-check C4b, G-34 / G-23); was 36: new Grow Today picks carry atr, the ATR their stop was built from (IntradayBelowStop, beta-gate C4); was 35: Grow Today carries scan_hold and sizes no pick off a saved scan that isn't today's post-open scan (ScanCacheAnyAge, beta-gate C3); was 34: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     # C6 review (blocking): _cached_spy raises on a failed Yahoo read (st.cache_data
     # doesn't cache exceptions), so it is guarded here; a failed fetch reads as an
     # unread trend leg in the signature instead of crashing every Home run.
@@ -7581,6 +7582,10 @@ if page == "🏠 Home":
         _synth_regime_spy = _cached_spy("1y")
     except Exception:
         _synth_regime_spy = None
+    # Which holdings the priced frame leaves out (buy-check C5): a holding that loses
+    # or regains its price changes Grow Today's sector hold with no other input
+    # moving. Never raises; None (unreadable) stays distinct from {} (all priced).
+    _synth_unpriced = buy_check_state.unpriced_holdings(holdings, port_df)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -7616,6 +7621,8 @@ if page == "🏠 Home":
         # trims on the next Home run (owner U-G), with no other input moving
         # (sell-check-unread C6). read_regime never raises; the SPY fetch is guarded above.
         regime_read.signature(regime_read.read_regime(_synth_regime_spy, _cached_vix())),
+        # The holdings with no price in the frame, {ticker: sector} (buy-check C5).
+        (None if _synth_unpriced is None else frozenset(_synth_unpriced.items())),
     )
     _synth_cache = st.session_state.get("_home_synth_cache")
     # A price move can breach an UNCHANGED stop, which the signature cannot see:
@@ -10651,7 +10658,8 @@ if page == "🏠 Home":
                     "sector_unknown_picks", "cluster_blocked_adds", "pair_blocked_adds",
                     "news_skipped", "earnings_waiting",
                     "entry_held_adds", "card_blocked_adds", "room_blocked_adds",
-                    "beta_blocked_picks", "beta_unknown_picks", "beta_blocked_adds"):
+                    "beta_blocked_picks", "beta_unknown_picks", "beta_blocked_adds",
+                    "fit_unpriced_picks"):
             _gv = grow.get(_gk)
             if not isinstance(_gv, list):
                 continue
@@ -10815,6 +10823,9 @@ if page == "🏠 Home":
         beta_blocked  = (list(grow.get("beta_blocked_picks", []))
                          + list(grow.get("beta_blocked_adds", [])))
         beta_unknown_picks = list(grow.get("beta_unknown_picks", []))
+        # buy-check C5: a pick held because a holding in its sector couldn't be priced
+        # (sector_unpriced); the key is absent from a legacy cached brief = nothing.
+        fit_unpriced_picks = list(grow.get("fit_unpriced_picks", []))
         sector_blocked = (grow.get("sector_blocked_adds", []) or []) + (grow.get("sector_blocked_picks", []) or [])
         # D1 (sector_gate_spec.md, 2026-09-30) — distinct from sector_blocked
         # above (a KNOWN sector already over cap): this is "couldn't check,"
@@ -11192,6 +11203,7 @@ if page == "🏠 Home":
                     ("⏳ earnings-wait", earnings_waiting),
                     ("⛔ portfolio beta", grow.get("beta_blocked_picks", [])),
                     ("⏸ beta couldn't be checked", grow.get("beta_unknown_picks", [])),
+                    ("⏸ sector weight incomplete", grow.get("fit_unpriced_picks", [])),
                     ("sector couldn't be classified", sector_unknown),
                 )
                 _news_skip_n = sum(len(n) for _w, n in _held_out_groups if isinstance(n, list))
@@ -11793,6 +11805,7 @@ if page == "🏠 Home":
                     "earnings_waiting":      earnings_waiting,
                     "beta_blocked_picks":    grow.get("beta_blocked_picks", []),
                     "beta_unknown_picks":    grow.get("beta_unknown_picks", []),
+                    "fit_unpriced_picks":    grow.get("fit_unpriced_picks", []),
                     "overflow_picks":        grow.get("overflow_picks", []),
                     "flat_day_held":         grow.get("flat_day_held", []),
                 }
@@ -12009,6 +12022,7 @@ if page == "🏠 Home":
             _eh_rows = []
             _eh_corr_rows = []
             _eh_beta_rows = []
+            _eh_fit_rows = []
             for _eh in entry_held_adds:
                 _eh_tk = str(_eh.get("ticker", "")).strip()
                 if not _eh_tk:
@@ -12043,12 +12057,24 @@ if page == "🏠 Home":
                     if _eh.get("clears_when"):
                         _eh_bu_line += f" Clears {str(_eh['clears_when']).rstrip('.')}."
                     _eh_beta_rows.append((_eh_tk, _eh_bu_line))
+                elif _eh.get("check") == sector_unpriced.CHECK:
+                    # buy-check C5: the reason is a full sentence naming the unpriced
+                    # holding; the generic "held: …" wrapper would read "an entry
+                    # check held it", so this row has its own heading and wording.
+                    _eh_fu_line = (
+                        f"{_eh_tk} — would qualify as an add, but "
+                        f"{str(_eh.get('reason') or '').strip().rstrip('.')}."
+                    )
+                    if _eh.get("clears_when"):
+                        _eh_fu_line += f" Clears when {str(_eh['clears_when']).rstrip('.')}."
+                    _eh_fit_rows.append((_eh_tk, _eh_fu_line))
                 else:
                     _eh_rows.append((_eh_tk, _eh_line))
             for _eh_head, _eh_group in (
                 ("📰 Adds held — entry check", _eh_rows),
                 ("🔗 Adds held — correlation couldn't be measured", _eh_corr_rows),
                 ("⏸ Adds held — beta couldn't be checked", _eh_beta_rows),
+                ("⏸ Adds held — sector weight incomplete", _eh_fit_rows),
             ):
                 if not _eh_group:
                     continue
@@ -12331,6 +12357,7 @@ if page == "🏠 Home":
         for _bg_title, _bg_items in (
             ("⛔ Portfolio beta", beta_blocked),
             ("⏸ Beta couldn't be checked", beta_unknown_picks),
+            ("⏸ Sector weight incomplete", fit_unpriced_picks),
         ):
             if not _bg_items:
                 continue
@@ -12343,7 +12370,14 @@ if page == "🏠 Home":
             )
             for _bg in _bg_items[:4]:
                 _bg_line = f"**{_bg.get('ticker', '')}** — {_bg.get('reason', '')}"
-                if _bg.get("clears_when"):
+                if _bg.get("kind") == sector_unpriced.CHECK:
+                    # buy-check C5: the reason carries no full stop and clears_when
+                    # starts with the holding, not "at the next …".
+                    _bg_line = (f"**{_bg.get('ticker', '')}** — would qualify as a pick, but "
+                                f"{str(_bg.get('reason', '')).rstrip('.')}.")
+                    if _bg.get("clears_when"):
+                        _bg_line += f" Clears when {str(_bg['clears_when']).rstrip('.')}."
+                elif _bg.get("clears_when"):
                     _bg_line += f" Clears {_bg['clears_when']}."
                 st.caption(_bg_line.replace("$", chr(92) + "$"))
             if len(_bg_items) > 4:
@@ -28925,6 +28959,7 @@ elif page == "📈 Analysis":
                     )
                     _gc_tw = None   # single-name equity weight (None = not held / unknown)
                     _gc_sw = None   # sector equity weight (None = sector unknown)
+                    _gc_sec = ""    # classified sector name ("" = unknown / no frame)
                     if not _gc_port.empty:
                         _gc_ticker_row = _gc_port[_gc_port["Ticker"] == ticker]
                         if not _gc_ticker_row.empty:
@@ -28965,6 +29000,17 @@ elif page == "📈 Analysis":
                         gross_book=portfolio_value, net_capital=_f255_net_cap)
                     _gate_conc_ok   = _gc_ct["state"]
                     _gate_sector_ok = ((_gc_sw or 0) < SECTOR_CEILING)      if _gc_sw is not None else None
+                    _gate_sector_detail = (
+                        f"{_gc_sw:.1f}% in sector" if _gc_sw is not None else "See Account page")
+                    # buy-check C5 (owner QA2): a holding in this sector that couldn't
+                    # be priced makes the weight above incomplete, so the tile reads
+                    # "—" with that reason instead of a pass; the size is unchanged. A
+                    # measured breach (✗) is never downgraded (current_ok).
+                    _gc_unpriced_tile = sector_unpriced.analysis_tile(
+                        _gc_sec, buy_check_state.unpriced_holdings(_an_last_held, _gc_port),
+                        current_ok=_gate_sector_ok)
+                    if _gc_unpriced_tile is not None:
+                        _gate_sector_ok, _gate_sector_detail = _gc_unpriced_tile
                     _gate_earn_ok   = (_gc_earn_days > EARNINGS_IMMINENT_DAYS) if _gc_earn_days is not None else None
                     st.markdown("**Gate checks**")
                     _gate_cols = st.columns(5)
@@ -28974,8 +29020,7 @@ elif page == "📈 Analysis":
                         (f"R/R ≥ {RR_ENTRY_MIN:.0f}×", _gate_rr_ok,
                          f"R/R = {fmt_ratio_vs(_rr_m['rr'], RR_ENTRY_MIN)}×" if _rr_m["rr"] is not None else "R/R unavailable"),
                         ("Concentration", _gate_conc_ok, _gc_ct["detail"]),
-                        ("Sector cap",    _gate_sector_ok,
-                         f"{_gc_sw:.1f}% in sector" if _gc_sw is not None else "See Account page"),
+                        ("Sector cap",    _gate_sector_ok, _gate_sector_detail),
                         ("Earnings",      _gate_earn_ok,
                          f"{_gc_earn_days}d to earnings" if _gc_earn_days is not None else "See Catalyst Watch"),
                     ]
@@ -30963,16 +31008,19 @@ elif page == "📋 Watchlist":
     # open on a missing Home frame, so the Brief-offline banner's old G-05 clause
     # is gone. One banner when the fit couldn't be built (names are HELD) or
     # when this page built the frame itself; wording lives in watchlist_fit_source.
-    # Holdings the self-built frame left out for want of a price (read defensively
-    # from attrs["dropped_holdings"]; only the self-build can have them unseen).
-    _wl_fit_unpriced = (
-        watchlist_fit_source.unpriced_tickers(_wl_port_df)
-        if _wl_fit_source == watchlist_fit_source.SOURCE_SELF else [])
+    # buy-check C5: the holdings the frame (Home's or this page's) left out for want
+    # of a price, {TICKER: sector | "__ALL__"}, from the one fit_state; both sources
+    # carry the banner line, and the advisor holds the names it covers.
+    _wl_fit_unpriced = _wl_fit_state.get("unpriced")
+    _wl_fit_n_hold = len(_wl_hold_rows) if _wl_hold_rows is not None else None
     _wl_fit_banner = watchlist_fit_source.banner(
         source=_wl_fit_source, fit_state=_wl_fit_state,
         built_at_et=_wl_fit_built_at,
-        n_holdings=(len(_wl_hold_rows) if _wl_hold_rows is not None else None),
-        n_priced=len(_wl_port_df), unpriced=_wl_fit_unpriced)
+        n_holdings=_wl_fit_n_hold,
+        n_priced=(_wl_fit_n_hold - len(_wl_fit_unpriced)
+                  if _wl_fit_n_hold is not None and isinstance(_wl_fit_unpriced, dict)
+                  else None),
+        unpriced=_wl_fit_unpriced)
     if _wl_fit_banner is not None:
         (st.warning if _wl_fit_banner[0] == "warning" else st.info)(_wl_fit_banner[1])
 
@@ -47370,7 +47418,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **When the macro calendar can't be read (since 2026-11-27).** If the calendar of CPI, jobs and Fed releases itself couldn't be built, Grow Today can't tell whether a release is due in the next 3 days, so it holds **every** new pick, ETF pick and add for the day (the header reads *(held)* and the banner says the macro-event calendar couldn't be read) rather than assume none is. **🔄 Refresh macro** re-reads the calendar, and the Brief also rebuilds on its own every 30 minutes in pre-market and market hours. A bear day keeps its own protection message. The 9:45 and 11:30 emails send no pick on such a run and the run is reported as failed (red status plus a failure email), the same as an unread market. A FRED outage alone does not count: the hand-checked release dates are the source for this check, so a FRED failure leaves the calendar readable. This is rare: it needs a fault inside the calendar build, not an ordinary data outage. The stop, deterioration and risk-off cards in 🔴 Act Today are not held, but the Brief's pre-event macro cards are quiet while the calendar can't be read.
 
-**Portfolio beta (since 2026-11-26).** When your book's beta is above 1.4 and a candidate's own beta is above 1.8, Grow Today doesn't open it: it shows under **"⛔ Portfolio beta"** with both numbers and no size, the same hold the 📋 Watchlist applies, and it clears when the book's beta is back at or under 1.4. An add to a high-beta name you hold is paused the same way. If one of the two betas couldn't be read and the other is already over its line, the name shows under **"⏸ Beta couldn't be checked"** instead of being sized: a reason to pause, not a green light. Neither appears in the morning or 11:30 emails.
+**Portfolio beta (since 2026-11-26).** When your book's beta is above 1.4 and a candidate's own beta is above 1.8, Grow Today doesn't open it: it shows under **"⛔ Portfolio beta"** with both numbers and no size, the same hold the 📋 Watchlist applies, and it clears when the book's beta is back at or under 1.4. An add to a high-beta name you hold is paused the same way. If one of the two betas couldn't be read and the other is already over its line, the name shows under **"⏸ Beta couldn't be checked"** instead of being sized: a reason to pause, not a green light. Neither appears in the morning or 11:30 emails. **A holding that couldn't be priced (since 2026-11-27).** If one of your holdings has no price today, its sector's weight reads low, so Grow Today holds every new pick and add in that sector under **"⏸ Sector weight incomplete"** (or in every sector when the app can't tell the holding's sector), naming the holding and what clears it; both emails carry one line about it. A real sector-cap breach still shows as its own suppression first.
 
 **Grow Today is the only place the app issues a buy.** (Until 2026-10-15 a separate "More Buy Candidates" list showed scanner names labelled "BUY — Scanner Pick" on momentum alone; most of them had a composite below the Buy bar, so it was retired.) Below the sized picks you may see these, none with a share size or a trade button — open any of them with ▶ Analyze:
 - **"✔ Also cleared every check — not one of today's picks"** — names that passed every check but were held back only by pacing: the daily pick limit, the one-per-sector slot or the breakout limit (the reason is named). A 📋 tag shows when the name is on your Watchlist.
@@ -47380,7 +47428,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **Daily new-position budget (since 2026-10-16).** Each idea is capped on its own (15% of the book, 25% of net capital); this caps the **sum**. One trading day's new buys — what you've logged (adds included), sizes already emailed to you today, and newly sized suggestions — are capped at **40% of net capital**. Grow Today, 📋 Watchlist, 📈 Analysis and the three emails each show a *"New positions today: … of net capital … — budget 40%, … left"* line. Sizes already emailed are locked (*"Reserved by today's email run"*); everything later is sized from what's left, highest composite first — Grow Today, then the Watchlist, then Analysis. A name that gets less says *"Sized from what's left of today's budget — n of m shares"*; once it's used, a pick keeps its BUY call but reads *"not sized"* — never dropped, and it resets the next trading day. Sells don't give budget back, and nothing ever trims a holding. If the budget can't be checked (trade log or today's emailed sizes unreadable, cash figure stale or missing) the call still shows and the size is withheld with the reason. A ticker gets one share count a day: a Grow Today pick reads *"Sized in Grow Today today — see 🏠 Home"* on the Watchlist, and Analysis matches the Watchlist's size once you've opened the Watchlist today (and again after logging a trade) — until then it says it doesn't yet count the Watchlist's Ready-to-Enter names. Logging a BUY in the Trade Journal shows today's total including that buy — a heads-up, never a block. It can't see a buy you didn't log, and for up to 5 minutes after an email or a trade logged elsewhere a page can show a pre-update size. The cash figure behind the budget comes from the last broker sync, so a trade logged after it still counts; if a BUY or SELL has no fill time the app can place against that sync (left blank, or an import), the app can't tell whether the sync already included it, so a BUY is still subtracted and a SELL is not added, and Grow Today, the Watchlist and Analysis say *"Budget basis may be up to $X low until the next broker sync after the trade"* (for an import, the next day's sync; typing Robinhood's fill time when you log avoids it). The three emails use the same tightened basis and carry no such line. The budget's net capital is also the **lower of your journal's figure and Robinhood's own positions** (see 💰 Account → Net capital check): when that makes it lower by 1% or more, the status line adds a note that net capital was taken from Robinhood's positions, with the dollar gap — and, when a sell logged as after Robinhood's last sync is already part of that gap, a pointer to check that trade's fill time. When Robinhood's positions can't be compared, the line says the sizes were not cross-checked and why, and the journal figure is used. The three emails carry the same note.
 
-**Shared new-entry check (since 2026-10-16).** 📋 Watchlist, its morning Ready-to-Enter email and 📈 Analysis now apply the same entry checks Grow Today uses: no new entry on a bear day, ahead of a HIGH-impact macro release in the stock's sector, on negative news, or on stale data (Analysis also holds off with earnings within 7 days). A Watchlist name that would be READY TO ENTER but fails one shows as **⏸ HELD TODAY**, right under Enter Now, with the reason and what would clear it — but no share size and no Log BUY. On a bear day a Protect Mode banner explains it and says where the market read came from. The email never sends or budgets a held name, and its footer states the market tone it used. On Analysis, a held-back Buy keeps its verdict but shows *Not an entry today* and no size; Hold and Sell verdicts never show a share count. If a check couldn't run, the page says so. **Where the market read comes from (since 2026-11-27).** These pages reuse 🏠 Home's read of the S&P 500 only while it is under 30 minutes old and from the same session (a read taken before the 9:30 AM ET open stops counting at the open); otherwise they read the S&P 500 live and say so. If the macro-event calendar can't be read, the same three hold every new entry as **Held: macro calendar couldn't be read** (a banner on the Watchlist, no size on Analysis, a footer line in the email); a FRED outage alone does not count. If neither read works, 📋 Watchlist, 📈 Analysis and the 09:45 Watchlist email hold every new entry as **Held: market move couldn't be read** (they never treat a market that can't be read as a flat day), the Watchlist shows a banner naming the names that would otherwise be Ready, and Analysis offers no size; both re-check every time you open the page. 🏠 Grow Today and the 9:45 / 11:30 pick emails hold the same way (since 2026-11-27, see below). On a bull or flat day a line under the summary shows the tone and when it was read. A name whose sector the app can't map (since 2026-11-04) is held as **Held: sector unknown (macro check)** while a sector-specific release is near, and clears when the release is out or the ticker gets a sector on the app's curated map that the event doesn't affect; an ETF is held on any sector-specific release, the same rule Grow Today uses for ETF picks. Since 2026-11-26 a name is also held when the sector-concentration or portfolio-beta check couldn't run. If 🏠 Home hasn't built your holdings this session (or you've logged a trade since it did), the Watchlist builds them itself from your current holdings at the last loaded prices and says so in a blue line; if that build fails, every Enter Now on the page is held with one warning. If a holding couldn't be priced for that build, an amber line names it: it isn't in the sector weights, so its sector reads low until a later load. When your portfolio's beta couldn't be computed, only a name whose own beta is above the limit or couldn't be read is held.
+**Shared new-entry check (since 2026-10-16).** 📋 Watchlist, its morning Ready-to-Enter email and 📈 Analysis now apply the same entry checks Grow Today uses: no new entry on a bear day, ahead of a HIGH-impact macro release in the stock's sector, on negative news, or on stale data (Analysis also holds off with earnings within 7 days). A Watchlist name that would be READY TO ENTER but fails one shows as **⏸ HELD TODAY**, right under Enter Now, with the reason and what would clear it — but no share size and no Log BUY. On a bear day a Protect Mode banner explains it and says where the market read came from. The email never sends or budgets a held name, and its footer states the market tone it used. On Analysis, a held-back Buy keeps its verdict but shows *Not an entry today* and no size; Hold and Sell verdicts never show a share count. If a check couldn't run, the page says so. **Where the market read comes from (since 2026-11-27).** These pages reuse 🏠 Home's read of the S&P 500 only while it is under 30 minutes old and from the same session (a read taken before the 9:30 AM ET open stops counting at the open); otherwise they read the S&P 500 live and say so. If the macro-event calendar can't be read, the same three hold every new entry as **Held: macro calendar couldn't be read** (a banner on the Watchlist, no size on Analysis, a footer line in the email); a FRED outage alone does not count. If neither read works, 📋 Watchlist, 📈 Analysis and the 09:45 Watchlist email hold every new entry as **Held: market move couldn't be read** (they never treat a market that can't be read as a flat day), the Watchlist shows a banner naming the names that would otherwise be Ready, and Analysis offers no size; both re-check every time you open the page. 🏠 Grow Today and the 9:45 / 11:30 pick emails hold the same way (since 2026-11-27, see below). On a bull or flat day a line under the summary shows the tone and when it was read. A name whose sector the app can't map (since 2026-11-04) is held as **Held: sector unknown (macro check)** while a sector-specific release is near, and clears when the release is out or the ticker gets a sector on the app's curated map that the event doesn't affect; an ETF is held on any sector-specific release, the same rule Grow Today uses for ETF picks. Since 2026-11-26 a name is also held when the sector-concentration or portfolio-beta check couldn't run. If 🏠 Home hasn't built your holdings this session (or you've logged a trade since it did), the Watchlist builds them itself from your current holdings at the last loaded prices and says so in a blue line; if that build fails, every Enter Now on the page is held with one warning. If a holding couldn't be priced (on 🏠 Home's frame or this page's own), an amber line names it and every Enter Now in its sector is held, because the sector's weight reads low until it can be priced (if the app can't tell its sector, every sector is held); it re-checks each time the page loads. When your portfolio's beta couldn't be computed, only a name whose own beta is above the limit or couldn't be read is held.
 
 **What it deliberately does *not* do:** it does **not** scan the entire market. A thin micro-cap up 300% on the day — the kind a broker's *"all stocks > 20% today"* filter shows — won't appear here by design: the app screens *liquid, quality* names and stays a medium-term advisor, not a squeeze-chaser. To check any specific ticker yourself, use **🔍 Research a Stock** on Home or the **📈 Analysis** page — type a company name ("microsoft") instead of a ticker and it resolves the most likely match, disclosing which symbol it picked (and any other close-scoring match, e.g. GOOGL vs GOOG) rather than silently substituting one.
 """
@@ -47530,7 +47578,7 @@ It's **educational only — it explains the stop, it never changes a recommendat
         with st.expander("⚙️ Gate checks on the Trade Plan", expanded=False):
             st.markdown(
                 """
-Before you size a position, the **Gate checks** row — shown just above the position-sizing section of the Trade Plan — gives you a five-gate snapshot: **Data Quality** (are fundamentals available?), **Reward:Risk** (is the entry R:R ≥ 2×?), **Concentration** (does this fit your portfolio caps?), **Sector cap** (is the sector below 35%?), and **Earnings window** (stepping into an imminent earnings print?). Each gate shows as green ✓ (clear), red ✗ (failed), or grey — (not applicable or not yet known): a name you don't hold has no concentration to check, an R:R the app can't compute reads *unavailable*, and portfolio or earnings data that hasn't loaded yet points you to the 💰 Account or 🔔 Catalyst Watch page (each gate's caption tells you which). The checks are **awareness only** — they don't block you from entering, but they surface which data gaps or risks to consider before you commit.
+Before you size a position, the **Gate checks** row — shown just above the position-sizing section of the Trade Plan — gives you a five-gate snapshot: **Data Quality** (are fundamentals available?), **Reward:Risk** (is the entry R:R ≥ 2×?), **Concentration** (does this fit your portfolio caps?), **Sector cap** (is the sector below 35%?), and **Earnings window** (stepping into an imminent earnings print?). Each gate shows as green ✓ (clear), red ✗ (failed), or grey — (not applicable or not yet known): a name you don't hold has no concentration to check, an R:R the app can't compute reads *unavailable*, and portfolio or earnings data that hasn't loaded yet points you to the 💰 Account or 🔔 Catalyst Watch page (each gate's caption tells you which). When a holding in the name's sector (or any sector, when that holding's own sector isn't known) couldn't be priced, **Sector cap** reads grey — with "Weight incomplete" and the holding's ticker, because that sector's weight is understated — unless the sector is already over the cap, which stays ✗; the share size is unchanged. The checks are **awareness only** — they don't block you from entering, but they surface which data gaps or risks to consider before you commit.
 """
             )
 

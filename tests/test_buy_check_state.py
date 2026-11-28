@@ -167,26 +167,30 @@ from stock_analyzer.constants import (  # noqa: E402
 )
 
 
-def _frame(dropped=None, attrs_key=True):
-    df = pd.DataFrame([{"Ticker": "MSFT", "Sector": "Technology",
-                        "Market Value": 1000.0}])
-    if attrs_key:
-        df.attrs["dropped_holdings"] = dropped if dropped is not None else []
-    return df
+def _frame(priced=("MSFT",), price=100.0):
+    """A priced frame holding exactly `priced` (Ticker / Sector / Price / Market Value)."""
+    return pd.DataFrame([{"Ticker": t, "Sector": "Technology", "Price": price,
+                          "Market Value": 1000.0} for t in priced])
 
 
 _ONE_HOLDING = [{"Ticker": "MSFT", "Shares": 1, "Avg Cost ($)": 100.0}]
 
 
+def _h(*tickers, shares=1.0, avg=50.0):
+    return [{"Ticker": t, "Shares": shares, "Avg Cost ($)": avg} for t in tickers]
+
+
 def test_fit_state_empty_holdings_is_flat_whatever_the_frame():
     for rows in ([], (), pd.DataFrame()):
         for frame in (None, pd.DataFrame(), _frame()):
-            assert bcs.fit_state(rows, frame) == {"state": "flat", "unpriced_sectors": None}
+            assert bcs.fit_state(rows, frame) == {
+                "state": "flat", "unpriced_sectors": None, "unpriced": None}
 
 
 def test_fit_state_holdings_with_no_usable_frame_is_unknown():
     for frame in (None, pd.DataFrame(), "frame", 7):
-        assert bcs.fit_state(_ONE_HOLDING, frame) == {"state": "unknown", "unpriced_sectors": None}
+        assert bcs.fit_state(_ONE_HOLDING, frame) == {
+            "state": "unknown", "unpriced_sectors": None, "unpriced": None}
 
 
 def test_fit_state_holdings_dataframe_nonempty_counts_as_holdings():
@@ -195,53 +199,77 @@ def test_fit_state_holdings_dataframe_nonempty_counts_as_holdings():
     assert bcs.fit_state(rows, _frame())["state"] == "ready"
 
 
-def test_fit_state_ready_with_nothing_dropped_has_an_empty_set():
-    assert bcs.fit_state(_ONE_HOLDING, _frame()) == {"state": "ready", "unpriced_sectors": set()}
-    # an absent attrs key / a None value is "none dropped" too
-    assert bcs.fit_state(_ONE_HOLDING, _frame(attrs_key=False))["unpriced_sectors"] == set()
-    f = _frame(); f.attrs["dropped_holdings"] = None
-    assert bcs.fit_state(_ONE_HOLDING, f)["unpriced_sectors"] == set()
+def test_fit_state_ready_with_nothing_unpriced_has_an_empty_map_and_set():
+    assert bcs.fit_state(_ONE_HOLDING, _frame()) == {
+        "state": "ready", "unpriced_sectors": set(), "unpriced": {}}
+
+
+def test_fit_state_attrs_dropped_holdings_rule_is_retired():
+    """C5 flip: the old rule read `attrs["dropped_holdings"]`; the unpriced map is now
+    holdings minus priced frame rows, so a stale / absent / hostile attrs list changes
+    nothing in either direction."""
+    f = _frame()
+    f.attrs["dropped_holdings"] = [{"ticker": "NVDA", "reason": "no_price_data"}]
+    assert bcs.fit_state(_ONE_HOLDING, f)["unpriced"] == {}
+    f.attrs["dropped_holdings"] = "garbage"
+    assert bcs.fit_state(_ONE_HOLDING, f)["unpriced"] == {}
+    # and an unpriced holding is found with NO attrs at all
+    g = _frame()
+    assert "dropped_holdings" not in g.attrs
+    assert bcs.fit_state(_h("MSFT", "NVDA"), g)["unpriced"] == {"NVDA": "Semiconductors"}
 
 
 def test_fit_state_unpriced_sector_is_the_curated_one():
     from stock_analyzer.portfolio import resolve_sector
-    dropped = [{"ticker": "NVDA", "shares": 1.0, "avg_cost": 10.0, "reason": "no_price_data"}]
-    out = bcs.fit_state(_ONE_HOLDING, _frame(dropped))
-    assert out == {"state": "ready", "unpriced_sectors": {resolve_sector("NVDA")}}
+    out = bcs.fit_state(_h("MSFT", "NVDA"), _frame())
+    assert out == {"state": "ready", "unpriced_sectors": {resolve_sector("NVDA")},
+                   "unpriced": {"NVDA": resolve_sector("NVDA")}}
     assert resolve_sector("NVDA") != "Other"          # not vacuous: NVDA is curated
 
 
-def test_fit_state_other_drop_reasons_are_not_unpriced():
-    dropped = [{"ticker": "NVDA", "reason": "invalid_shares_or_cost"}]
-    assert bcs.fit_state(_ONE_HOLDING, _frame(dropped))["unpriced_sectors"] == set()
-
-
 def test_fit_state_unresolvable_unpriced_ticker_reads_all():
-    dropped = [{"ticker": "ZZZZQX", "reason": "no_price_data"}]
-    assert bcs.fit_state(_ONE_HOLDING, _frame(dropped))["unpriced_sectors"] == {"__ALL__"}
+    out = bcs.fit_state(_h("MSFT", "ZZZZQX"), _frame())
+    assert out["unpriced"] == {"ZZZZQX": "__ALL__"}
+    assert out["unpriced_sectors"] == {"__ALL__"}
 
 
-def test_fit_state_mixed_dropped_rows_collect_sectors():
+def test_fit_state_etf_holding_with_no_price_reads_all():
+    # No ETF is in TICKER_SECTORS: an unpriced VOO could hide ANY sector's weight.
+    assert bcs.fit_state(_h("MSFT", "VOO"), _frame())["unpriced"] == {"VOO": "__ALL__"}
+
+
+def test_fit_state_mixed_unpriced_holdings_collect_sectors():
     from stock_analyzer.portfolio import resolve_sector
-    dropped = [{"ticker": "NVDA", "reason": "no_price_data"},
-               {"ticker": "MSFT", "reason": "no_price_data"},
-               {"ticker": "AAA", "reason": "invalid_shares_or_cost"}]
-    out = bcs.fit_state(_ONE_HOLDING, _frame(dropped))["unpriced_sectors"]
-    assert out == {resolve_sector("NVDA"), resolve_sector("MSFT")}
+    out = bcs.fit_state(_h("AAA", "NVDA", "MSFT", "AMD"), _frame(priced=("AAA",)))
+    assert out["unpriced_sectors"] == {resolve_sector("NVDA"), resolve_sector("MSFT"),
+                                       resolve_sector("AMD")}
 
 
-@pytest.mark.parametrize("bad", ["x", 5, [None], [{"reason": "no_price_data"}], [{"ticker": " ", "reason": "no_price_data"}]])
-def test_fit_state_unreadable_dropped_list_reads_all_never_empty(bad):
-    assert bcs.fit_state(_ONE_HOLDING, _frame(bad))["unpriced_sectors"] == {"__ALL__"}
+def test_fit_state_zero_avg_cost_holding_counts_as_unpriced_qa4():
+    """C5 flip (owner QA4): shares > 0 with a zero / invalid average cost never
+    reaches the frame (build_portfolio_df drops it as invalid_shares_or_cost), and the
+    old rule skipped it; it now counts as unpriced."""
+    rows = [{"Ticker": "MSFT", "Shares": 1, "Avg Cost ($)": 100.0},
+            {"Ticker": "NVDA", "Shares": 2, "Avg Cost ($)": 0}]
+    assert bcs.fit_state(rows, _frame())["unpriced"] == {"NVDA": "Semiconductors"}
+
+
+@pytest.mark.parametrize("bad", [[None], [5], [["MSFT"]]])
+def test_fit_state_unreadable_holding_rows_read_unknown_never_empty(bad):
+    # An unreadable row list is not "nothing was unpriced": fail closed (unknown).
+    assert bcs.fit_state(bad, _frame()) == {
+        "state": "unknown", "unpriced_sectors": None, "unpriced": None}
 
 
 @pytest.mark.parametrize("rows", ["AAPL", 42, 3.5, object(), {"a": 1}])
 def test_fit_state_garbage_holdings_is_unknown_and_never_raises(rows):
-    assert bcs.fit_state(rows, _frame()) == {"state": "unknown", "unpriced_sectors": None}
+    assert bcs.fit_state(rows, _frame()) == {
+        "state": "unknown", "unpriced_sectors": None, "unpriced": None}
 
 
 def test_fit_state_none_holdings_is_unknown():
-    assert bcs.fit_state(None, _frame()) == {"state": "unknown", "unpriced_sectors": None}
+    assert bcs.fit_state(None, _frame()) == {
+        "state": "unknown", "unpriced_sectors": None, "unpriced": None}
 
 
 def test_fit_state_frame_that_raises_is_unknown():
@@ -253,12 +281,18 @@ def test_fit_state_frame_that_raises_is_unknown():
 
 
 def test_fit_state_inputs_not_mutated_and_results_independent():
-    f = _frame([{"ticker": "NVDA", "reason": "no_price_data"}])
-    snap = dict(f.attrs)
-    a = bcs.fit_state(_ONE_HOLDING, f)
+    rows = _h("MSFT", "NVDA")
+    snap_rows = [dict(r) for r in rows]
+    f = _frame()
+    f.attrs["x"] = 1
+    snap_attrs = dict(f.attrs)
+    snap_frame = f.copy()
+    a = bcs.fit_state(rows, f)
     a["unpriced_sectors"].add("X")
-    assert f.attrs == snap
-    assert "X" not in bcs.fit_state(_ONE_HOLDING, f)["unpriced_sectors"]
+    a["unpriced"]["ZZ"] = "X"
+    assert rows == snap_rows and f.attrs == snap_attrs and f.equals(snap_frame)
+    again = bcs.fit_state(rows, f)
+    assert "X" not in again["unpriced_sectors"] and "ZZ" not in again["unpriced"]
 
 
 # beta_leg_could_bind at the REAL constants (strict `>`, as _portfolio_risk_gate)

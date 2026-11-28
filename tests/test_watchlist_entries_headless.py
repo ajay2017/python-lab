@@ -488,7 +488,8 @@ def test_ctx_not_ok_reports_neither_fit_leg_read_and_email_does_not_claim_sector
     assert result["gate_degraded"] is True
     assert result["fit_read"] is False
     assert result["beta_read"] is False
-    assert result["fit_state"] == {"state": "unknown", "unpriced_sectors": None}
+    assert result["fit_state"] == {"state": "unknown", "unpriced_sectors": None,
+                                   "unpriced": None}
     _, html = render_watchlist_entries_email(
         [_wl_card("NVDA")], built_at=result["built_at"],
         gate_degraded=result["gate_degraded"],
@@ -520,7 +521,8 @@ def test_empty_book_is_read_not_degraded_and_email_has_no_fit_box():
     assert result["gate_degraded"] is False
     assert result["fit_read"] is True
     assert result["beta_read"] is True      # nothing to compute for an empty book
-    assert result["fit_state"] == {"state": "flat", "unpriced_sectors": None}
+    assert result["fit_state"] == {"state": "flat", "unpriced_sectors": None,
+                                   "unpriced": None}
     assert [c["ticker"] for c in result["entries"]] == ["NVDA"]
     _, html = render_watchlist_entries_email(
         result["entries"], built_at=result["built_at"],

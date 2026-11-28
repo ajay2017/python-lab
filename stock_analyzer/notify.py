@@ -763,6 +763,22 @@ def render_buy_picks_email(picks: list[dict], built_at: str) -> tuple[str, str]:
     return subject, body
 
 
+def _amber_box(title: str, body: str) -> str:
+    """The email's one amber notice box (title and body already escaped / trusted)."""
+    return (
+        '<div style="border-left:4px solid #f59e0b;background:#1c1710;border-radius:0 6px 6px 0;'
+        'padding:10px 16px;margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif">'
+        '<div style="color:#f59e0b;font-weight:700;font-size:12px">'
+        f'{title}</div>'
+        '<div style="color:#cbd5e1;font-size:12px;margin-top:3px">'
+        f'{body}</div>'
+        '</div>'
+    )
+
+
+_UNPRICED_BOX_TITLE = "⚠️ Sector weights may read low this run"
+
+
 def render_daily_action_email(
     top_pick: dict,
     exit_alerts: list[dict],
@@ -773,6 +789,7 @@ def render_daily_action_email(
     exit_check_unavailable: bool = False,
     budget: "dict | None" = None,
     news_feed: "dict | None" = None,
+    book_unpriced_line: "str | None" = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the single-action morning email.
 
@@ -800,6 +817,10 @@ def render_daily_action_email(
     one email that also recommends deploying new capital — see
     `_exit_check_unavailable_banner` for when it renders (2026-09-24 app
     review, Top-5 #1 / A1).
+    `book_unpriced_line` (buy-check C5, chunk A) -- `sector_unpriced.email_line`:
+    when part of the book couldn't be priced this run, one amber box says names in
+    that sector were held and the sector check ran on the rest. None (the default)
+    renders nothing, exactly as before.
     """
     from stock_analyzer.constants import SCAN_TOP_PICK_MIN_COMPOSITE
 
@@ -872,6 +893,9 @@ def render_daily_action_email(
 
     # ── Section 1d: daily new-position budget status (top of the picks) ───────
     budget_html = _budget_banner(budget, "this morning's emails")
+    if book_unpriced_line:
+        budget_html = (_amber_box(_UNPRICED_BOX_TITLE, _html.escape(str(book_unpriced_line)))
+                       + budget_html)
 
     # ── Section 2: #1 action card ─────────────────────────────────────────────
     score_bits = []
@@ -1204,6 +1228,7 @@ def render_watchlist_entries_email(
     entries: list[dict], built_at: str, gate_degraded: bool = False,
     budget: "dict | None" = None, entry_run: "dict | None" = None,
     fit_read: bool = True, beta_read: bool = True,
+    unpriced_line: "str | None" = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the Watchlist "Ready to Enter" proactive
     email — the headless counterpart to opening 📋 Watchlist and seeing an
@@ -1223,6 +1248,10 @@ def render_watchlist_entries_email(
     (the holdings frame was read); when it is False neither sector nor beta
     ran. Defaults of True keep a legacy `gate_degraded=True`-only caller on
     the beta-only box.
+    `unpriced_line` (buy-check C5, chunk A) -- `sector_unpriced.email_line`: part of
+    the book couldn't be priced this run. ONE amber box carries it: shown even when
+    `fit_read` / `beta_read` are True, and appended to the degraded box's body (never a
+    second box) when that box is also showing. None renders exactly as before.
 
     Mirrors render_buy_picks_email's structure/style: dark cards, subject
     convention, footer disclaimer. The card's own `summary` prose is advisor
@@ -1259,6 +1288,9 @@ def render_watchlist_entries_email(
     )
 
     degraded_html = ""
+    _unpriced_esc = _html.escape(str(unpriced_line)) if unpriced_line else ""
+    if not (gate_degraded or not fit_read or not beta_read) and _unpriced_esc:
+        degraded_html = _amber_box(_UNPRICED_BOX_TITLE, _unpriced_esc)
     if gate_degraded or not fit_read or not beta_read:
         if not fit_read:
             _deg_title = '⚠️ Portfolio fit checks unavailable this run'
@@ -1273,15 +1305,9 @@ def render_watchlist_entries_email(
                 'The concentration/sector check below still applied — only the '
                 'portfolio-beta leg could not be computed headlessly this run.'
             )
-        degraded_html = (
-            '<div style="border-left:4px solid #f59e0b;background:#1c1710;border-radius:0 6px 6px 0;'
-            'padding:10px 16px;margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif">'
-            '<div style="color:#f59e0b;font-weight:700;font-size:12px">'
-            f'{_deg_title}</div>'
-            '<div style="color:#cbd5e1;font-size:12px;margin-top:3px">'
-            f'{_deg_body}</div>'
-            '</div>'
-        )
+        if _unpriced_esc:
+            _deg_body = f"{_deg_body} {_unpriced_esc}"
+        degraded_html = _amber_box(_deg_title, _deg_body)
 
     cards = []
     for e in entries:

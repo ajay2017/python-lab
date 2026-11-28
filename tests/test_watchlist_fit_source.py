@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from stock_analyzer import buy_check_state, watchlist_fit_source as wfs
+from stock_analyzer import buy_check_state, sector_unpriced, watchlist_fit_source as wfs
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_CEILING, SECTOR_CEILING, TICKER_BETA_CRITICAL,
 )
@@ -24,7 +24,7 @@ pytestmark = pytest.mark.fast
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = (_ROOT / "app.py").read_text(encoding="utf-8")
 
-_READY = {"state": "ready", "unpriced_sectors": set()}
+_READY = {"state": "ready", "unpriced_sectors": set(), "unpriced": {}}
 _FLAT = {"state": "flat", "unpriced_sectors": None}
 _UNKNOWN = {"state": "unknown", "unpriced_sectors": None}
 
@@ -89,11 +89,18 @@ def test_odd_inputs_self_build_not_home(odd):
 
 # ═════════════════════════ banner ══════════════════════════════════════════════
 def _bn(source="self_build", fit=_READY, at="9:41 AM ET", n=7, priced=None, unpriced=()):
-    if priced is None and isinstance(n, int) and unpriced is not None:
-        priced = n - len(unpriced)
+    """`unpriced` is a ticker tuple (mapped to a known sector, "Technology") or a
+    {ticker: sector} dict or None (= couldn't be read), as `fit_state["unpriced"]`."""
+    if isinstance(unpriced, dict):
+        umap = unpriced
+    elif unpriced is None:
+        umap = None
+    else:
+        umap = {t: "Technology" for t in unpriced}
+    if priced is None and isinstance(n, int) and umap is not None:
+        priced = n - len(umap)
     return wfs.banner(source=source, fit_state=fit, built_at_et=at, n_holdings=n,
-                      n_priced=priced,
-                      unpriced=list(unpriced) if unpriced is not None else None)
+                      n_priced=priced, unpriced=umap)
 
 
 def _texts():
@@ -141,8 +148,9 @@ def test_one_unpriced_holding_is_a_warning_naming_it_singular():
     tier, text = _bn(n=5, unpriced=["AAA"])
     assert tier == "warning"
     assert "from 4 of your 5 holdings" in text and "at 9:41 AM ET" in text
-    assert "AAA couldn't be priced, so it isn't in the sector weights" in text
-    assert "its sector reads low until a later load" in text
+    assert "AAA couldn't be priced, so it is missing from your Technology weight" in text
+    assert "Enter Now is held for Technology names until it can be priced" in text
+    assert "reads low until a later load" not in text
     assert "they" not in text
 
 
@@ -150,8 +158,9 @@ def test_two_unpriced_holdings_are_a_warning_naming_both_plural():
     tier, text = _bn(n=5, unpriced=["AAA", "BBB"])
     assert tier == "warning"
     assert "from 3 of your 5 holdings" in text
-    assert "AAA, BBB couldn't be priced, so they aren't in the sector weights" in text
-    assert "their sectors read low until a later load" in text
+    assert "AAA and BBB couldn't be priced, so they are missing from your Technology weight" in text
+    assert "until they can be priced" in text
+    assert "reads low until a later load" not in text
 
 
 def test_unpriced_without_counts_still_names_them():
@@ -167,9 +176,33 @@ def test_unreadable_unpriced_list_says_so_in_a_warning():
     assert "from your 5 holdings" not in text
 
 
-def test_unpriced_is_ignored_off_the_self_build():
-    assert _bn(source="home", unpriced=["AAA"]) is None
+def test_unpriced_names_an_unknown_sector_holding_for_every_sector():
+    tier, text = _bn(n=5, unpriced={"VTI": "__ALL__"})
+    assert tier == "warning"
+    assert "VTI couldn't be priced and its sector isn't in the app's sector map" in text
+    assert "every name the sector cap covers" in text and "from 4 of your 5 holdings" in text
+
+
+def test_a_partly_priced_home_frame_carries_the_page_line_not_the_self_build_text():
+    tier, text = _bn(source="home", unpriced=["AAA"])
+    assert tier == "warning"
+    assert text == sector_unpriced.page_line({"AAA": "Technology"})
+    assert "built on this page" not in text
+    # control: a fully priced Home frame has no banner
+    assert _bn(source="home", unpriced=()) is None
+
+
+def test_unpriced_is_ignored_off_the_home_and_self_build_sources():
     assert _bn(source="flat", fit=_FLAT, n=0, unpriced=["AAA"]) is None
+    assert _bn(source="flat", fit=_READY, n=0, unpriced=["AAA"]) is None
+
+
+def test_the_unpriced_input_is_the_map_not_the_old_ticker_list():
+    # a bare list (the retired `unpriced_tickers` shape) reads as "couldn't be read"
+    tier, text = wfs.banner(source="self_build", fit_state=_READY, built_at_et=None,
+                            n_holdings=3, n_priced=2, unpriced=["AAA"])
+    assert tier == "warning" and "Whether every holding was priced couldn't be read" in text
+    assert not hasattr(wfs, "unpriced_tickers")
 
 
 def test_home_and_flat_have_no_banner_when_the_fit_is_known():
@@ -184,43 +217,6 @@ def test_banner_texts_have_no_dollar_sign_and_bold_only_as_pairs():
     for t in texts:
         assert "$" not in t
         assert t.count("**") % 2 == 0
-
-
-# ═════════════════════════ unpriced_tickers ════════════════════════════════════
-class _Frame:
-    def __init__(self, attrs):
-        self.attrs = attrs
-
-
-def _drop(ticker, reason="no_price_data"):
-    return {"ticker": ticker, "shares": 1.0, "avg_cost": 10.0, "reason": reason}
-
-
-def test_unpriced_tickers_reads_only_no_price_rows_sorted_and_deduped():
-    f = _Frame({"dropped_holdings": [_drop("bbb"), _drop("AAA"), _drop("BBB"),
-                                     _drop("ZZZ", "invalid_shares_or_cost")]})
-    assert wfs.unpriced_tickers(f) == ["AAA", "BBB"]
-
-
-@pytest.mark.parametrize("attrs", [{}, {"dropped_holdings": None}, {"dropped_holdings": []}])
-def test_unpriced_tickers_nothing_dropped_is_an_empty_list(attrs):
-    assert wfs.unpriced_tickers(_Frame(attrs)) == []
-    assert wfs.unpriced_tickers(object()) == []     # no attrs at all
-
-
-@pytest.mark.parametrize("bad", ["AAA", 5, {"a": 1}, [None], ["AAA"],
-                                 [{"ticker": "", "reason": "no_price_data"}],
-                                 [{"ticker": "A$B", "reason": "no_price_data"}],
-                                 [{"ticker": "**x**", "reason": "no_price_data"}]])
-def test_unpriced_tickers_malformed_list_is_unknown_not_empty(bad):
-    assert wfs.unpriced_tickers(_Frame({"dropped_holdings": bad})) is None
-
-
-def test_unpriced_tickers_reads_a_real_built_frame():
-    import pandas as pd
-    df = pd.DataFrame({"Ticker": ["AAA"]})
-    df.attrs["dropped_holdings"] = [_drop("BRK.B")]
-    assert wfs.unpriced_tickers(df) == ["BRK.B"]
 
 
 # ═════════════════════════ beta_note ═══════════════════════════════════════════
@@ -425,8 +421,13 @@ def test_the_decide_source_call_requires_the_risk_freshness_leg_from_coord_fresh
     assert "_coord_epoch()" in src and "coord_freshness.FRESH" in src
 
 
-def test_the_banner_call_passes_the_priced_count_and_the_unpriced_tickers():
-    call = _calls(_wl_fit_block(), "watchlist_fit_source.banner")[0]
+def test_the_banner_call_passes_the_priced_count_and_the_fit_states_unpriced_map():
+    blk = _wl_fit_block()
+    call = _calls(blk, "watchlist_fit_source.banner")[0]
     kws = {k.arg: k.value for k in call.keywords}
     assert {"n_holdings", "n_priced", "unpriced"} <= set(kws)
-    assert "watchlist_fit_source.unpriced_tickers(" in _wl_fit_block()
+    # buy-check C5: the map comes from the one fit_state, for BOTH sources; the attrs
+    # reader is gone
+    assert "unpriced_tickers" not in blk
+    assert '_wl_fit_unpriced = _wl_fit_state.get("unpriced")' in blk
+    assert ast.unparse(kws["unpriced"]) == "_wl_fit_unpriced"

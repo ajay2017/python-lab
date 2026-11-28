@@ -1392,6 +1392,12 @@ _GATE_FILES = {
     # line); a wrong call reads "couldn't read the calendar" as "no event due" and
     # calls a buy into a CPI / jobs / Fed release, or holds every buy on a good day.
     "stock_analyzer/macro_read.py",
+    # Added 2026-11-27 (buy-check C5 chunk A, docs/plans/entry-fail-closed-c5-spec.md):
+    # when a partly priced book holds a new buy (an unpriced holding's sector, or every
+    # classified sector when its sector can't be named) and the wording every surface
+    # shows; a wrong call lets a buy through into a sector whose weight reads low
+    # because a holding couldn't be priced, or holds buys in sectors it can't affect.
+    "stock_analyzer/sector_unpriced.py",
     # Added 2026-11-27 (brief-consolidation C1, docs/plans/brief-consolidation-spec.md
     # Q9): what counts as a reduce call on a name (Act-lane reduce kinds + Review trim
     # types), which cards the news fold drops and annotates, and the Act / Aware bucket

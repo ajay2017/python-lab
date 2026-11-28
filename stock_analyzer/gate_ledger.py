@@ -72,7 +72,10 @@ _BUCKET_LANES: dict[str, str] = {
     "room_blocked_adds":         "add_winner",
     # G-06 extended to Grow Today (beta-gate C2): a high-beta buy onto a high-beta
     # book. `beta_unknown_picks` is deliberately NOT listed: no gate id, no ledger
-    # row (a "couldn't check" hold, not a measured breach).
+    # row (a "couldn't check" hold, not a measured breach). Likewise
+    # `fit_unpriced_picks` (buy-check C5: a holding in the pick's sector couldn't be
+    # priced) and an `entry_held_adds` item with check "fit_unpriced" (gate_id None,
+    # skipped above): abstentions, never ledgered.
     "beta_blocked_picks":        "new_pick",
     "beta_blocked_adds":         "add_winner",
 }

@@ -48,6 +48,7 @@ from stock_analyzer import asset_type as _asset_type_mod
 from stock_analyzer import entry_eligibility as _entry_elig
 from stock_analyzer import buy_check_state as _buy_check_state
 from stock_analyzer import beta_fit_gate as _beta_fit_gate
+from stock_analyzer import sector_unpriced as _sector_unpriced
 from stock_analyzer.pillar_availability import (
     technical_clause, technical_history_short, verdict_basis, withheld_split,
 )
@@ -129,6 +130,12 @@ _FIT_ABSTENTION_COPY = {
         "title":   "Portfolio Beta Couldn't Be Checked",
         "summary": "the portfolio-beta check couldn't run.",
         "missing": "Portfolio beta couldn't be checked — a beta value was unavailable",
+    },
+    # buy-check C5 (chunk A): a holding in this name's sector couldn't be priced.
+    "fit_unpriced": {
+        "title":   "Sector Weight Incomplete",
+        "summary": "a holding in its sector couldn't be priced, so the sector-concentration check couldn't be trusted.",
+        "missing": "Sector weight incomplete — a holding in this sector couldn't be priced",
     },
 }
 
@@ -253,6 +260,25 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None,
                 "gate_value":     None,
                 "gate_threshold": None,
             }
+        # buy-check C5 (chunk A): a holding in this name's sector (or one whose sector
+        # the app can't name) couldn't be priced, so the sector weight above reads low
+        # and the G-05 check can't be trusted for it. After the real breach and the
+        # sector_unknown / fit_unknown abstentions (they bind first), before
+        # beta_unknown. An abstention, not a ledgered gate (not in
+        # gate_ledger._WATCHLIST_KIND).
+        if _fs_state == _buy_check_state.FIT_READY:
+            _unpriced_hold = _sector_unpriced.decide(
+                portfolio_ctx.get("sector_of_ticker"), _fs.get("unpriced"),
+                lane="watchlist")
+            if _unpriced_hold is not None:
+                return {
+                    "severity": "hard",
+                    "kind":     _sector_unpriced.CHECK,
+                    "reason":   _unpriced_hold["reason"]
+                                + ". That is a reason to pause, not a green light.",
+                    "gate_value":     None,
+                    "gate_threshold": None,
+                }
         # An empty book (flat) has no portfolio beta to breach: nothing to compute.
         if (_fs_state == _buy_check_state.FIT_READY
                 and _buy_check_state.beta_leg_could_bind(port_beta, ticker_beta)):

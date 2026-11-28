@@ -984,6 +984,9 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         # unknown = the beta check couldn't run and the unread leg could bind).
         "beta_blocked":     len(grow.get("beta_blocked_picks", [])),
         "beta_unknown":     len(grow.get("beta_unknown_picks", [])),
+        # Buy-check C5 (chunk A): picks held because a holding in their sector
+        # couldn't be priced (no gate id, no ledger row).
+        "fit_unpriced":     len(grow.get("fit_unpriced_picks", [])),
     }
     # Macro calendar coverage — passes through from _grow_today's LATE-built
     # "macro_coverage_expired" key so the email renderers can show the
@@ -1014,6 +1017,10 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
             # built (unread: a HOLD), [] = checked, none. Additive.
             "entry_context": {"market_context": market_context,
                               "macro_events": macro_events},
+            # Buy-check C5 (chunk A), additive: the fit state this run's Grow Today
+            # was built with ({"state", "unpriced_sectors", "unpriced"}), so the pick
+            # email can say a partly priced book held names in the unpriced sector.
+            "fit_state": _beta_fit["fit_state"],
             # Additive -- news_feed.feed_state over the held + Grow-candidate
             # bundles this run loaded; the cron reddens the heartbeat on an outage.
             "news_feed": news_feed.feed_state({**grow_composites, **held_data})}
@@ -1082,9 +1089,9 @@ def compute_watchlist_entries(
 ) -> dict:
     """Return {"entries": [...] | None, "built_at": <ET iso>, "errors": [...],
     "reason": str | None, "gate_degraded": bool, "fit_read": bool,
-    "beta_read": bool, "fit_state": {"state", "unpriced_sectors"},
-    "checks_held": {"fit_unknown": [...], "beta_unknown": [...], "tone_unread": [...],
-    "macro_unread": [...]},
+    "beta_read": bool, "fit_state": {"state", "unpriced_sectors", "unpriced"},
+    "checks_held": {"fit_unknown": [...], "beta_unknown": [...], "fit_unpriced": [...],
+    "tone_unread": [...], "macro_unread": [...]},
     "entry_run": {...}, "gate_ledger_rows": [...]}.
 
     `entry_context` (shared-entry-check chunk 5): compute_morning_picks'
@@ -1243,7 +1250,8 @@ def compute_watchlist_entries(
             _fit_state = _buy_check_state.fit_state([], None)
             beta_read = True
         else:
-            _fit_state = {"state": _buy_check_state.FIT_UNKNOWN, "unpriced_sectors": None}
+            _fit_state = {"state": _buy_check_state.FIT_UNKNOWN, "unpriced_sectors": None,
+                          "unpriced": None}
         try:
             spy_for_bundles = fetch_spy("6mo")
         except Exception:
@@ -1659,13 +1667,16 @@ def compute_watchlist_entries(
     # buy-check C4a: plus the names held because the S&P 500 read failed
     # (ENTRY_HELD cards with hold_kind "tone_unread").
     # buy-check C4m: plus the names held because the macro calendar couldn't be read.
-    _checks_held = {"fit_unknown": [], "beta_unknown": [], "tone_unread": [],
-                    "macro_unread": []}
+    # buy-check C5 (chunk A): plus the names held because a holding in their sector
+    # couldn't be priced (`fit_unpriced`, NEAR_ENTRY cards like fit_unknown).
+    _checks_held = {"fit_unknown": [], "beta_unknown": [], "fit_unpriced": [],
+                    "tone_unread": [], "macro_unread": []}
     try:
         for _c in all_cards:
             _k = _c.get("suppression_kind")
             _tk = str(_c.get("ticker", "")).strip().upper()
-            if (_k in ("fit_unknown", "beta_unknown") and _c.get("action") == "NEAR_ENTRY"
+            if (_k in ("fit_unknown", "beta_unknown", "fit_unpriced")
+                    and _c.get("action") == "NEAR_ENTRY"
                     and _tk and _tk not in held_set):
                 _checks_held[_k].append(_tk)
             elif (_c.get("action") == "ENTRY_HELD" and _c.get("hold_kind") == "tone_unread"

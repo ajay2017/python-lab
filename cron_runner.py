@@ -106,6 +106,7 @@ from stock_analyzer import protective_coverage
 from stock_analyzer import regime_read
 from stock_analyzer import risk_window
 from stock_analyzer import scan_freshness as _scan_freshness
+from stock_analyzer import sector_unpriced
 from stock_analyzer import tone_freshness as _tone_freshness
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
@@ -522,7 +523,7 @@ def _log_watchlist_earnings_read(payload) -> None:
 def _watchlist_checks_held_line(payload) -> "str | None":
     """The scan-log line for names the Watchlist HELD because a buy check couldn't
     run (entry-fail-closed C2a): "watchlist: N held, a check couldn't run
-    (fit_unknown: X, Y; beta_unknown: Z; tone_unread: W; macro_unread: V)", or None when there is nothing to say (no
+    (fit_unknown: X, Y; beta_unknown: Z; fit_unpriced: U; tone_unread: W; macro_unread: V)", or None when there is nothing to say (no
     `checks_held` in the payload, or none held). Pure; never raises (a malformed
     payload reads as None)."""
     try:
@@ -530,7 +531,8 @@ def _watchlist_checks_held_line(payload) -> "str | None":
         if not isinstance(ch, dict):
             return None
         parts, n = [], 0
-        for kind in ("fit_unknown", "beta_unknown", "tone_unread", macro_read.CHECK_UNREAD):
+        for kind in ("fit_unknown", "beta_unknown", sector_unpriced.CHECK,
+                     "tone_unread", macro_read.CHECK_UNREAD):
             raw = ch.get(kind)
             tickers = [str(t) for t in raw] if isinstance(raw, (list, tuple)) else []
             if tickers:
@@ -2717,6 +2719,8 @@ def _run_scan(now_et, force: bool) -> int:
             if d.get("earnings_waiting"):  _drop.append(f"{d['earnings_waiting']} waiting on earnings")
             if d.get("beta_blocked"):      _drop.append(f"{d['beta_blocked']} portfolio-beta hold")
             if d.get("beta_unknown"):      _drop.append(f"{d['beta_unknown']} beta couldn't be checked")
+            # Buy-check C5 (chunk A): a holding in the pick's sector couldn't be priced.
+            if d.get("fit_unpriced"):      _drop.append(f"{d['fit_unpriced']} sector weight incomplete")
             if _drop:
                 _why += " · dropped: " + ", ".join(_drop)
         else:
@@ -2747,6 +2751,13 @@ def _run_scan(now_et, force: bool) -> int:
                 and state.get("last_fingerprint") == fp and not force):
             _log(f"morning action unchanged since last send (fp={fp}) — no email.")
         else:
+            # Buy-check C5 (chunk A): one amber line when part of the book couldn't be
+            # priced this run; forwarded ONLY then, so a fully priced run renders (and
+            # is called) exactly as before.
+            _unpriced_kw = {}
+            _book_unpriced = sector_unpriced.email_line(payload.get("fit_state"))
+            if _book_unpriced:
+                _unpriced_kw["book_unpriced_line"] = _book_unpriced
             subject, html = render_daily_action_email(
                 top_pick=top_pick,
                 exit_alerts=exit_alerts,
@@ -2757,6 +2768,7 @@ def _run_scan(now_et, force: bool) -> int:
                 exit_check_unavailable=exit_check_unavailable,
                 budget=_budget_for_email,
                 news_feed=payload.get("news_feed"),
+                **_unpriced_kw,
             )
             sent = _send_email("morning-action", subject, html)
             # Save dedup state ONLY on a real send — so a transient Resend failure
@@ -2816,6 +2828,11 @@ def _run_scan(now_et, force: bool) -> int:
                     _k: _wle_payload[_k] for _k in ("fit_read", "beta_read")
                     if _wle_payload.get(_k) is not None
                 }
+                # Buy-check C5 (chunk A): the Watchlist run's own fit state, forwarded
+                # only when part of the book couldn't be priced.
+                _wle_book_unpriced = sector_unpriced.email_line(_wle_payload.get("fit_state"))
+                if _wle_book_unpriced:
+                    _wle_leg_kwargs["unpriced_line"] = _wle_book_unpriced
                 _wle_subject, _wle_html = render_watchlist_entries_email(
                     entries=_wle_entries,
                     built_at=_wle_payload.get("built_at", today_str),
