@@ -737,7 +737,9 @@ def test_app_tone_and_macro_are_read_in_separate_try_blocks():
     assert "    except Exception:" in _CTX_SEG[tone_at:macro_at]
     assert _CTX_SEG.count("    try:\n") >= 3
     # tone survives a macro failure
-    assert '_wl_run_ctx = {"tone_state": _wl_tone_state, "macro_map": None}' in _CTX_SEG
+    # SoldTodayLeak (C5-B): the fallback carries trades_read too (the strict journal read).
+    assert '_wl_run_ctx = {"tone_state": _wl_tone_state, "macro_map": None,' in _CTX_SEG
+    assert '"trades_read": _wl_trades_read}' in _CTX_SEG
 
 
 def test_app_stamps_the_tone_read_time_on_the_market_context_and_uses_it():
@@ -747,7 +749,12 @@ def test_app_stamps_the_tone_read_time_on_the_market_context_and_uses_it():
 
 
 def test_app_banner_gets_home_state_exclusions_and_footer_helper():
-    assert "home_state=_wl_home_state, exclude=_wl_held | _wl_sold_today" in WL
+    assert "home_state=_wl_home_state, exclude=_wl_held | _wl_sold_today," in WL
+    assert "trades_read=_wl_trades_read)" in WL
+    # SoldTodayLeak (C5-B): the sold-today set comes from the strict journal read.
+    assert "_wl_trades = _budget_strict_trades()" in WL
+    assert "_wl_sold_today_raw = tickers_sold_on(_wl_trades, _today_et())" in WL
+    assert 'tickers_sold_on(st.session_state.get("trades_df")' not in WL
     assert "_entry_elig.held_budget_footer(_wl_em_line, _wl_alloc_map)" in WL
     assert "Not counted against today's new-position budget." not in WL
 

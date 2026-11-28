@@ -308,6 +308,12 @@ def _build_context(today: date) -> dict:
             # a truncated frame fabricates a permanent phantom drift on any
             # fractional broker lot).
             "holdings_df": holdings_df, "trades_df": trades_df,
+            # Additive (buy-check C5 chunk B, SoldTodayLeak): False = the STRICT trade
+            # journal read failed, so `trades_df` above is only the lenient empty
+            # stand-in and "nothing sold today" can't be inferred from it. Read by
+            # compute_morning_picks (it holds Grow Today's whole day); compute_eod
+            # ignores it.
+            "trades_read": trades_strict is not None,
             # Additive (2026-09-10) — the already-computed risk-metrics dict
             # (beta, etc.), previously discarded after `fragility` was derived
             # from it. compute_watchlist_entries needs `beta` for its portfolio-
@@ -903,10 +909,16 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
             # could be emailed as "#1 ENTRY TODAY: buy X" and persisted as a
             # new_pick row. Both the scan and intraday lanes reach this one call
             # via compute_morning_picks, so this single kwarg fixes both emails
-            # and this window's ETF same-day-sibling screen-out. Passed bare: a
-            # None trades_df is the documented "no history" input and yields an
-            # empty sold-today set, exactly as on the app side.
+            # and this window's ETF same-day-sibling screen-out.
+            # Buy-check C5 chunk B (SoldTodayLeak): `ctx["trades_df"]` is the LENIENT
+            # frame (an empty stand-in when the strict read failed), which used to
+            # read as "nothing sold today". `trades_unread` carries the strict
+            # read's outcome (`_build_context`'s `trades_read`): False holds Grow
+            # Today's whole day, so the emailed buy-list never lists a name sold
+            # this morning on a day the journal couldn't be read. A ctx without the
+            # key (tests, older callers) is not flagged.
             trades_df=ctx.get("trades_df"),
+            trades_unread=(ctx.get("trades_read") is False),
             beta_fit=_beta_fit,
         )
     except Exception as e:
@@ -968,9 +980,13 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         "sp500_pct":        grow.get("sp500_pct", market_context.get("sp500_pct")),
         "bar":              _bar,
         # Buy-check C4b / C4m: the hold's check name ("tone_unread" /
-        # "tone_not_today" / "macro_unread") when Grow Today held every entry,
-        # else None.
+        # "tone_not_today" / "macro_unread" / "trades_unread") when Grow Today
+        # held every entry, else None.
         "entry_hold":       _hold.get("check") if isinstance(_hold, dict) else None,
+        # SoldTodayLeak (C5-B): the run's strict journal read (False = unread). A bear
+        # day returns before Grow Today's journal hold (entry_hold None), so the cron's
+        # failure line reads this too.
+        "trades_read":      ctx.get("trades_read"),
         "sector_blocked":   len(grow.get("sector_blocked_picks", []) or []),
         "sector_unknown":   len(grow.get("sector_unknown_picks", [])),
         "macro_blocked":    len(grow.get("macro_blocked_picks", []) or []),
@@ -1104,8 +1120,9 @@ def compute_watchlist_entries(
     "reason": str | None, "gate_degraded": bool, "fit_read": bool,
     "beta_read": bool, "fit_state": {"state", "unpriced_sectors", "unpriced"},
     "checks_held": {"fit_unknown": [...], "beta_unknown": [...], "fit_unpriced": [...],
-    "tone_unread": [...], "macro_unread": [...]},
-    "entry_run": {...}, "gate_ledger_rows": [...]}.
+    "tone_unread": [...], "macro_unread": [...], "trades_unread": [...]},
+    "entry_run": {"tone_state", "macro_available", "trades_available"},
+    "gate_ledger_rows": [...]}.
 
     `entry_context` (shared-entry-check chunk 5): compute_morning_picks'
     `entry_context` -- {"market_context", "macro_events"} -- so both emails of
@@ -1277,6 +1294,29 @@ def compute_watchlist_entries(
     except Exception:
         rfr = 0.045
 
+    # Sold-today read (2026-10-11 audit follow-up to B-H1; hoisted above the run
+    # context by buy-check C5 chunk B, SoldTodayLeak). A name the owner SOLD this
+    # morning is no longer held, so D-C's held check lets it through, and nothing
+    # else here remembers the exit -- it could be emailed as "Ready to Enter" hours
+    # after being sold. Same HARD-invariant posture as the protective check below:
+    # read the trade log STRICTLY (`load_trades_or_none`, not `ctx["trades_df"]`,
+    # which comes from the lenient `load_trades()` and collapses a failed read into
+    # an empty frame). Two consequences of a failed read (None): the whole
+    # email-eligible set is suppressed (owner decision 2026-10-12, below), AND the
+    # shared entry check HOLDS every name (`trades_unread`, via the run context's
+    # `trades_read`) so the card, the Watchlist page and the email footer say why,
+    # and the name is not captured as an enter_now call (QB1).
+    sold_today: "set | None"
+    try:
+        sold_today = tickers_sold_on(db.load_trades_or_none(), today)
+    except Exception as e:
+        sold_today = None
+        errors.append(f"trades lookup failed: {e}")
+    if sold_today is None:
+        errors.append("trades unavailable — cannot verify sold-today status, "
+                      "suppressing all entries")
+    _trades_read = sold_today is not None
+
     # ── Shared new-entry check: ONE per-run context (tone + macro map) ──────
     # Same pure helpers the 📋 Watchlist page calls (resolve_tone_state /
     # watchlist_run_ctx / watchlist_ticker_ctx), so the card is identical for
@@ -1306,13 +1346,17 @@ def compute_watchlist_entries(
         entry_context = entry_context if isinstance(entry_context, dict) else {}
     try:
         _entry_run_ctx = watchlist_run_ctx(
-            _ec_tone, entry_context.get("macro_events"), today, datetime.now(_ET))
+            _ec_tone, entry_context.get("macro_events"), today, datetime.now(_ET),
+            trades_read=_trades_read)
     except Exception as e:
-        # Unreadable macro events -> "couldn't run" on every card, tone kept.
+        # Unreadable macro events -> "couldn't run" on every card, tone kept (and the
+        # journal read, which is independent of the macro build, kept too).
         errors.append(f"entry check macro failed: {e}")
-        _entry_run_ctx = {"tone_state": _ec_tone, "macro_map": None}
+        _entry_run_ctx = {"tone_state": _ec_tone, "macro_map": None,
+                          "trades_read": _trades_read}
     _entry_run = {"tone_state": _ec_tone,
-                  "macro_available": not macro_read.map_unread(_entry_run_ctx.get("macro_map"))}
+                  "macro_available": not macro_read.map_unread(_entry_run_ctx.get("macro_map")),
+                  "trades_available": _trades_read}
 
     # ── Per-ticker: bundle load → portfolio_ctx → build_watchlist_recommendation ──
     qualifying: list[dict] = []
@@ -1481,24 +1525,10 @@ def compute_watchlist_entries(
         errors.append(f"exit_signals lookup failed: {e} — cannot verify protective-call "
                       "status, suppressing all entries")
 
-    # Sold-today exclusion (2026-10-11 audit follow-up to B-H1). A name the
-    # owner SOLD this morning is no longer held, so D-C's held check lets it
-    # through, and nothing else here remembers the exit -- it could be
-    # emailed as "Ready to Enter" hours after being sold. Same HARD-invariant
-    # posture as the protective check above: read the trade log STRICTLY
-    # (`load_trades_or_none`, not `ctx["trades_df"]`, which comes from the
-    # lenient `load_trades()` and collapses a failed read into an empty
-    # frame), and on a failed read suppress the whole email-eligible set
-    # (owner decision 2026-10-12). Capture above is unaffected.
-    sold_today: "set | None"
-    try:
-        sold_today = tickers_sold_on(db.load_trades_or_none(), today)
-    except Exception as e:
-        sold_today = None
-        errors.append(f"trades lookup failed: {e}")
-    if sold_today is None:
-        errors.append("trades unavailable — cannot verify sold-today status, "
-                      "suppressing all entries")
+    # Sold-today exclusion: `sold_today` was read STRICTLY above (before the run
+    # context, so a failed read also holds every name as `trades_unread`). A failed
+    # read still suppresses the whole email-eligible set here (owner decision
+    # 2026-10-12) as a second layer; the held cards are never captured above.
 
     # D-C (held) + scanner-Go dedup + protective-call + sold-today exclusion —
     # applied ONLY to derive the email-eligible set, never to the capture above.
@@ -1685,8 +1715,10 @@ def compute_watchlist_entries(
     # buy-check C4m: plus the names held because the macro calendar couldn't be read.
     # buy-check C5 (chunk A): plus the names held because a holding in their sector
     # couldn't be priced (`fit_unpriced`, NEAR_ENTRY cards like fit_unknown).
+    # buy-check C5 chunk B: plus the names held because the trade journal couldn't be
+    # read (`trades_unread`).
     _checks_held = {"fit_unknown": [], "beta_unknown": [], "fit_unpriced": [],
-                    "tone_unread": [], "macro_unread": []}
+                    "tone_unread": [], "macro_unread": [], "trades_unread": []}
     try:
         for _c in all_cards:
             _k = _c.get("suppression_kind")
@@ -1701,6 +1733,9 @@ def compute_watchlist_entries(
             elif (_c.get("action") == "ENTRY_HELD" and _c.get("hold_kind") == "macro_unread"
                     and _tk and _tk not in held_set):
                 _checks_held["macro_unread"].append(_tk)
+            elif (_c.get("action") == "ENTRY_HELD" and _c.get("hold_kind") == "trades_unread"
+                    and _tk and _tk not in held_set):
+                _checks_held["trades_unread"].append(_tk)
     except Exception as e:
         errors.append(f"held-checks summary failed ({e})")
 

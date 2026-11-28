@@ -1392,6 +1392,13 @@ _GATE_FILES = {
     # line); a wrong call reads "couldn't read the calendar" as "no event due" and
     # calls a buy into a CPI / jobs / Fed release, or holds every buy on a good day.
     "stock_analyzer/macro_read.py",
+    # Added 2026-11-28 (SoldTodayLeak, buy-check C5 chunk B,
+    # docs/plans/entry-fail-closed-c5-spec.md section 4): what an unreadable trade
+    # journal means for a new buy (a per-name Watchlist / Analysis / email hold, a
+    # whole-day Grow Today hold, the cron failure line) and the "you sold X today"
+    # Analysis hold; a wrong call reads "couldn't read the journal" as "nothing sold
+    # today" and suggests buying back a name sold this morning, or holds every buy.
+    "stock_analyzer/journal_read.py",
     # Added 2026-11-27 (buy-check C5 chunk A, docs/plans/entry-fail-closed-c5-spec.md):
     # when a partly priced book holds a new buy (an unpriced holding's sector, or every
     # classified sector when its sector can't be named) and the wording every surface

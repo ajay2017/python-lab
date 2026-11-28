@@ -117,6 +117,7 @@ from stock_analyzer import sector_unpriced
 from stock_analyzer import scan_freshness
 from stock_analyzer import tone_freshness
 from stock_analyzer import macro_read
+from stock_analyzer import journal_read
 from stock_analyzer.score_text import composite_score_text
 from stock_analyzer.text_fmt import share_word
 from stock_analyzer import g32_shadow
@@ -880,7 +881,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 corr_coverage: dict | None = None,
                 beta_fit: dict | None = None,
                 scan_state: dict | None = None,
-                macro_unread: bool = False) -> dict:
+                macro_unread: bool = False,
+                trades_unread: bool = False) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -899,6 +901,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                          sector. The default False (every direct caller / test)
                          changes nothing; `build_daily_briefing` is the one
                          production caller and passes `macro_read.events_unread`.
+    trades_unread: buy-check C5 chunk B (SoldTodayLeak). True = the trade journal
+                         couldn't be read, so `sold_today` can't be trusted (an
+                         empty set would read as "nothing sold"): the day is held
+                         whole (`entry_hold.check == "trades_unread"`) after the
+                         macro hold and before the not-today hold. The default
+                         False changes nothing; `build_daily_briefing` is the one
+                         production caller.
     act_today  : output of _act_today — tickers flagged here are excluded.
     review_list: output of _review_list — tickers flagged here (e.g. earnings-
                  overweight or weak-large-position TRIM_TO_TARGET) are ALSO
@@ -1543,6 +1552,14 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # not-today hold, whose "returns after the open" it merges into one banner.
     if macro_unread:
         _entry_hold = macro_read.grow_hold(tone_hold=_entry_hold)
+        return _entry_hold_return()
+
+    # Buy-check C5 chunk B (SoldTodayLeak): an unreadable trade journal can't say which
+    # names were sold today, so it holds the whole day (merging a not-today hold's
+    # "returns after the open"). Order: tone_unread -> bear (G-23 row) -> macro_unread
+    # -> trades_unread -> tone_not_today.
+    if trades_unread:
+        _entry_hold = journal_read.grow_hold(tone_hold=_entry_hold)
         return _entry_hold_return()
 
     if _entry_hold is not None:
@@ -4825,6 +4842,7 @@ def build_daily_briefing(
     corr_coverage: dict | None = None,
     beta_fit: dict | None = None,
     scan_state: dict | None = None,
+    trades_unread: bool = False,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -4894,6 +4912,13 @@ def build_daily_briefing(
                      the saved scan's picks and movers (listed unsized as leads,
                      `scan_hold` carries the banner). None (the default: not
                      wired, tests only) changes nothing.
+    trades_unread:   optional (buy-check C5 chunk B, SoldTodayLeak) True when the
+                     caller's strict read of the trade journal failed. Grow Today
+                     then holds the whole day (`entry_hold.check == "trades_unread"`).
+                     Independent of `trades_df`: a `trades_df` that is not None but
+                     can't be parsed (`sold_today.tickers_sold_on` returns None) is
+                     treated as unread too. `trades_df=None` with `trades_unread=False`
+                     (every caller before C5 and the tests) changes nothing.
 
     Returns dict with: act_today, review_list, grow_today, portfolio_tuneup.
     Grow Today owns every new-position and add-to-winner suggestion (the
@@ -4931,11 +4956,15 @@ def build_daily_briefing(
     # portfolio, so _act_blocked alone has no memory of the exit).
     # The parsing rule is shared with the 📋 Watchlist page and the cron's
     # "Ready to Enter" email (stock_analyzer/sold_today.py) so all three
-    # agree on what "sold today" means. This caller keeps its long-standing
-    # posture of reading "couldn't check" (None) as "nothing sold".
+    # agree on what "sold today" means. Buy-check C5 chunk B (SoldTodayLeak): a
+    # journal that couldn't be read ("couldn't check", None) is NOT "nothing sold":
+    # `_trades_unread` holds Grow Today's whole day. A caller that passes no journal at
+    # all (`trades_df=None`, not flagged unread) keeps the old posture, an empty set.
     from stock_analyzer.sold_today import tickers_sold_on
     _sold_today_or_none = tickers_sold_on(trades_df, today)
     _sold_today: set[str] = set() if _sold_today_or_none is None else _sold_today_or_none
+    _trades_unread = bool(trades_unread) or (
+        trades_df is not None and _sold_today_or_none is None)
 
     # ONE recency window for both news checks (the same `news_window_start(today)`
     # Home's LLM rescore uses -- docs/plans/held-news-coverage.md D-A).
@@ -5045,6 +5074,7 @@ def build_daily_briefing(
                          risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events,
                          macro_unread=macro_read.events_unread(macro_events),
+                         trades_unread=_trades_unread,
                          deterioration=deterioration,
                          movers=movers,
                          winner_profile=winner_profile,

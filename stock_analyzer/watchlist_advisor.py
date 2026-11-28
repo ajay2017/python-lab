@@ -869,6 +869,10 @@ def _build_watchlist_recommendation(
                     gate_ids={"tone": "G-29", "macro": "G-28"},
                     ticker=ticker,
                     news_read_failed=entry_ctx.get("news_read_failed", False),
+                    # Buy-check C5 chunk B: False = the surface's strict journal read
+                    # failed (a `trades_unread` abstention; no ledger row, so no
+                    # _HOLD_SUPPRESSION_KIND entry). None = not wired: no hold.
+                    trades_read=entry_ctx.get("trades_read"),
                 )
             except Exception:
                 _chk = None   # fail CLOSED: _entry_held_card builds check_failed
