@@ -555,7 +555,7 @@ def _watchlist_checks_held_line(payload) -> "str | None":
     """The scan-log line for names the Watchlist HELD because a buy check couldn't
     run (entry-fail-closed C2a): "watchlist: N held, a check couldn't run
     (fit_unknown: X, Y; beta_unknown: Z; fit_unpriced: U; tone_unread: W; macro_unread: V;
-    trades_unread: T)", or None when there is nothing to say (no
+    trades_unread: T; earnings_unknown: E)", or None when there is nothing to say (no
     `checks_held` in the payload, or none held). Pure; never raises (a malformed
     payload reads as None)."""
     try:
@@ -564,7 +564,8 @@ def _watchlist_checks_held_line(payload) -> "str | None":
             return None
         parts, n = [], 0
         for kind in ("fit_unknown", "beta_unknown", sector_unpriced.CHECK,
-                     "tone_unread", macro_read.CHECK_UNREAD, journal_read.CHECK_UNREAD):
+                     "tone_unread", macro_read.CHECK_UNREAD, journal_read.CHECK_UNREAD,
+                     "earnings_unknown"):
             raw = ch.get(kind)
             tickers = [str(t) for t in raw] if isinstance(raw, (list, tuple)) else []
             if tickers:
@@ -2753,6 +2754,8 @@ def _run_scan(now_et, force: bool) -> int:
             if d.get("beta_unknown"):      _drop.append(f"{d['beta_unknown']} beta couldn't be checked")
             # Buy-check C5 (chunk A): a holding in the pick's sector couldn't be priced.
             if d.get("fit_unpriced"):      _drop.append(f"{d['fit_unpriced']} sector weight incomplete")
+            # Buy-check C3b: the pick's next earnings date couldn't be confirmed.
+            if d.get("earnings_unknown"):  _drop.append(f"{d['earnings_unknown']} earnings date unconfirmed")
             if _drop:
                 _why += " · dropped: " + ", ".join(_drop)
         else:

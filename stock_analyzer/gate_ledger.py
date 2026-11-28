@@ -75,7 +75,9 @@ _BUCKET_LANES: dict[str, str] = {
     # row (a "couldn't check" hold, not a measured breach). Likewise
     # `fit_unpriced_picks` (buy-check C5: a holding in the pick's sector couldn't be
     # priced) and an `entry_held_adds` item with check "fit_unpriced" (gate_id None,
-    # skipped above): abstentions, never ledgered.
+    # skipped above): abstentions, never ledgered. Likewise `earnings_unknown_picks`
+    # (buy-check C3b: the next earnings date couldn't be confirmed) and an
+    # `entry_held_adds` item with check "earnings_unknown": no gate id, no ledger row.
     "beta_blocked_picks":        "new_pick",
     "beta_blocked_adds":         "add_winner",
 }

@@ -897,6 +897,11 @@ def _build_watchlist_recommendation(
             if _held_card is not None:
                 return _held_card
 
+        # Buy-check C3b: when the earnings check passed WITH a note (no date announced,
+        # or it just reported), the card says so instead of "No imminent earnings risk".
+        _earn_pass = next((p.get("detail") for p in (_entry_passed or [])
+                           if isinstance(p, dict) and p.get("check") == "earnings"
+                           and p.get("detail")), None)
         _enter_card = _card(
             ticker, "ENTER_NOW", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
@@ -928,7 +933,8 @@ def _build_watchlist_recommendation(
                 f"Signal: {rec_label}",
                 f"Price {zone_word(price, entry_lo, in_zone)} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
                 f"R:R {rr:.1f}:1 — above {RR_ENTRY_MIN:.0f}:1 minimum" if rr else "Risk/reward acceptable",
-                f"No imminent earnings risk" if not earn_soon else "",
+                (f"Earnings: {_earn_pass}" if _earn_pass else "No imminent earnings risk")
+                if not earn_soon else "",
             ],
             # Deliberately EMPTY on this branch (2026-08-28). It used to carry
             # `f"Portfolio fit caution: {soft_caution}"` — the same string

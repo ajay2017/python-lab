@@ -528,7 +528,7 @@ def test_build_daily_briefing_top_level_keys_exclude_grow_today_fields():
     assert set(brief.keys()) == {
         "act_today", "review_list", "grow_today", "portfolio_tuneup",
         "portfolio_tuneup_deferred", "risk_off_unchecked", "news_flags",
-        "breach_alternates",
+        "breach_alternates", "earnings_unconfirmed",
     }
     assert brief["portfolio_tuneup_deferred"] == {}
     assert brief["breach_alternates"] == {}          # no breach, no second pass

@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import math
 
+from stock_analyzer import buy_check_state
 from stock_analyzer import entry_eligibility
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
+    EARNINGS_IMMINENT_DAYS,
     MARKET_TONE_BEAR_PCT,
     RR_ENTRY_MIN,
     RR_FAVOURABLE_MIN,
@@ -174,8 +176,29 @@ def home_grow_hold(home_synth, today_iso):
     return None
 
 
+def _redeploy_earnings_text(bundle, today) -> "str | None":
+    """Why the named ticker's EARNINGS leg keeps the redeploy headline from calling an
+    entry (buy-check C3b, owner Q9), else None: "earnings today" / "earnings in Nd" for an
+    imminent date (0 to EARNINGS_IMMINENT_DAYS days), or "its next earnings date couldn't
+    be confirmed" when ``buy_check_state.earnings_unknown_hold`` holds it. ``today`` is
+    the caller's ET date; None (or no bundle) skips the leg, so every caller that does
+    not pass it reads as before. An unreadable bundle fails CLOSED. Never raises."""
+    if bundle is None or today is None:
+        return None
+    try:
+        raw = bundle.get("earnings") if isinstance(bundle, dict) else None
+        d = entry_eligibility._days_until(raw, today) if raw else None
+        if d is not None and 0 <= d <= EARNINGS_IMMINENT_DAYS:
+            return "earnings are today" if d == 0 else f"earnings are in {d}d"
+        if buy_check_state.earnings_unknown_hold(bundle, d) is not None:
+            return "its next earnings date couldn't be confirmed"
+        return None
+    except Exception:
+        return "its next earnings date couldn't be checked"
+
+
 def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
-                  home_state=None, grow_hold=None) -> dict:
+                  home_state=None, grow_hold=None, today=None) -> dict:
     """What the redeploy headline may say given today's entry posture.
 
     ``headline`` is a ``rr_readout.redeploy_headline`` dict; ``posture`` is the
@@ -193,7 +216,12 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
     is the hold dict from ``tone_freshness.redeploy_grow_hold``: when Grow Today
     holds every entry (market move unread / not today's session) an "entry"
     headline on an open or flat posture is NOT an entry call, and says why.  A
-    risk-off posture keeps its Protect Mode text."""
+    risk-off posture keeps its Protect Mode text.
+
+    ``today`` (buy-check C3b, owner Q9) is the caller's ET date: with it, an "entry"
+    headline on an open posture whose ticker has earnings within EARNINGS_IMMINENT_DAYS,
+    or whose next earnings date couldn't be confirmed, is NOT called as an entry and says
+    so. ``None`` (the default) skips that leg."""
     h = headline if isinstance(headline, dict) else {}
     state = h.get("state")
     p = posture if isinstance(posture, dict) else {}
@@ -223,11 +251,13 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
     out["invite_own_pick"] = False
     hold = None
     hold_failed = False
+    earn_txt = None
     if kind == "open" and bundle is not None:
         try:
             hold = data_trust_hold(bundle)
         except Exception:
             hold_failed = True  # an unreadable bundle can't be confirmed clean
+        earn_txt = _redeploy_earnings_text(bundle, today)
 
     try:
         t = h.get("ticker")
@@ -246,6 +276,11 @@ def redeploy_call(headline, posture, *, bundle=None, site: str = "home",
                 f"R:R {rr}:1 ≥ {RR_ENTRY_MIN:g}:1) on its own numbers, but 🏠 Grow "
                 f"Today holds new entries: {why}."
                 + (f" They return {clears}." if clears else "")))
+        elif kind == "open" and hold is None and not hold_failed and earn_txt:
+            out.update(level="warning", icon="⚠️", text=(
+                f"**{t}**{sec} clears the Buy gate ({s} ≥ {COMPOSITE_BUY:.0f} · "
+                f"R:R {rr}:1 ≥ {RR_ENTRY_MIN:g}:1) on its own numbers, but {earn_txt}, "
+                "so it isn't called as an entry here."))
         elif kind == "open" and hold is None and not hold_failed:
             out.update(
                 entry_called=True, level="success", icon="🎯", invite_own_pick=True,

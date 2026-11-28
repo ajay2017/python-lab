@@ -114,6 +114,8 @@ from stock_analyzer import act_trim_fold
 from stock_analyzer import breach_recovery
 from stock_analyzer import beta_fit_gate
 from stock_analyzer import sector_unpriced
+from stock_analyzer import buy_check_state
+from stock_analyzer import earnings_date
 from stock_analyzer import scan_freshness
 from stock_analyzer import tone_freshness
 from stock_analyzer import macro_read
@@ -1334,7 +1336,20 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             return "G-26"
         if cluster_add_blocks is not None and _tu in cluster_add_blocks and not _is_thin(cluster_add_blocks[_tu]):
             return "G-25"
-        if not _entry_verdict(_r)["eligible"]:
+        _ev = _entry_verdict(_r)
+        if not _ev["eligible"]:
+            # Buy-check C3b: an ENTRY hold made ONLY of data abstentions (an unconfirmed
+            # earnings date) must not hide a measured G-06 breach: test it first so the
+            # ledgered hold keeps its bucket and row. Any policy hold (stale, news,
+            # imminent earnings, a crashed check) keeps "ENTRY" exactly as before.
+            _ev_holds = _ev.get("holds")
+            if (isinstance(_ev_holds, list) and _ev_holds
+                    and all(isinstance(_h, dict)
+                            and _h.get("check") in entry_eligibility._ABSTENTION_CHECKS
+                            for _h in _ev_holds)):
+                _bd0 = _add_beta_decision(_r)
+                if _bd0 is not None and _bd0["state"] == beta_fit_gate.STATE_BLOCKED:
+                    return "G-06"
             return "ENTRY"
         _bd = _add_beta_decision(_r)
         if _bd is not None and _bd["state"] == beta_fit_gate.STATE_BLOCKED:
@@ -1448,6 +1463,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "beta_unknown_picks":         [],
             "beta_blocked_adds":          [],
             "fit_unpriced_picks":         [],
+            "earnings_unknown_picks":     [],
             "scan_hold":                  _scan_hold_out(),
             "overflow_picks":             [],
             "flat_day_held":              [],
@@ -1512,6 +1528,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "beta_blocked_adds":          [],
             # Buy-check C5: always present as a list; a bear day picks nothing.
             "fit_unpriced_picks":         [],
+            # Buy-check C3b: always present as a list; a bear day picks nothing.
+            "earnings_unknown_picks":     [],
             # Beta-gate C3: always present (None when not wired or fresh).
             "scan_hold":                  _scan_hold_out(),
             # Grow Today owns every buy (2026-10-15): on a bear day nothing is
@@ -1601,6 +1619,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # Buy-check C5 (chunk A): a pick in the sector of a holding the frame left out
     # for want of a price (no gate id, no ledger row, never an ETF pick).
     fit_unpriced_picks: list[dict] = []
+    # Buy-check C3b: a pick whose next earnings date couldn't be confirmed (no gate id,
+    # no ledger row). Checked after the beta and unpriced holds, before sizing.
+    earnings_unknown_picks: list[dict] = []
 
     # Build ONE candidate pool from two sources so the user sees a single
     # "New Positions to Initiate" list regardless of where a ticker came from:
@@ -2098,6 +2119,33 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "clears_when":     _up["clears_when"],
                     "kind":            sector_unpriced.CHECK,
                     "unpriced":        list(_up["tickers"]),
+                    "gate_id":         None,
+                    "counterfactual":  True,
+                    "gate_value":      None,
+                    "gate_threshold":  None,
+                    "price":           price,
+                })
+                continue
+
+            # Buy-check C3b: the next earnings date couldn't be confirmed (the Yahoo date
+            # on file has passed with no FMP confirmation, a read failed, or the data is
+            # a saved copy), so a buy could land just before a report. AFTER the G-06
+            # beta hold and the unpriced-sector hold (their buckets / ledger rows stay
+            # byte-identical; an imminent KNOWN date was caught above as earnings_waiting)
+            # and before sizing. No gate id, no ledger row, no sizing, no _g32_pick_src
+            # entry. A bundle with no `earnings_resolved` stamp holds nothing.
+            _eu = buy_check_state.earnings_unknown_hold(_comp_data, xref.get("earn_days"))
+            if _eu is not None:
+                earnings_unknown_picks.append({
+                    "ticker":          ticker,
+                    "sector":          sector,
+                    "score":           _f(row.get("Score", 0)),
+                    "momentum_score":  _f(row.get("Score"), None),
+                    "composite_score": _composite_score,
+                    "is_mover":        is_mover,
+                    "reason":          _eu["reason"],
+                    "clears_when":     _eu["clears_when"],
+                    "kind":            buy_check_state.CHECK_EARNINGS_UNKNOWN,
                     "gate_id":         None,
                     "counterfactual":  True,
                     "gate_value":      None,
@@ -3231,6 +3279,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         # Buy-check C5 (chunk A): always a list, never omitted. A held name's add
         # in the unpriced sector rides entry_held_adds (check "fit_unpriced").
         "fit_unpriced_picks":         fit_unpriced_picks,
+        # Buy-check C3b: always a list, never omitted. A held name's add with an
+        # unconfirmed earnings date rides entry_held_adds (check "earnings_unknown").
+        "earnings_unknown_picks":     earnings_unknown_picks,
         # Beta-gate C3: always present (None when not wired or fresh).
         "scan_hold":                  _scan_hold_out(),
         # Grow Today owns every buy (2026-10-15, OP-07 "gate the call, never
@@ -3254,6 +3305,49 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         # verify"; [] means "verified, nothing expired".  Never gates a pick.
         "macro_coverage_expired":     _expired_macro_series(today),
     }
+
+
+def _earnings_unconfirmed_items(port_df, held_data, act_today, deterioration=None) -> list:
+    """Held names whose next earnings date couldn't be confirmed AND whose weight is above
+    the earnings-week line (buy-check C3b, owner Q6: one Review caption, never a trade).
+
+    A name qualifies when its bundle's `earnings_resolved.state` is "failed" (a Yahoo date
+    that has passed with no confirmation, a failed read, or a saved copy), it isn't fully
+    exited in today's Act Today (a stop breach / deterioration exit sells it all), and
+    `trim_sizing.earnings_week_decision` would trim at least one whole share if the report
+    were this week. Each item is {ticker, on_file, weight, floor_pct, reason, line}; `line`
+    is `earnings_date.held_unconfirmed_line` (None -> the name isn't listed). No trade and
+    no Act card come from it. A bundle with no `earnings_resolved` stamp (legacy) is
+    skipped. Returns [] when nothing qualifies or on any error (a caption, not a gate)."""
+    out: list = []
+    try:
+        if port_df is None or getattr(port_df, "empty", True) or not isinstance(held_data, dict):
+            return []
+        _full_exit = risk_off_pool.full_exit_names(act_today, deterioration)
+        _n_pos = len(port_df)
+        for ticker, data in held_data.items():
+            er = data.get("earnings_resolved") if isinstance(data, dict) else None
+            if not isinstance(er, dict) or er.get("state") != earnings_date.STATE_FAILED:
+                continue
+            if str(ticker).upper() in _full_exit:
+                continue
+            pm = _port_rows(port_df, ticker)
+            if pm.empty:
+                continue
+            weight = _f(pm["Weight (%)"].iloc[0])
+            dec = _trim_sizing.earnings_week_decision(
+                weight, _n_pos, _trim_sizing.exact_shares(pm.iloc[0]))
+            if dec is None or dec["trim_shares"] < 1:
+                continue
+            line = earnings_date.held_unconfirmed_line(ticker, er, weight, dec["floor_pct"])
+            if line is None:
+                continue
+            out.append({"ticker": str(ticker), "on_file": er.get("yahoo_date"),
+                        "weight": weight, "floor_pct": dec["floor_pct"],
+                        "reason": er.get("reason"), "line": line})
+        return out
+    except Exception:
+        return []
 
 
 # ── Act Today ─────────────────────────────────────────────────────────────────
@@ -5113,6 +5207,10 @@ def build_daily_briefing(
                "grow_today": grow, "portfolio_tuneup": tuneup,
                "portfolio_tuneup_deferred": _tuneup_deferred,
                "risk_off_unchecked": _ro_unchecked,
+               # Buy-check C3b (Q6): held names with an unconfirmed earnings date over the
+               # earnings-week line; one Review caption, no trade (render-only).
+               "earnings_unconfirmed": _earnings_unconfirmed_items(
+                   port_df, held_data, act, deterioration),
                "news_flags": held_news_check.news_flags_from_detectors(_nf_crit, _nf_warn)}
     _nf_disclosure = brief_news_disclosure(news_feed)
     if _nf_disclosure is not None:

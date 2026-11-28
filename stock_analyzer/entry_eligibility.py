@@ -15,6 +15,7 @@ import math
 from datetime import date, time as _time
 from zoneinfo import ZoneInfo
 
+from stock_analyzer import buy_check_state as _bcs
 from stock_analyzer import journal_read as _jr
 from stock_analyzer import macro_read as _mr
 from stock_analyzer import macro_sector_gate as _msg
@@ -26,6 +27,7 @@ from stock_analyzer.news_feed import (
 
 from stock_analyzer.constants import (
     EARNINGS_IMMINENT_DAYS,
+    EARNINGS_PAST_DATE_HOLD_DAYS,
     GROW_TODAY_MAX_FUND_AGE_DAYS,
     MACRO_IMMINENT_DAYS,
     MARKET_TONE_BEAR_PCT,
@@ -341,6 +343,17 @@ def check_earnings(ctx):
             "clears_when": "the report is out",
             "gate_value": d, "gate_threshold": EARNINGS_IMMINENT_DAYS,
         }
+    # Buy-check C3b: the imminent policy hold above binds first. Then a date that
+    # couldn't be confirmed HOLDS the name (`earnings_unknown`, an abstention: no gate
+    # id, no ledger row). A bundle with no `earnings_resolved` stamp (legacy / test, or
+    # no bundle at all) is unchanged.
+    b = ctx.get("bundle")
+    h = _bcs.earnings_unknown_hold(b, d)
+    if h is not None:
+        return h
+    note = _bcs.earnings_pass_note(b)
+    if note:
+        return {"kind": "passed", "check": "earnings", "detail": note}
     return None
 
 
@@ -364,7 +377,8 @@ DEFAULT_GATE_IDS = {"tone": None, "macro": None}
 # Holds that are a check that couldn't run (a data abstention), not a policy
 # gate. When a policy hold fires on the same name it binds instead, so the
 # ledgered gate row (G-28 etc.) is never lost behind an abstention.
-_ABSTENTION_CHECKS = frozenset({"tone_unread", _mr.CHECK_UNREAD, _jr.CHECK_UNREAD})
+_ABSTENTION_CHECKS = frozenset({"tone_unread", _mr.CHECK_UNREAD, _jr.CHECK_UNREAD,
+                                _bcs.CHECK_EARNINGS_UNKNOWN})
 
 
 def _binding_hold(holds):
@@ -600,6 +614,7 @@ def watchlist_banner(tone_state, macro_map, recs, home_state=None, exclude=(),
     ``{"protect": None | {"title", "body", "source"},
     "unread": None | {"title", "body"}, "macro_unread": None | {"title", "body"},
     "trades_unread": None | {"title", "body"},
+    "earnings_unknown": None | {"title", "body"},
     "tone_line": str | None, "notes": [str, ...]}``.
     ``protect`` is set on a bear tone; "matching 🏠 Home" is said ONLY when the
     tone really came from Home's Brief. ``unread`` is set when the market move
@@ -611,6 +626,9 @@ def watchlist_banner(tone_state, macro_map, recs, home_state=None, exclude=(),
     (buy-check C4m: new entries are HELD; its list is the names held only by that
     check, or none when the tone is also unread -- the tone ``unread`` block then
     lists every name held only by either check, one list, never two).
+    ``earnings_unknown`` (buy-check C3b) is set when at least one name is held ONLY by
+    the unconfirmed-earnings-date check: it lists those names (minus ``exclude``) and is
+    None when there are none (the hold is per name, not run-level).
     ``trades_unread`` is set when ``trades_read`` is False (buy-check C5 chunk B:
     the trade journal couldn't be read, so the app can't tell which names were sold
     today; new entries are HELD). ONE list across the unread blocks: the first
@@ -684,8 +702,22 @@ def watchlist_banner(tone_state, macro_map, recs, home_state=None, exclude=(),
                        "you sold today. Clears when the trade journal can be read — "
                        "re-checked every time you open this page."),
         }
+    earnings_unknown = None
+    _etickers = _tickers_held_only_by(recs, _bcs.CHECK_EARNINGS_UNKNOWN, exclude)
+    if _etickers:
+        _en = len(_etickers)
+        earnings_unknown = {
+            "title": "Earnings date unconfirmed — new entries held",
+            "body": (f"{_en} name{'s' if _en != 1 else ''} would otherwise be Ready: "
+                     f"{', '.join(_etickers)}. "
+                     f"{'Their' if _en != 1 else 'Its'} next earnings date couldn't be "
+                     "confirmed, and a buy just before a report is what this check stops. "
+                     "Clears when the date is confirmed (re-checked each time the data "
+                     "reloads); a date on file that passed more than "
+                     f"{EARNINGS_PAST_DATE_HOLD_DAYS} days ago stops holding."),
+        }
     return {"protect": protect, "unread": unread, "macro_unread": macro_unread,
-            "trades_unread": trades_unread,
+            "trades_unread": trades_unread, "earnings_unknown": earnings_unknown,
             "tone_line": None if protect is not None else tone_line(ts, home_state),
             "notes": notes}
 
@@ -780,6 +812,8 @@ HELD_KIND_LABELS = {
     # entry-fail-closed C2a: a portfolio-fit / beta check that couldn't run
     "fit_unknown": "portfolio fit couldn't be checked",
     "beta_unknown": "portfolio beta couldn't be checked",
+    # buy-check C3b: the next earnings date couldn't be confirmed
+    "earnings_unknown": "earnings date unconfirmed",
 }
 
 

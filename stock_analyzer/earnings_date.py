@@ -297,13 +297,17 @@ def display(resolved, today) -> dict:
 def held_unconfirmed_line(ticker, resolved, weight, floor_pct) -> "str | None":
     """The one-line Review caption for a HELD name whose earnings date is unconfirmed
     (spec Q6; wired in C3b): None unless `resolved` is a failed read and `weight` /
-    `floor_pct` are finite numbers. `floor_pct` is the earnings-week line the caller's
-    rule uses (never chosen here). Plain text: no `$`, no `**`. Never raises."""
+    `floor_pct` are finite numbers and `weight` is above `floor_pct` (the text says so).
+    `floor_pct` is the earnings-week line the caller's rule uses (never chosen here). Plain text: no `$`, no `**`. Never raises."""
     try:
         if not isinstance(resolved, dict) or resolved.get("state") != STATE_FAILED:
             return None
         w, fl = float(weight), float(floor_pct)
         if not (math.isfinite(w) and math.isfinite(fl)) or isinstance(weight, bool):
+            return None
+        # The line says the weight is ABOVE the earnings-week line: say nothing when it
+        # isn't (buy-check C3b; the C3a reviewer's note).
+        if not w > fl:
             return None
         t = str(ticker or "").strip().upper()
         if not t:

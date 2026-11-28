@@ -781,7 +781,7 @@ def test_ctx_not_ok_holds_every_name_no_entries_no_capture_no_ledger(reason):
     assert r["gate_ledger_rows"] == []             # a data abstention: no ledger row
     assert r["fit_state"] == {"state": "unknown", "unpriced_sectors": None, "unpriced": None}
     assert r["fit_read"] is False and r["gate_degraded"] is True
-    assert r["checks_held"] == {"fit_unknown": [SEMIS], "beta_unknown": [], "fit_unpriced": [], "tone_unread": [], "macro_unread": [], "trades_unread": []}
+    assert r["checks_held"] == {"fit_unknown": [SEMIS], "beta_unknown": [], "fit_unpriced": [], "tone_unread": [], "macro_unread": [], "trades_unread": [], "earnings_unknown": []}
 
 
 def test_ctx_ok_with_an_empty_frame_holds_too():
@@ -797,7 +797,7 @@ def test_no_holdings_is_a_true_zero_book_and_entries_flow():
     assert spy[0][3]["action"] == "ENTER_NOW"
     assert [e["ticker"] for e in r["entries"]] == [SEMIS]
     assert r["fit_state"] == {"state": "flat", "unpriced_sectors": None, "unpriced": None}
-    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [], "fit_unpriced": [], "tone_unread": [], "macro_unread": [], "trades_unread": []}
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [], "fit_unpriced": [], "tone_unread": [], "macro_unread": [], "trades_unread": [], "earnings_unknown": []}
     assert r["fit_read"] is True and r["gate_degraded"] is False
 
 
@@ -833,7 +833,7 @@ def test_a_real_g05_breach_binds_and_is_ledgered_with_fit_state_passed():
     assert spy[0][3]["suppression_kind"] == "sector"
     assert [(x["ticker"], x["gate_id"]) for x in r["gate_ledger_rows"]] == [(SEMIS, "G-05")]
     assert r["entries"] == []
-    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [], "fit_unpriced": [], "tone_unread": [], "macro_unread": [], "trades_unread": []}   # not a data hold
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [], "fit_unpriced": [], "tone_unread": [], "macro_unread": [], "trades_unread": [], "earnings_unknown": []}   # not a data hold
 
 
 def test_beta_unknown_holds_when_the_unread_leg_could_bind():
@@ -843,7 +843,7 @@ def test_beta_unknown_holds_when_the_unread_leg_could_bind():
     assert spy[0][3]["suppression_kind"] == "beta_unknown"
     assert r["entries"] == [] and r["gate_ledger_rows"] == []
     save.assert_not_called()
-    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [SEMIS], "fit_unpriced": [], "tone_unread": [], "macro_unread": [], "trades_unread": []}
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [SEMIS], "fit_unpriced": [], "tone_unread": [], "macro_unread": [], "trades_unread": [], "earnings_unknown": []}
     # ticker beta unread + portfolio beta over the ceiling -> held
     r2, *_ = _wle(entry_context=FLAT_CTX, bundle=_bundle(), ctx=_ok_ctx(beta=1.5))
     assert r2["entries"] == [] and r2["checks_held"]["beta_unknown"] == [SEMIS]
@@ -859,7 +859,7 @@ def test_beta_unread_but_unable_to_bind_still_emails_the_name():
 def test_a_held_in_portfolio_name_is_not_counted_in_checks_held():
     ctx = {"ok": False, "reason": "no_bundles", "errors": ["x"]}
     r, *_ = _wle(entry_context=FLAT_CTX, ctx=ctx, held=(SEMIS,))
-    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [], "fit_unpriced": [], "tone_unread": [], "macro_unread": [], "trades_unread": []}
+    assert r["checks_held"] == {"fit_unknown": [], "beta_unknown": [], "fit_unpriced": [], "tone_unread": [], "macro_unread": [], "trades_unread": [], "earnings_unknown": []}
 
 
 def test_scan_with_every_name_held_sends_no_email_and_logs_the_line(monkeypatch):

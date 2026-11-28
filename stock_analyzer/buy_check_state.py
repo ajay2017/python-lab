@@ -42,17 +42,18 @@ Buy-check C3a: a bundle that carries `earnings_resolved` (every `load_bundle` bu
 the answer adds `reason` and two more pass states, `reported` (FMP shows a recent report
 with an actual EPS) and `reported_unconfirmed` (Yahoo's date is older than
 EARNINGS_PAST_DATE_HOLD_DAYS, no next date anywhere). A past Yahoo date within that hold
-window reads `failed` (reason `past_unconfirmed` / `past_unchecked`). Still nothing here
-holds a buy: the hold is C3b.
+window reads `failed` (reason `past_unconfirmed` / `past_unchecked`). Buy-check C3b
+(this edit) adds the hold itself: `earnings_unknown_hold` (consumed by
+`entry_eligibility.check_earnings` and Grow Today) and `earnings_pass_note`.
 """
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import date as _date, datetime, timedelta
 
 from stock_analyzer import asset_type
 from stock_analyzer.constants import (
-    PORTFOLIO_BETA_CEILING, TICKER_BETA_CRITICAL, UNCLASSIFIED_SECTOR,
+    EARNINGS_PAST_DATE_HOLD_DAYS, PORTFOLIO_BETA_CEILING, TICKER_BETA_CRITICAL, UNCLASSIFIED_SECTOR,
 )
 from stock_analyzer.portfolio import resolve_sector
 
@@ -84,7 +85,7 @@ def _state_from_resolved(er: dict) -> dict:
     """earnings_state for a bundle that carries `earnings_resolved` (buy-check C3a): the
     producer already resolved the date, so this only maps its state. `reason` is the
     resolver's (None unless failed). An unknown state, or a `date` that doesn't parse,
-    reads failed. Nothing holds a buy on this yet (C3b)."""
+    reads failed. `earnings_unknown_hold` turns a failed read into a buy hold."""
     st = er.get("state")
     reason = er.get("reason")
     if st == STATE_DATE:
@@ -126,6 +127,139 @@ def earnings_state(bundle) -> dict:
         return dict(_FAILED)
     except Exception:
         return dict(_FAILED)
+
+
+# ── The earnings-unconfirmed buy hold (buy-check C3b) ───────────────────────────
+CHECK_EARNINGS_UNKNOWN = "earnings_unknown"
+
+_EARN_CLEARS_WHEN = ("the next earnings date can be read (re-checked each time the "
+                     "data reloads)")
+
+
+def _short_date(iso) -> "str | None":
+    """'Mon Nov 23' for an ISO date string (no zero-padded day), else None."""
+    s = _parse_date(iso)
+    if s is None:
+        return None
+    d = _date.fromisoformat(s)
+    return f"{d:%a %b} {d.day}"
+
+
+def _past_date_clears_when(yahoo_iso) -> str:
+    """The clears-when for a held past Yahoo date: confirmed, or the day the app stops
+    treating the date on file as a recent report (that date + EARNINGS_PAST_DATE_HOLD_DAYS
+    + 1). A name outside FMP's sample is never "confirmed", so the age is the honest
+    second exit."""
+    s = _parse_date(yahoo_iso)
+    if s is None:
+        return _EARN_CLEARS_WHEN
+    end = _date.fromisoformat(s) + timedelta(days=EARNINGS_PAST_DATE_HOLD_DAYS + 1)
+    return (f"the next earnings date is confirmed, or on {end:%a %b} {end.day} "
+            f"(more than {EARNINGS_PAST_DATE_HOLD_DAYS} days after the date on file, when the app "
+            "stops treating it as a recent report)")
+
+
+def _earn_hold(reason: str, clears_when: "str | None" = None) -> dict:
+    return {"kind": "hold", "check": CHECK_EARNINGS_UNKNOWN, "gate_id": None,
+            "reason": reason, "clears_when": clears_when or _EARN_CLEARS_WHEN,
+            "gate_value": None, "gate_threshold": None}
+
+
+def earnings_unknown_hold(bundle, earnings_days) -> "dict | None":
+    """The entry hold for a name whose next earnings date couldn't be confirmed, else
+    None (buy-check C3b; docs/plans/entry-fail-closed-c3-spec.md "The buy hold").
+
+    Reads `bundle["earnings_resolved"]` (`earnings_date.resolve`, stamped once by
+    `bundle_loader.load_bundle`). A bundle without one (a legacy / test bundle, or not a
+    dict), an ETF / fund, `no_date` (a fresh listing), `reported` and
+    `reported_unconfirmed` all return None (they pass). A `date` state returns None for
+    `earnings_days` >= 0 (an imminent date is the existing earnings hold, checked first
+    by `check_earnings`; a later one is a real date); `earnings_days` None holds ("the
+    earnings date couldn't be placed on the calendar") and a negative one holds ("has
+    passed since the data loaded"). A `failed` state holds by its reason.
+    The hold is an abstention: gate_id None, no gate-ledger row. Plain text, no `$`, no
+    `**`. Never raises (a malformed input reads as no hold only when it carries no
+    resolved stamp; a malformed stamp holds)."""
+    try:
+        if not isinstance(bundle, dict):
+            return None
+        if bundle.get("asset_type") == asset_type.ASSET_TYPE_ETF:
+            return None
+        er = bundle.get("earnings_resolved")
+        if not isinstance(er, dict):
+            return None
+        st = er.get("state")
+        if st in (STATE_NOT_APPLICABLE, STATE_NO_DATE, STATE_REPORTED,
+                  STATE_REPORTED_UNCONFIRMED):
+            return None
+        if st == STATE_DATE:
+            on_file = _short_date(er.get("date"))
+            days = earnings_days
+            if (isinstance(days, bool) or not isinstance(days, (int, float))
+                    or not math.isfinite(days)):
+                return _earn_hold("the earnings date couldn't be placed on the calendar")
+            if days < 0:
+                return _earn_hold(
+                    (f"the earnings date on file ({on_file}) has passed since the data loaded"
+                     if on_file else
+                     "the earnings date on file has passed since the data loaded"))
+            return None
+        if st == STATE_FAILED:
+            reason = er.get("reason")
+            on_file = _short_date(er.get("yahoo_date"))
+            if reason == "past_unconfirmed" and on_file:
+                return _earn_hold(f"the earnings date on file ({on_file}) has passed and "
+                                  "the next one couldn't be confirmed",
+                                  _past_date_clears_when(er.get("yahoo_date")))
+            if reason == "past_unchecked" and on_file:
+                return _earn_hold(f"the earnings date on file ({on_file}) has passed and "
+                                  "the earnings calendar couldn't be read to confirm the "
+                                  "next one",
+                                  _past_date_clears_when(er.get("yahoo_date")))
+            if reason == "stale_copy":
+                return _earn_hold("a saved copy of the data can't show the earnings date")
+            return _earn_hold("the next earnings date couldn't be read")
+        # An unknown / malformed state: the date was not resolved -> hold.
+        return _earn_hold("the next earnings date couldn't be read")
+    except Exception:
+        return _earn_hold("the next earnings date couldn't be read")
+
+
+def earnings_pass_note(bundle) -> "str | None":
+    """A short plain-text note for an earnings check that PASSED with something worth
+    saying (buy-check C3b), else None: `no_date` "no earnings date announced yet";
+    `reported` "reported on Wed Nov 19; the next date isn't on the calendar yet";
+    `reported_unconfirmed` "...; the next date isn't announced yet"; a `date` whose two
+    sources disagree "Yahoo shows Thu Dec 3, the FMP calendar Tue Dec 1; the earlier date
+    is used." A plain date, a fund and a bundle without a resolved stamp return None.
+    Never raises."""
+    try:
+        if not isinstance(bundle, dict):
+            return None
+        if bundle.get("asset_type") == asset_type.ASSET_TYPE_ETF:
+            return None
+        er = bundle.get("earnings_resolved")
+        if not isinstance(er, dict):
+            return None
+        st = er.get("state")
+        if st == STATE_NO_DATE:
+            return "no earnings date announced yet"
+        if st in (STATE_REPORTED, STATE_REPORTED_UNCONFIRMED):
+            when = _short_date(er.get("last_reported"))
+            head = f"reported on {when}" if when else "reported recently"
+            tail = ("the next date isn't on the calendar yet" if st == STATE_REPORTED
+                    else "the next date isn't announced yet")
+            return f"{head}; {tail}"
+        if st == STATE_DATE:
+            dis = er.get("disagree")
+            if isinstance(dis, dict):
+                y, f = _short_date(dis.get("yahoo")), _short_date(dis.get("fmp"))
+                if y and f:
+                    return (f"Yahoo shows {y}, the FMP calendar {f}; the earlier date "
+                            "is used.")
+        return None
+    except Exception:
+        return None
 
 
 # ── Portfolio-fit state (docs/plans/entry-fail-closed.md §2, chunk C2a) ──────────

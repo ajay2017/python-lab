@@ -538,8 +538,8 @@ def test_banner_bear_day_keeps_protect_and_adds_the_journal_block():
 
 def test_banner_without_the_new_argument_is_unchanged_for_old_callers():
     b = ee.watchlist_banner(_BULL, _MAP_OK, [])
-    assert set(b) == {"protect", "unread", "macro_unread", "trades_unread", "tone_line",
-                      "notes"}
+    assert set(b) == {"protect", "unread", "macro_unread", "trades_unread",
+                      "earnings_unknown", "tone_line", "notes"}
 
 
 def test_email_footer_only_on_an_explicit_false():

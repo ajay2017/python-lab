@@ -354,7 +354,7 @@ def _app_src():
 def test_synth_schema_version_keeps_the_tuneup_and_fold_notes_in_its_history():
     src = _app_src()
     # beta-gate C2 bumped 33 -> 34; the Tune-up note now sits in the "was 33:" clause.
-    assert "_SYNTH_SCHEMA_VER = 44  # bumped:" in src   # 40 -> 41 by brief-consolidation C3
+    assert "_SYNTH_SCHEMA_VER = 45  # bumped:" in src   # 40 -> 41 by brief-consolidation C3
     assert "; was 33: the Tune-up beta card carries subject / trim_shares" in src
     assert "(BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim" in src
 

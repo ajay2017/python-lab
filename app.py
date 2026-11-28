@@ -7579,7 +7579,7 @@ if page == "🏠 Home":
     # price history this signature already covers (the risk build is memoised WITH the
     # Brief), so they are not added to it; the schema version below invalidates a Brief
     # memoised before the G-06 holds existed.
-    _SYNTH_SCHEMA_VER = 44  # bumped: Grow Today entry_hold may be trades_unread (the trade journal couldn't be read) and the Brief reads the strict journal, whose readability joins the memo signature (buy-check C5-B, SoldTodayLeak); was 43: Grow Today carries fit_unpriced_picks and holds a pick or add whose sector a holding that couldn't be priced understates, and the memo signature carries the unpriced-holdings map (buy-check C5 A1 + A2, partial-book hold); was 42: the risk-off trim skips only full exits (risk_off_pool.full_exit_names), a kept risk-off card carries a same-name beside line and trim_shares, and a same-name non-news Watch carries covered_by (brief-consolidation C2, RiskOffTrimShift; H6 reversed); was 41: the macro pre-event trim skips a name only when its own Act Today sale covers the trim, its why names the skipped names / a smaller or unsized same-name sell, and the macro Affected list counts only real sales (brief-consolidation C3, MacroTrimDefer); was 40: a sector Hard Cap card is its own Act Today card beside a same-name stop breach / Sell / deterioration / critical-news card (never merged as risk_flags), and its flag carries sector / sector_members (brief-consolidation C1, SectorCapCardMerged; F-22a reversed by the owner); was 39: the synth signature carries the per-leg regime read, since the Brief's risk_off_unchecked (regime_unread / both_unread) depends on which of the SPY-trend and VIX legs were read (sell-check-unread C6, RegimeOneLegMeasured); was 38: Grow Today entry_hold may now be macro_unread (the macro calendar couldn't be read) and the bundle's _macro_events may be None (buy-check C4m, G-07 / G-34); was 37: Grow Today carries entry_hold (None, or the strings of a hold) and holds every pick, ETF pick and add when the market move can't be read or isn't today's session; a bear message names the session (buy-check C4b, G-34 / G-23); was 36: new Grow Today picks carry atr, the ATR their stop was built from (IntradayBelowStop, beta-gate C4); was 35: Grow Today carries scan_hold and sizes no pick off a saved scan that isn't today's post-open scan (ScanCacheAnyAge, beta-gate C3); was 34: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
+    _SYNTH_SCHEMA_VER = 45  # bumped: Grow Today carries earnings_unknown_picks and holds a pick or add whose next earnings date can't be confirmed (a Yahoo date that has passed with no FMP confirmation, a failed read, or a saved copy), and a held name with an unconfirmed date may carry an earnings_unconfirmed Review caption on the Brief (buy-check C3b, StaleEarningsDate); was 44: Grow Today entry_hold may be trades_unread (the trade journal couldn't be read) and the Brief reads the strict journal, whose readability joins the memo signature (buy-check C5-B, SoldTodayLeak); was 43: Grow Today carries fit_unpriced_picks and holds a pick or add whose sector a holding that couldn't be priced understates, and the memo signature carries the unpriced-holdings map (buy-check C5 A1 + A2, partial-book hold); was 42: the risk-off trim skips only full exits (risk_off_pool.full_exit_names), a kept risk-off card carries a same-name beside line and trim_shares, and a same-name non-news Watch carries covered_by (brief-consolidation C2, RiskOffTrimShift; H6 reversed); was 41: the macro pre-event trim skips a name only when its own Act Today sale covers the trim, its why names the skipped names / a smaller or unsized same-name sell, and the macro Affected list counts only real sales (brief-consolidation C3, MacroTrimDefer); was 40: a sector Hard Cap card is its own Act Today card beside a same-name stop breach / Sell / deterioration / critical-news card (never merged as risk_flags), and its flag carries sector / sector_members (brief-consolidation C1, SectorCapCardMerged; F-22a reversed by the owner); was 39: the synth signature carries the per-leg regime read, since the Brief's risk_off_unchecked (regime_unread / both_unread) depends on which of the SPY-trend and VIX legs were read (sell-check-unread C6, RegimeOneLegMeasured); was 38: Grow Today entry_hold may now be macro_unread (the macro calendar couldn't be read) and the bundle's _macro_events may be None (buy-check C4m, G-07 / G-34); was 37: Grow Today carries entry_hold (None, or the strings of a hold) and holds every pick, ETF pick and add when the market move can't be read or isn't today's session; a bear message names the session (buy-check C4b, G-34 / G-23); was 36: new Grow Today picks carry atr, the ATR their stop was built from (IntradayBelowStop, beta-gate C4); was 35: Grow Today carries scan_hold and sizes no pick off a saved scan that isn't today's post-open scan (ScanCacheAnyAge, beta-gate C3); was 34: Grow Today carries beta_blocked_picks / beta_unknown_picks / beta_blocked_adds and holds a high-beta buy on a high-beta book (G-06, beta-gate C2); was 33: the Tune-up beta card carries subject / trim_shares and beta / Sharpe cards are settled on Home against the Act Today view, not filtered at build (BriefSkipSizeBlind B-C3); was 32: a larger same-name Review trim (profit-lock, earnings-week, weak-large, the deterioration floor under a Sell) folds into the Act Today card's min_trim, which now carries reason_key (BriefSkipSizeBlind); was 31: the Brief result carries breach_alternates and act_today_view restores a recovered breach's suppressed per-name cards (BriefBreachRestore); was 30: single-name Tune-up cards carry subject / trim_shares, the Act deterioration trim carries trim_shares, and a Tune-up deferral to an Act Today sell is size-aware (DeferSizeBlind); was 29: correlation coverage carries left_out / n_obs_max and the matrix leaves young holdings out (CorrYoung); was 28: the Brief result carries risk_off_unchecked (RiskOffUnchecked, RiskListwiseYoung C4); was 27: port_risk carries "coverage" and the book risk series leaves young holdings out (RiskListwiseYoung C2); was 26: a same-name DETERIORATION_WATCH beside a Brief Act trim carries covered_by (U6 sibling); was 25: the Brief Review list keeps one Act trim per name (U6: losers become covered_by Watch / stop-only cards, brief_trim_merge); was 24: the Brief result carries portfolio_tuneup_deferred and a single-name Tune-up card may carry earnings_note (EW C3); was 23: Signals trim actions carry floor_pct / earnings_note and in-window trims fire at any P&L (EW C2); was 22: the memo signature carries the cash and positions-snapshot stamps (U7 C3: the Brief's sizes depend on the lower of the journal and Robinhood net capital); was 21: held-position stop (finding #26 C3) replaces the old ATR / ratchet stop engine and the memo signature carries held_sig; was 20: Signals trim actions carry target_weight / basis / earnings_days (earnings-week trim unification); was 19: Grow Today carries room_blocked_adds and room-capped add sizing (S-D C1, G-31); was 18: Grow Today carries entry_held_adds / card_blocked_adds and per-add review_news_note / entry checks (shared-entry chunk 7); was 17: bundle also carries _brief_news_rescore_status (held-news coverage chunk 1) so the "news filter couldn't check N" caption describes the list the Brief actually used; was 16: Home's Grow Today now renders overflow_picks/flat_day_held/unevaluated_leads/adds_paused and no longer the retired buy_candidates list (grow-today-owns-buys P3); was 15: div_recs may now carry PAIR_RISK_WITHHELD recs (audit A-H2) in place of a PAIR_RISK on a thin sample; was 14: bundle also carries _rag_record_label (the RECORD-grade sibling the weekly thesis persists, distinct from the screen-only _rag_label)
     # C6 review (blocking): _cached_spy raises on a failed Yahoo read (st.cache_data
     # doesn't cache exceptions), so it is guarded here; a failed fetch reads as an
     # unread trend leg in the signature instead of crashing every Home run.
@@ -10679,7 +10679,7 @@ if page == "🏠 Home":
                     "news_skipped", "earnings_waiting",
                     "entry_held_adds", "card_blocked_adds", "room_blocked_adds",
                     "beta_blocked_picks", "beta_unknown_picks", "beta_blocked_adds",
-                    "fit_unpriced_picks"):
+                    "fit_unpriced_picks", "earnings_unknown_picks"):
             _gv = grow.get(_gk)
             if not isinstance(_gv, list):
                 continue
@@ -10846,6 +10846,9 @@ if page == "🏠 Home":
         # buy-check C5: a pick held because a holding in its sector couldn't be priced
         # (sector_unpriced); the key is absent from a legacy cached brief = nothing.
         fit_unpriced_picks = list(grow.get("fit_unpriced_picks", []))
+        # buy-check C3b: a pick held because its next earnings date couldn't be
+        # confirmed; the key is absent from a legacy cached brief = nothing.
+        earnings_unknown_picks = list(grow.get("earnings_unknown_picks", []))
         sector_blocked = (grow.get("sector_blocked_adds", []) or []) + (grow.get("sector_blocked_picks", []) or [])
         # D1 (sector_gate_spec.md, 2026-09-30) — distinct from sector_blocked
         # above (a KNOWN sector already over cap): this is "couldn't check,"
@@ -11228,6 +11231,7 @@ if page == "🏠 Home":
                     ("⛔ portfolio beta", grow.get("beta_blocked_picks", [])),
                     ("⏸ beta couldn't be checked", grow.get("beta_unknown_picks", [])),
                     ("⏸ sector weight incomplete", grow.get("fit_unpriced_picks", [])),
+                    ("⏸ earnings date unconfirmed", grow.get("earnings_unknown_picks", [])),
                     ("sector couldn't be classified", sector_unknown),
                 )
                 _news_skip_n = sum(len(n) for _w, n in _held_out_groups if isinstance(n, list))
@@ -11830,6 +11834,7 @@ if page == "🏠 Home":
                     "beta_blocked_picks":    grow.get("beta_blocked_picks", []),
                     "beta_unknown_picks":    grow.get("beta_unknown_picks", []),
                     "fit_unpriced_picks":    grow.get("fit_unpriced_picks", []),
+                    "earnings_unknown_picks": grow.get("earnings_unknown_picks", []),
                     "overflow_picks":        grow.get("overflow_picks", []),
                     "flat_day_held":         grow.get("flat_day_held", []),
                 }
@@ -12382,6 +12387,7 @@ if page == "🏠 Home":
             ("⛔ Portfolio beta", beta_blocked),
             ("⏸ Beta couldn't be checked", beta_unknown_picks),
             ("⏸ Sector weight incomplete", fit_unpriced_picks),
+            ("⏸ Earnings date unconfirmed", earnings_unknown_picks),
         ):
             if not _bg_items:
                 continue
@@ -12394,7 +12400,14 @@ if page == "🏠 Home":
             )
             for _bg in _bg_items[:4]:
                 _bg_line = f"**{_bg.get('ticker', '')}** — {_bg.get('reason', '')}"
-                if _bg.get("kind") == sector_unpriced.CHECK:
+                if _bg.get("kind") == buy_check_state.CHECK_EARNINGS_UNKNOWN:
+                    # buy-check C3b: the reason is a clause (no full stop) and
+                    # clears_when starts with the date, not "at the next …".
+                    _bg_line = (f"**{_bg.get('ticker', '')}** — would qualify as a pick, but "
+                                f"{str(_bg.get('reason', '')).rstrip('.')}.")
+                    if _bg.get("clears_when"):
+                        _bg_line += f" Clears when {str(_bg['clears_when']).rstrip('.')}."
+                elif _bg.get("kind") == sector_unpriced.CHECK:
                     # buy-check C5: the reason carries no full stop and clears_when
                     # starts with the holding, not "at the next …".
                     _bg_line = (f"**{_bg.get('ticker', '')}** — would qualify as a pick, but "
@@ -13463,7 +13476,9 @@ if page == "🏠 Home":
                             _hl, _entry_posture.new_entry_posture(_hm_tone), bundle=_hl_bundle,
                             grow_hold=tone_freshness.redeploy_grow_hold(
                                 _db_grow.get("entry_hold") if isinstance(_db_grow, dict) else None,
-                                _hm_tone, _today_et()))
+                                _hm_tone, _today_et()),
+                            # C3b (Q9): imminent / unconfirmed earnings is not an entry call.
+                            today=_today_et())
                         _own_pick = " or pick your own name" if _call["invite_own_pick"] else ""
                         if _call["text"] is not None:
                             {"success": st.success, "info": st.info}.get(
@@ -14050,6 +14065,18 @@ if page == "🏠 Home":
                     f"Macro-exposure trims were not evaluated against "
                     f"{_mce_name_str} — next release not yet on the calendar."
                 )
+
+        # Buy-check C3b (owner Q6): a held name whose next earnings date couldn't be
+        # confirmed and whose weight is above the earnings-week line gets ONE caption
+        # each, never a trade or an Act card (the text is built in
+        # daily_briefing._earnings_unconfirmed_items). An older memoized Brief without
+        # the key reads nothing extra.
+        if not _db_offline:
+            _eu_items = _daily_brief.get("earnings_unconfirmed")
+            for _eu_item in (_eu_items if isinstance(_eu_items, list) else []):
+                _eu_line = _eu_item.get("line") if isinstance(_eu_item, dict) else None
+                if _eu_line:
+                    st.caption("📅 " + str(_eu_line).replace("$", chr(92) + "$"))
 
         # Portfolio Tune-up — slow-moving risk-metric improvements (Sharpe /
         # beta / volatility / drawdown / tail). NOT time-boxed decisions, so
@@ -18735,7 +18762,9 @@ elif page == "📡 Signals & Advice":
                             # isn't today's session).
                             grow_hold=tone_freshness.redeploy_grow_hold(
                                 _entry_posture.home_grow_hold(_sg_syn, _today_et().isoformat()),
-                                _sg_tone, _today_et()))
+                                _sg_tone, _today_et()),
+                            # C3b (Q9): imminent / unconfirmed earnings is not an entry call.
+                            today=_today_et())
                         _own_pick = f" or pick your own {rec['sector']} name" if _call["invite_own_pick"] else ""
                         if _call["text"] is not None and not _call["entry_called"]:
                             {"success": st.success, "info": st.info}.get(
@@ -31417,6 +31446,18 @@ elif page == "📋 Watchlist":
             f"border-left:4px solid #f59e0b;margin:6px 0 2px'>"
             f"<span style='color:#fcd34d;font-weight:700'>⏸ {_safe_html(_wl_tu['title'])}</span><br>"
             f"<span style='color:#eee;font-size:0.9em'>{_safe_html(_wl_tu['body'])}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    if _wl_banner["earnings_unknown"] is not None:
+        # C3b: names whose next earnings date couldn't be confirmed are HELD (per
+        # name, so the box lists the names held only by this check). Same box shape.
+        _wl_eu = _wl_banner["earnings_unknown"]
+        st.markdown(
+            f"<div style='padding:10px 14px;background:#2d1a05;border-radius:6px;"
+            f"border-left:4px solid #f59e0b;margin:6px 0 2px'>"
+            f"<span style='color:#fcd34d;font-weight:700'>⏸ {_safe_html(_wl_eu['title'])}</span><br>"
+            f"<span style='color:#eee;font-size:0.9em'>{_safe_html(_wl_eu['body'])}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )

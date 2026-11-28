@@ -70,7 +70,7 @@ def derive_dropoffs(
         ``macro_blocked_picks``, ``composite_unavailable``,
         ``sector_unknown_picks``, ``news_skipped``, ``earnings_waiting``,
         ``beta_blocked_picks``, ``beta_unknown_picks``, ``fit_unpriced_picks``,
-        ``overflow_picks``, ``flat_day_held``.
+        ``earnings_unknown_picks``, ``overflow_picks``, ``flat_day_held``.
     reduce_calls:
         Dict of {ticker_upper: item} from session_state["_reduce_calls"].
         Pass None when the Brief was offline — the None path falls through to
@@ -96,7 +96,7 @@ def derive_dropoffs(
                                     composite_unavailable | sector_unknown |
                                     skip_verdict | earnings_wait |
                                     beta_blocked | beta_unknown | fit_unpriced |
-                                    pacing | flat_day_hold | unattributed
+                                    earnings_unknown | pacing | flat_day_hold | unattributed
             reason_text          (str)  — human-readable sentence
             has_confident_reason (bool) — False only on 'unattributed'
 
@@ -173,6 +173,14 @@ def derive_dropoffs(
         if _t:
             _fit_unpriced_map[_t] = _item
 
+    # Buy-check C3b: held because the name's next earnings date couldn't be confirmed
+    # (absent on a bucket dict built before C3b -> no names).
+    _earn_unknown_map: dict[str, dict] = {}
+    for _item in grow_buckets.get("earnings_unknown_picks", []):
+        _t = str(_item.get("ticker", "")).upper()
+        if _t:
+            _earn_unknown_map[_t] = _item
+
     _overflow_map: dict[str, dict] = {}
     for _item in grow_buckets.get("overflow_picks", []):
         _t = str(_item.get("ticker", "")).upper()
@@ -222,7 +230,8 @@ def derive_dropoffs(
         # reduce_calls → composite_skipped → sector_blocked_picks
         # → macro_blocked_picks → composite_unavailable → sector_unknown_picks
         # → news_skipped → earnings_waiting → beta_blocked_picks
-        # → beta_unknown_picks → fit_unpriced_picks → overflow_picks
+        # → beta_unknown_picks → fit_unpriced_picks → earnings_unknown_picks
+        # → overflow_picks
         # → flat_day_held → unattributed
         if reduce_calls is not None and _t in reduce_calls:
             _reason_code   = "reduce_call"
@@ -324,6 +333,15 @@ def derive_dropoffs(
             _reason_code   = "fit_unpriced"
             _reason_text   = (_fi.get("reason")
                               or "a holding in its sector couldn't be priced")
+            _has_confident = True
+
+        elif _t in _earn_unknown_map:
+            # Buy-check C3b: the last data hold in _grow_today, after the unpriced hold.
+            _ei = _earn_unknown_map[_t]
+            _current_composite = _ei.get("composite_score")
+            _reason_code   = "earnings_unknown"
+            _reason_text   = (_ei.get("reason")
+                              or "its next earnings date couldn't be confirmed")
             _has_confident = True
 
         elif _t in _overflow_map:

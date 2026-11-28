@@ -50,7 +50,7 @@ def test_grow_shown_lists_both_new_keys():
 
 
 def test_schema_version_bumped_to_23():
-    assert re.search(r"_SYNTH_SCHEMA_VER = 44\b", _SRC)  # 40 -> 41 by brief-consolidation C3
+    assert re.search(r"_SYNTH_SCHEMA_VER = 45\b", _SRC)  # 40 -> 41 by brief-consolidation C3
 
 
 def test_no_direct_nav_page_assignment_added():

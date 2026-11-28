@@ -240,6 +240,8 @@ _HELD_BACK_OTHER = (
     ("beta_unknown_picks",    "beta couldn't be checked"),
     # Buy-check C5 (chunk A): a holding in the pick's sector couldn't be priced.
     ("fit_unpriced_picks",    "sector weight incomplete"),
+    # Buy-check C3b: the pick's next earnings date couldn't be confirmed.
+    ("earnings_unknown_picks", "earnings date unconfirmed"),
 )
 
 

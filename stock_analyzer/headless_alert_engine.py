@@ -1003,6 +1003,9 @@ def compute_morning_picks(today: date | None = None, scanner_results=None,
         # Buy-check C5 (chunk A): picks held because a holding in their sector
         # couldn't be priced (no gate id, no ledger row).
         "fit_unpriced":     len(grow.get("fit_unpriced_picks", [])),
+        # Buy-check C3b: picks held because the next earnings date couldn't be
+        # confirmed (no gate id, no ledger row).
+        "earnings_unknown": len(grow.get("earnings_unknown_picks", [])),
     }
     # Macro calendar coverage — passes through from _grow_today's LATE-built
     # "macro_coverage_expired" key so the email renderers can show the
@@ -1120,7 +1123,8 @@ def compute_watchlist_entries(
     "reason": str | None, "gate_degraded": bool, "fit_read": bool,
     "beta_read": bool, "fit_state": {"state", "unpriced_sectors", "unpriced"},
     "checks_held": {"fit_unknown": [...], "beta_unknown": [...], "fit_unpriced": [...],
-    "tone_unread": [...], "macro_unread": [...], "trades_unread": [...]},
+    "tone_unread": [...], "macro_unread": [...], "trades_unread": [...],
+    "earnings_unknown": [...]},
     "entry_run": {"tone_state", "macro_available", "trades_available"},
     "gate_ledger_rows": [...]}.
 
@@ -1717,8 +1721,11 @@ def compute_watchlist_entries(
     # couldn't be priced (`fit_unpriced`, NEAR_ENTRY cards like fit_unknown).
     # buy-check C5 chunk B: plus the names held because the trade journal couldn't be
     # read (`trades_unread`).
+    # buy-check C3b: plus the names held because their next earnings date couldn't be
+    # confirmed (`earnings_unknown`, ENTRY_HELD like the unread checks). Log only (Q8).
     _checks_held = {"fit_unknown": [], "beta_unknown": [], "fit_unpriced": [],
-                    "tone_unread": [], "macro_unread": [], "trades_unread": []}
+                    "tone_unread": [], "macro_unread": [], "trades_unread": [],
+                    "earnings_unknown": []}
     try:
         for _c in all_cards:
             _k = _c.get("suppression_kind")
@@ -1736,6 +1743,9 @@ def compute_watchlist_entries(
             elif (_c.get("action") == "ENTRY_HELD" and _c.get("hold_kind") == "trades_unread"
                     and _tk and _tk not in held_set):
                 _checks_held["trades_unread"].append(_tk)
+            elif (_c.get("action") == "ENTRY_HELD" and _c.get("hold_kind") == "earnings_unknown"
+                    and _tk and _tk not in held_set):
+                _checks_held["earnings_unknown"].append(_tk)
     except Exception as e:
         errors.append(f"held-checks summary failed ({e})")
 
