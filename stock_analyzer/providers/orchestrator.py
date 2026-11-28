@@ -27,6 +27,7 @@ import pandas as pd
 
 from stock_analyzer import constants as C
 from stock_analyzer import api_health as _ah
+from stock_analyzer import earnings_date as _earnings_date
 from stock_analyzer.providers import PROVIDER_REGISTRY
 from stock_analyzer.providers.base import (
     ProviderUnavailable,
@@ -281,7 +282,10 @@ def get_bundle(ticker: str, period: str = "6mo") -> dict:
                     # updated (a primary without earnings_status support keeps the
                     # key absent, never an invented one); a fallback that raised or
                     # returned nothing leaves the primary's own status.
-                    if primary["earnings"] and "earnings_status" in primary:
+                    # Buy-check C3a: only a value that PARSES as a date makes the read
+                    # "date" (an unparseable fallback value keeps the primary's status).
+                    if (primary["earnings"] and "earnings_status" in primary
+                            and _earnings_date.yahoo_dates(primary["earnings"])):
                         primary["earnings_status"] = "date"
                 except Exception:
                     pass
@@ -318,6 +322,23 @@ def get_earnings_calendar(from_date: str, to_date: str) -> list[dict]:
             except Exception:
                 return []
     return []
+
+
+def get_earnings_calendar_rows_or_none(from_date: str, to_date: str) -> "list | None":
+    """The market-wide earnings calendar for a date range like `get_earnings_calendar`,
+    but a failure is None, never `[]` (buy-check C3a): the earnings cross-check must be
+    able to tell "couldn't read" from "read, nothing listed". The first provider in
+    DATA_EARNINGS_CALENDAR_ORDER that offers `earnings_calendar` answers; None on an
+    exception or when no provider offers it. Like `get_earnings_calendar` it ignores the
+    FMP soft cap (the cross-check makes two calls per process per cache window)."""
+    for prov in _chain_for(C.DATA_EARNINGS_CALENDAR_ORDER):
+        if hasattr(prov, "earnings_calendar"):
+            try:
+                rows = prov.earnings_calendar(from_date, to_date)
+            except Exception:
+                return None
+            return rows if isinstance(rows, list) else None
+    return None
 
 
 def get_market_indices() -> list:

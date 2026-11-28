@@ -20,6 +20,7 @@ import math
 from datetime import datetime, timezone
 
 from stock_analyzer.constants import (
+    FACTOR_ETF_TICKERS,
     FUNDAMENTALS_GATE_MIN_METRICS,
     FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
     BUNDLE_CACHE_MAX_AGE_DAYS,
@@ -35,6 +36,8 @@ from stock_analyzer.data import (
     fetch_etf_lookthrough,
 )
 from stock_analyzer import asset_type
+from stock_analyzer import earnings_date
+from stock_analyzer import earnings_xcheck
 from stock_analyzer import llm
 from stock_analyzer import sentiment_cache
 from stock_analyzer import etf_scoring
@@ -45,7 +48,7 @@ from stock_analyzer.fundamentals import (
 )
 from stock_analyzer.valuation import valuation_score
 from stock_analyzer.valuation_target import choose_pt_target, pt_short_tag, pt_label, base_target_note
-from stock_analyzer.market_time import ET, now_et
+from stock_analyzer.market_time import ET, now_et, today_et
 import logging
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
@@ -54,9 +57,22 @@ from stock_analyzer.targets import support_resistance, entry_zone, compute_price
 from stock_analyzer import db
 from stock_analyzer import news_feed as _news_feed
 from stock_analyzer import news_relevance as _news_rel
+from stock_analyzer import portfolio
 
 # Unrelated headlines carried for display (plumbing, not policy).
 _UNRELATED_SHOWN = 10
+
+# Funds the app already knows by name (the sector benchmark ETFs and the factor ETFs).
+# A bundle whose Yahoo `.info` came back without a `quoteType` can't be told a fund by
+# `asset_type`; these still read "earnings don't apply" (buy-check C3a). A fund outside
+# both rosters with a missing quoteType reads `failed` and is named in the cron log.
+_KNOWN_FUNDS = (frozenset(portfolio.SECTOR_ETF.values())
+                | frozenset(FACTOR_ETF_TICKERS.values()))
+
+# The stamp when the earnings resolver itself raised: a read that didn't happen.
+_EARNINGS_READ_FAILED = {"state": "failed", "date": None, "source": None,
+                         "reason": "read_failed", "yahoo_date": None,
+                         "last_reported": None, "disagree": None}
 
 
 def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
@@ -422,6 +438,29 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     # for an actual decision (the ETF composite).
     _quote_type = _info.get("quoteType")
     _asset_type = asset_type.from_quote_type(_quote_type)
+    # Earnings date (buy-check C3a, docs/plans/entry-fail-closed-c3-spec.md): resolved
+    # ONCE here from Yahoo's dates and the FMP calendar cross-check, so every reader of
+    # `bundle["earnings"]` sees the same answer and never a date that has passed.
+    # `earnings_yahoo` keeps Yahoo's raw value, `earnings_status` the provider's raw
+    # stamp (log only), `earnings_resolved` the full verdict. A resolver exception is a
+    # `failed` / `read_failed` stamp, never a missing key. A fund or a saved last-good
+    # copy needs no calendar read.
+    try:
+        _earn_today = today_et()
+        _earn_is_fund = (_asset_type == asset_type.ASSET_TYPE_ETF) or (
+            not _quote_type and str(ticker).upper() in _KNOWN_FUNDS)
+        _earn_xc = (None if (_earn_is_fund or _from_cache)
+                    else earnings_xcheck.calendar_index(_earn_today))
+        _earn_resolved = earnings_date.resolve(
+            is_fund=_earn_is_fund,
+            stale_copy=_from_cache,
+            yahoo_dates=earnings_date.yahoo_dates(
+                bundle.get("earnings_dates") or bundle.get("earnings")),
+            yahoo_status=_earnings_status,
+            xcheck=earnings_date.xcheck_for(_earn_xc, ticker),
+            today=_earn_today)
+    except Exception:
+        _earn_resolved = dict(_EARNINGS_READ_FAILED)
     _etf_facts = (
         fetch_etf_facts_from_info(_info)
         if _asset_type == asset_type.ASSET_TYPE_ETF else None
@@ -491,8 +530,10 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "news_relevance_checked": _split["checked"],
         "entry_lo": entry_lo, "entry_hi": entry_hi,
         "targets": targets, "sr": sr,
-        "risk_metrics": risk_metrics, "earnings": bundle["earnings"],
+        "risk_metrics": risk_metrics, "earnings": _earn_resolved["date"],
+        "earnings_yahoo": bundle.get("earnings"),
         "earnings_status": _earnings_status,
+        "earnings_resolved": _earn_resolved,
         "revisions": bundle.get("revisions", {}),
         "name": name, "sector": sector,
         "industry": industry, "market_cap": market_cap,

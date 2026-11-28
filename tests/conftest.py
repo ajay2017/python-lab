@@ -179,6 +179,27 @@ def _no_real_snaptrade_connections_call(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_fmp_earnings_calendar(monkeypatch):
+    """Buy-check C3a: `bundle_loader.load_bundle` asks `earnings_xcheck.calendar_index`
+    for the FMP earnings calendar. No test may make that real call: `_fetch_rows` (the
+    one network seam) raises an ordinary Exception, which the index turns into a FAILED
+    index exactly as an FMP outage would (never an empty "ok" one). The process-wide
+    cache is reset before and after every test so one test's index never leaks into the
+    next. A test that wants a calendar patches `earnings_xcheck._fetch_rows` itself
+    (monkeypatch stacks on this)."""
+    from stock_analyzer import earnings_xcheck
+
+    def _blocked(from_date, to_date):
+        raise RuntimeError(
+            f"real FMP earnings-calendar call in a test: {from_date}..{to_date}")
+
+    monkeypatch.setattr(earnings_xcheck, "_fetch_rows", _blocked)
+    earnings_xcheck.reset_cache()
+    yield
+    earnings_xcheck.reset_cache()
+
+
+@pytest.fixture(autouse=True)
 def _clear_healthchecks_key(monkeypatch):
     """A HEALTHCHECKS_PING_KEY in the developer's shell must never let a test
     that runs cron_runner._record_heartbeat ping the owner's real checks."""

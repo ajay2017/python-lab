@@ -1450,6 +1450,18 @@ _GATE_FILES = {
     # (unpriced, cached, behind, depth-only, raised) and the lane failures they cause;
     # a wrong call lets an unchecked holding read as a clean morning.
     "stock_analyzer/protective_coverage.py",
+    # Added 2026-11-27 (buy-check C3a, docs/plans/entry-fail-closed-c3-spec.md):
+    # resolves a name's next earnings date ONCE from Yahoo and the FMP calendar (a past
+    # date is never the next report; the earliest future date wins; a report with an
+    # actual EPS passes; a Yahoo date within EARNINGS_PAST_DATE_HOLD_DAYS with nothing
+    # confirming a next one reads failed); every earnings gate, trim and card reads it.
+    # A wrong call hides a real report ahead of a buy or a trim, or holds a name that is clear.
+    "stock_analyzer/earnings_date.py",
+    # Added 2026-11-27 (buy-check C3a): the FMP earnings-calendar cross-check behind that
+    # resolution (two calls, a whole-index failure, per-ET-day cache, reported only with
+    # an actual EPS); a wrong call turns an unreadable calendar into "nothing due", or
+    # passes a phantom report.
+    "stock_analyzer/earnings_xcheck.py",
     # Added 2026-10-02 (review M4, owner decision): this hook is the single
     # choke-point enforcing every gate above -- Critical #2 (the push-gate
     # marker bug) shipped here and took 3 implementation rounds to fully

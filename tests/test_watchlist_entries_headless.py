@@ -1141,9 +1141,15 @@ def test_payload_counts_the_earnings_read_per_state_and_lists_failed_tickers():
     }
     result = _run_watchlist_entries(
         watchlist=list(bundles), load_bundle_fn=lambda t, *a, **k: bundles[t])
+    # buy-check C3a: the count also carries the reported states, the failed split by
+    # reason (hand-built bundles have no `earnings_resolved`, so no reason: read_failed)
+    # and the no_date names.
     assert result["earnings_states"] == {
-        "counts": {"not_applicable": 1, "date": 1, "no_date": 1, "failed": 3},
+        "counts": {"not_applicable": 1, "date": 1, "reported": 0, "reported_unconfirmed": 0,
+                   "no_date": 1, "failed": 3},
         "failed_tickers": ["CCC", "DDD", "FFF"],
+        "failed_by_reason": {"read_failed": ["CCC", "DDD", "FFF"]},
+        "no_date_tickers": ["BBB"],
     }
 
 
@@ -1161,8 +1167,11 @@ def test_a_bundle_that_failed_to_load_is_not_counted():
 def test_empty_watchlist_payload_carries_a_zero_count():
     result = _run_watchlist_entries(watchlist=())
     assert result["earnings_states"] == {
-        "counts": {"not_applicable": 0, "date": 0, "no_date": 0, "failed": 0},
+        "counts": {"not_applicable": 0, "date": 0, "reported": 0, "reported_unconfirmed": 0,
+                   "no_date": 0, "failed": 0},
         "failed_tickers": [],
+        "failed_by_reason": {},
+        "no_date_tickers": [],
     }
 
 

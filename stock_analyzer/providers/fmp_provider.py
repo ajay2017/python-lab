@@ -20,6 +20,7 @@ Parsing is defensive about field names + shape (flat list vs legacy
 {"historical":[...]}) so a re-revamp doesn't silently break it.
 """
 
+import math
 import time
 from datetime import datetime, date, timedelta
 import pytz
@@ -385,10 +386,22 @@ class FMPProvider(DataProvider):
             dt  = r.get("date")
             if not sym or not dt:
                 continue
+            # eps_actual (buy-check C3a, additive): the reported EPS (FMP `epsActual`,
+            # confirmed by the 2026-11-27 P1 probe) as a finite float, else None; the
+            # earnings cross-check treats only a row WITH an actual as "just reported".
+            try:
+                _eps = r.get("epsActual")
+                _eps = (float(_eps) if _eps is not None and not isinstance(_eps, bool)
+                        else None)
+                if _eps is not None and not math.isfinite(_eps):
+                    _eps = None
+            except (TypeError, ValueError):
+                _eps = None
             out.append({
                 "ticker": str(sym).upper(),
                 "date":   str(dt)[:10],
                 "when":   str(r.get("time") or r.get("when") or "").lower(),
+                "eps_actual": _eps,
             })
         return out
 

@@ -93,6 +93,7 @@ from stock_analyzer.headless_alert_engine import (
     compute_watchlist_entries, _build_context, run_daily_budget,
 )
 from stock_analyzer import hold_reasons
+from stock_analyzer import earnings_xcheck
 from stock_analyzer import eod_session_closes as _eod_session_closes
 from stock_analyzer import held_stop_carry as _held_stop_carry
 from stock_analyzer import held_stop_floor as _held_stop_floor
@@ -500,11 +501,20 @@ def _tone_unread_failure(payload) -> "str | None":
     return None
 
 
+def _names_shown(names) -> str:
+    """Up to ten names, then "+N more" (scan-log helper)."""
+    names = [str(n) for n in names]
+    return ", ".join(names[:10]) + (f", +{len(names) - 10} more" if len(names) > 10 else "")
+
+
 def _log_watchlist_earnings_read(payload) -> None:
     """One read-only scan-log line over the watchlist bundles' earnings read
     (entry-fail-closed C1): "watchlist earnings read: N date, M no_date, K failed
-    (X, Y), J n/a". Nothing reads it for a decision. Never raises: a counting error
-    is logged and the lane carries on."""
+    (X, Y), J n/a". Buy-check C3a (a payload that carries the `reported` count): "N date,
+    N reported, N reported_unconfirmed, N no_date (X), N failed (past_unconfirmed: CRWD;
+    read_failed: ...), N n/a", then the FMP cross-check's own line
+    (`earnings_xcheck.log_line`). Nothing reads it for a decision. Never raises: a
+    counting error is logged and the lane carries on."""
     try:
         es = payload.get("earnings_states") if isinstance(payload, dict) else None
         if not isinstance(es, dict):
@@ -512,10 +522,27 @@ def _log_watchlist_earnings_read(payload) -> None:
             return
         c = es["counts"]
         failed = list(es["failed_tickers"])
-        shown = ", ".join(failed[:10]) + (f", +{len(failed) - 10} more" if len(failed) > 10 else "")
-        _log(f"watchlist earnings read: {c['date']} date, {c['no_date']} no_date, "
-             f"{c['failed']} failed" + (f" ({shown})" if failed else "")
-             + f", {c['not_applicable']} n/a")
+        if "reported" in c:
+            no_date = es.get("no_date_tickers")
+            no_date = list(no_date) if isinstance(no_date, (list, tuple)) else []
+            by_reason = es.get("failed_by_reason")
+            if not isinstance(by_reason, dict):
+                by_reason = {}
+            if by_reason:
+                failed_txt = "; ".join(f"{r}: {_names_shown(v)}" for r, v in by_reason.items())
+            else:
+                failed_txt = _names_shown(failed)
+            _log(f"watchlist earnings read: {c['date']} date, {c['reported']} reported, "
+                 f"{c['reported_unconfirmed']} reported_unconfirmed, {c['no_date']} no_date"
+                 + (f" ({_names_shown(no_date)})" if no_date else "")
+                 + f", {c['failed']} failed" + (f" ({failed_txt})" if failed else "")
+                 + f", {c['not_applicable']} n/a")
+        else:
+            shown = _names_shown(failed)
+            _log(f"watchlist earnings read: {c['date']} date, {c['no_date']} no_date, "
+                 f"{c['failed']} failed" + (f" ({shown})" if failed else "")
+                 + f", {c['not_applicable']} n/a")
+        _log(earnings_xcheck.log_line())
     except Exception as exc:  # noqa: BLE001
         _log(f"watchlist earnings read: count FAILED - {str(exc)[:120]} - continuing.")
 

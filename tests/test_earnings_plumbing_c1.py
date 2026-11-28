@@ -1,9 +1,12 @@
 """entry-fail-closed C1 (docs/plans/entry-fail-closed.md §2 "Earnings plumbing", §7):
 `earnings_status` flows provider -> orchestrator fallback -> load_bundle, with NO
-behaviour change (nothing holds a buy on it yet; the existing `earnings` value is
-untouched in every case).
+behaviour change at C1 (nothing holds a buy on it yet). Since buy-check C3a the
+bundle's `earnings` value is the resolved next date (`earnings_date.resolve`), so a
+past Yahoo date no longer survives as `earnings`.
 
 No network: yf.Ticker is faked and db.* is stubbed."""
+from datetime import date
+
 import pandas as pd
 import pytest
 
@@ -222,6 +225,9 @@ def _fetch_with(**extra):
     ({"earnings": None}, None, None),
 ])
 def test_load_bundle_passes_the_status_through(monkeypatch, extra, earnings, status):
+    # buy-check C3a: `earnings` is now the RESOLVED next date (never a past one), so
+    # "today" is pinned: 2026-12-02 is a future date here, whenever the suite runs.
+    monkeypatch.setattr(bundle_loader, "today_et", lambda: date(2026, 11, 27))
     monkeypatch.setattr(bundle_loader, "db", _db())
     monkeypatch.setattr(bundle_loader, "fetch_ticker_bundle", _fetch_with(**extra))
     out = bundle_loader.load_bundle("ACME")
@@ -255,7 +261,10 @@ def test_load_bundle_supabase_cache_fallback_forces_failed(monkeypatch):
     out = bundle_loader.load_bundle("ACME")
     assert out["stale_as_of"] == "2026-11-20"
     assert out["earnings_status"] == "failed"
-    assert bcs.earnings_state(out) == {"state": "failed", "date": None}
+    # C3a: the resolver names the reason (a saved copy), and `earnings` is never carried
+    assert bcs.earnings_state(out) == {"state": "failed", "date": None,
+                                       "reason": "stale_copy"}
+    assert out["earnings"] is None
 
 
 def test_load_bundle_has_exactly_one_bundle_return_that_stamps_the_key():

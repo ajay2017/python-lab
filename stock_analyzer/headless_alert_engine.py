@@ -1065,19 +1065,32 @@ def _live_entry_context(today: date, port_df) -> dict:
     return {"market_context": mc, "macro_events": macro_events}
 
 
-def earnings_states_summary(state_map: dict) -> dict:
-    """{"counts": {not_applicable, date, no_date, failed: n}, "failed_tickers":
-    sorted list} over a ticker -> earnings_state map (entry-fail-closed C1; scan-log
-    only, nothing reads it for a decision). An unrecognised state value counts as
-    failed."""
-    counts = {"not_applicable": 0, "date": 0, "no_date": 0, "failed": 0}
+def earnings_states_summary(state_map: dict, reason_map: "dict | None" = None) -> dict:
+    """{"counts": {not_applicable, date, reported, reported_unconfirmed, no_date,
+    failed: n}, "failed_tickers": sorted list, "failed_by_reason": {reason: sorted
+    tickers}, "no_date_tickers": sorted list} over a ticker -> earnings_state map
+    (entry-fail-closed C1; buy-check C3a adds the reported states, the failed split by
+    reason and the no_date names; scan-log only, nothing reads it for a decision).
+    `reason_map` is the matching ticker -> `earnings_state(...)["reason"]` map (a failed
+    ticker with no reason is filed under "read_failed"). An unrecognised state value
+    counts as failed."""
+    counts = {"not_applicable": 0, "date": 0, "reported": 0, "reported_unconfirmed": 0,
+              "no_date": 0, "failed": 0}
+    reasons = reason_map if isinstance(reason_map, dict) else {}
     failed: list = []
+    by_reason: dict = {}
+    no_date: list = []
     for tk, st in state_map.items():
         key = st if st in counts else "failed"
         counts[key] += 1
         if key == "failed":
             failed.append(str(tk))
-    return {"counts": counts, "failed_tickers": sorted(failed)}
+            by_reason.setdefault(str(reasons.get(tk) or "read_failed"), []).append(str(tk))
+        elif key == "no_date":
+            no_date.append(str(tk))
+    return {"counts": counts, "failed_tickers": sorted(failed),
+            "failed_by_reason": {r: sorted(v) for r, v in sorted(by_reason.items())},
+            "no_date_tickers": sorted(no_date)}
 
 
 def compute_watchlist_entries(
@@ -1319,6 +1332,7 @@ def compute_watchlist_entries(
     # entry-fail-closed C1: ticker -> earnings_state of each LOADED bundle, for the
     # scan-log count only (nothing here reads it for a decision).
     _earnings_state_map: dict = {}
+    _earnings_reason_map: dict = {}   # buy-check C3a: why a failed read failed (log only)
     for t in watchlist:
         try:
             data = load_bundle(t, "6mo", spy_df=spy_for_bundles, rfr=rfr)
@@ -1329,7 +1343,9 @@ def compute_watchlist_entries(
         _news_status_map[str(t)] = {
             "news_status": data.get("news_status") if isinstance(data, dict) else None}
         try:
-            _earnings_state_map[str(t).upper()] = _buy_check_state.earnings_state(data)["state"]
+            _es = _buy_check_state.earnings_state(data)
+            _earnings_state_map[str(t).upper()] = _es["state"]
+            _earnings_reason_map[str(t).upper()] = _es.get("reason")
         except Exception as e:
             errors.append(f"{t}: earnings state failed ({e})")
         _provider_sector = data.get("sector") if isinstance(data, dict) else None
@@ -1657,7 +1673,7 @@ def compute_watchlist_entries(
     # entry-fail-closed C1: additive scan-log count of the earnings read over the
     # watchlist bundles loaded. None = the count itself failed (logged, never fatal).
     try:
-        _earnings_states = earnings_states_summary(_earnings_state_map)
+        _earnings_states = earnings_states_summary(_earnings_state_map, _earnings_reason_map)
     except Exception as e:
         _earnings_states = None
         errors.append(f"earnings state count failed ({e})")

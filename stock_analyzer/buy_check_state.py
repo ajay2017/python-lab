@@ -36,6 +36,14 @@ status "no_date" -> no_date; everything else (status "failed", no status key at 
 an unknown status, a falsy date with no status) -> failed. An absent
 `earnings_status` key is "couldn't tell"; that is safe because `load_bundle` is the
 only production bundle producer and always stamps the key (a test pins it).
+
+Buy-check C3a: a bundle that carries `earnings_resolved` (every `load_bundle` bundle;
+`earnings_date.resolve`, the date resolved once in the producer) is read from it instead:
+the answer adds `reason` and two more pass states, `reported` (FMP shows a recent report
+with an actual EPS) and `reported_unconfirmed` (Yahoo's date is older than
+EARNINGS_PAST_DATE_HOLD_DAYS, no next date anywhere). A past Yahoo date within that hold
+window reads `failed` (reason `past_unconfirmed` / `past_unchecked`). Still nothing here
+holds a buy: the hold is C3b.
 """
 from __future__ import annotations
 
@@ -52,6 +60,11 @@ STATE_NOT_APPLICABLE = "not_applicable"
 STATE_DATE = "date"
 STATE_NO_DATE = "no_date"
 STATE_FAILED = "failed"
+# Buy-check C3a: the two "it reported and the next date isn't on a calendar" passes,
+# read from `earnings_resolved` (`earnings_date.resolve`). Both pass; the second is a
+# Yahoo date older than EARNINGS_PAST_DATE_HOLD_DAYS with no future date anywhere.
+STATE_REPORTED = "reported"
+STATE_REPORTED_UNCONFIRMED = "reported_unconfirmed"
 
 _FAILED = {"state": STATE_FAILED, "date": None}
 
@@ -67,14 +80,39 @@ def _parse_date(raw) -> "str | None":
         return None
 
 
+def _state_from_resolved(er: dict) -> dict:
+    """earnings_state for a bundle that carries `earnings_resolved` (buy-check C3a): the
+    producer already resolved the date, so this only maps its state. `reason` is the
+    resolver's (None unless failed). An unknown state, or a `date` that doesn't parse,
+    reads failed. Nothing holds a buy on this yet (C3b)."""
+    st = er.get("state")
+    reason = er.get("reason")
+    if st == STATE_DATE:
+        d = _parse_date(er.get("date"))
+        if d is not None:
+            return {"state": STATE_DATE, "date": d, "reason": None}
+        return {"state": STATE_FAILED, "date": None, "reason": "read_failed"}
+    if st in (STATE_NOT_APPLICABLE, STATE_NO_DATE, STATE_REPORTED,
+              STATE_REPORTED_UNCONFIRMED):
+        return {"state": st, "date": None, "reason": None}
+    if st == STATE_FAILED:
+        return {"state": STATE_FAILED, "date": None, "reason": reason or "read_failed"}
+    return {"state": STATE_FAILED, "date": None, "reason": "read_failed"}
+
+
 def earnings_state(bundle) -> dict:
     """The earnings-read state of one loaded bundle (see the module docstring).
-    Never raises: any bad input reads as `failed`."""
+    Never raises: any bad input reads as `failed`. A bundle carrying `earnings_resolved`
+    (every `bundle_loader.load_bundle` bundle since C3a) is read from it and the answer
+    also carries `reason`; a bundle without one reads by the C1 rules below."""
     try:
         if not isinstance(bundle, dict):
             return dict(_FAILED)
         if bundle.get("asset_type") == asset_type.ASSET_TYPE_ETF:
             return {"state": STATE_NOT_APPLICABLE, "date": None}
+        er = bundle.get("earnings_resolved")
+        if isinstance(er, dict):
+            return _state_from_resolved(er)
         if bundle.get("stale_as_of") is not None:
             return dict(_FAILED)
         raw = bundle.get("earnings")

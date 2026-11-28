@@ -24,6 +24,7 @@ from stock_analyzer.constants import (
     DATA_YF_REQUEST_TIMEOUT_SEC, NYSE_HOLIDAYS, NEWS_SEARCH_FETCH_COUNT,
 )
 from stock_analyzer import news_feed as _nf
+from stock_analyzer import earnings_date as _earnings_date
 from stock_analyzer.providers._util import classify_error
 from stock_analyzer.providers.base import (
     DataProvider, ProviderUnavailable,
@@ -296,12 +297,20 @@ class YFinanceProvider(DataProvider):
             # is "failed", not "no_date": Yahoo gave a value we can't read, which
             # is not the same as announcing nothing.
             earnings_status = "failed"
+            # earnings_dates (buy-check C3a): EVERY parseable date Yahoo lists (it can
+            # hold a [past, future] estimated range), sorted unique ISO strings, for
+            # `earnings_date.resolve`. `earnings` above keeps the first date as before.
+            earnings_dates = []
             try:
                 cal = t.calendar
                 if isinstance(cal, dict):
                     dates = cal.get("Earnings Date") or cal.get("earningsDate")
                     if dates:
                         earnings = str(dates[0])[:10]
+                        try:
+                            earnings_dates = _earnings_date.yahoo_dates(list(dates))
+                        except Exception:
+                            earnings_dates = []
                         try:
                             datetime.strptime(earnings, "%Y-%m-%d")
                             earnings_status = "date"
@@ -352,6 +361,7 @@ class YFinanceProvider(DataProvider):
                 "history": hist, "info": info, "news": news,
                 "news_status": news_status, "news_names": news_names,
                 "earnings": earnings, "earnings_status": earnings_status,
+                "earnings_dates": earnings_dates,
                 "revisions": revisions,
             }
 
@@ -366,13 +376,18 @@ class YFinanceProvider(DataProvider):
     def next_earnings(self, ticker: str) -> str | None:
         """Light next-earnings-date fetch (yf.Ticker.calendar, no history/info) —
         'YYYY-MM-DD' or None. Lets Catalyst Watch cover universe names cheaply
-        when the FMP market-wide calendar isn't available, without the full bundle."""
+        when the FMP market-wide calendar isn't available, without the full bundle.
+        Buy-check C3a: the EARLIEST listed date on or after today (ET), never a date that
+        has passed (Yahoo keeps a past one on file for weeks); None when there is none."""
         def _fetch():
             cal = yf.Ticker(ticker).calendar
             if isinstance(cal, dict):
                 dates = cal.get("Earnings Date") or cal.get("earningsDate")
                 if dates:
-                    return str(dates[0])[:10]
+                    today_iso = datetime.now(_ET).date().isoformat()
+                    future = [d for d in _earnings_date.yahoo_dates(list(dates))
+                              if d >= today_iso]
+                    return future[0] if future else None
             return None
         try:
             return _retry(_fetch)

@@ -1170,6 +1170,23 @@ WATCHLIST_READINESS_EARN_NEAR_DAYS = EARNINGS_IMMINENT_DAYS
 EARNINGS_CRITICAL_DAYS      = 3
 EARNINGS_MANAGEABLE_DAYS    = 21 # Brief verdict: imminent < window <= this = "manageable window" (agreed signal, not a conflict)
 EARNINGS_URGENCY_SOON_DAYS  = 14 # Catalyst Watch playbook urgency tier: imminent < window <= this = "SOON", beyond = "AHEAD"
+# Earnings-date resolution (buy-check C3a, docs/plans/entry-fail-closed-c3-spec.md; owner
+# values 2026-11-27 after the P1 probe). Yahoo keeps a past earnings date on file for
+# weeks, so a past date is never read as the next report.
+# A Yahoo date this many days back or fewer (and no confirmed future date / report) is
+# "not confirmed": the name's date reads failed ("past_unconfirmed"). Older than this it
+# reads "reported_unconfirmed" (passes). 14 covers CRWD (11-23 on file, real report 12-01).
+EARNINGS_PAST_DATE_HOLD_DAYS = 14
+# An FMP report with an ACTUAL EPS this many days back or fewer counts as "just reported"
+# (passes). 30 = the oldest `from` FMP's free plan accepts (45 days was refused, P1 probe).
+EARNINGS_REPORTED_CLEAR_DAYS = 30
+# How far ahead the FMP calendar is asked for a confirming future date (the free plan
+# accepts up to 90; matches the 90-day Catalyst window).
+EARNINGS_XCHECK_HORIZON_DAYS = 90
+# FMP calendar cross-check cache, per process (plumbing, not policy): a good read is kept
+# this long (6 h), a failed read this long (5 min; the failed-sector-read precedent).
+EARNINGS_XCHECK_CACHE_TTL_SEC = 21600
+EARNINGS_XCHECK_FAIL_RETRY_SEC = 300
 MACRO_IMMINENT_DAYS    = 3       # HIGH-impact macro event within this window = suppress new picks in affected sector
 # 🌐 Macro page: warn when this much of the portfolio (by weight) sits in
 # sectors facing a headwind under the current ETF-proxy regime read. Was a
